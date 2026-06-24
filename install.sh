@@ -274,7 +274,8 @@ load_env(){ [ -f "$SB_ENV" ] && . "$SB_ENV"; }
 # ============================== Output ==============================
 show_result(){
   gen_links
-  local sub="https://${DOMAIN}:${SUB_PORT}/${SUB_TOKEN}"
+  # #fragment is client-side only (not sent to nginx); Shadowrocket / v2rayN use it as the subscription name
+  local sub="https://${DOMAIN}:${SUB_PORT}/${SUB_TOKEN}#${NODE_NAME}"
   echo
   echo "${BLU}==================== NODE INFO ====================${NC}"
   echo "${GRN}VLESS-REALITY link (${NODE_NAME}-VLESS):${NC}"; echo "$VLESS_LINK"; echo
@@ -304,8 +305,11 @@ do_install(){
   detect_geo
   local def_name="MyNode"
   if [ -n "$GEO_CC" ]; then
-    local flag; flag="$(cc_flag "$GEO_CC")"
-    def_name="${flag}${GEO_CC}-${GEO_CITY// /}"
+    local flag loc; flag="$(cc_flag "$GEO_CC")"
+    # Country name, append city only when it differs (avoids e.g. Singapore-Singapore)
+    loc="$GEO_COUNTRY"
+    [ -n "$GEO_CITY" ] && [ "$GEO_CITY" != "$GEO_COUNTRY" ] && loc="${GEO_COUNTRY}-${GEO_CITY}"
+    def_name="${flag}${loc// /}"
     info "Location: ${flag} ${GEO_COUNTRY} ${GEO_CITY} | ISP: ${GEO_ISP}"
   else
     warn "Location detection failed (install continues); node name defaults to MyNode"

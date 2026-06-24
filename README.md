@@ -88,7 +88,7 @@ sudo bash install.sh
 | 提示 | 说明 | 默认 |
 | --- | --- | --- |
 | 域名 | 已灰云解析到本机的域名（**必填**） | 无 |
-| 节点名称 | 显示在客户端里的名字 | 自动按 IP 归属生成，如 `🇺🇸US-LosAngeles`（探测失败回退 `MyNode`） |
+| 节点名称 | 显示在客户端里的名字 | 自动按 IP 归属生成，如 `🇯🇵Japan-Tokyo`；国家与城市相同时只保留一个（如 `🇸🇬Singapore`），探测失败回退 `MyNode` |
 | REALITY 借用的 SNI | 用来伪装的大站域名 | `www.apple.com` |
 | VLESS TCP 端口 | VLESS-REALITY 监听端口 | `443` |
 | Hysteria2 UDP 端口 | Hysteria2 监听端口 | `443` |
@@ -115,7 +115,7 @@ sudo bash install.sh
 
 - **VLESS-REALITY 链接**（`vless://...`）
 - **Hysteria2 链接**（`hysteria2://...`）
-- **订阅链接**：`https://你的域名:订阅端口/随机token`
+- **订阅链接**：`https://你的域名:订阅端口/随机token#节点名`（末尾 `#节点名` 是给客户端自动命名用的，小火箭 / v2rayNG 会据此命名订阅；`#` 部分不发往服务器，不影响拉取）
 - 订阅二维码（终端 ANSI 图）
 
 把链接或订阅地址导入客户端即可：
