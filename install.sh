@@ -133,9 +133,13 @@ issue_cert(){
   local domain="$1"
   if [ ! -f "$ACME" ]; then
     info "Installing acme.sh..."
-    curl -fsSL https://get.acme.sh | sh -s email="admin@${domain}" >/dev/null
+    curl -fsSL https://get.acme.sh | sh >/dev/null
   fi
+  # Drop any stored contact email and register the ACME account without one
+  # (avoids "invalid contact email" failures from a bad/derived address)
+  [ -f "$HOME/.acme.sh/account.conf" ] && sed -i '/^ACCOUNT_EMAIL=/d' "$HOME/.acme.sh/account.conf" 2>/dev/null || true
   "$ACME" --set-default-ca --server letsencrypt >/dev/null
+  "$ACME" --register-account >/dev/null 2>&1 || true
   systemctl stop nginx >/dev/null 2>&1 || true   # make sure port 80 is free
   info "Issuing certificate (HTTP-01, port 80 must be free)..."
   if ! "$ACME" --issue -d "$domain" --standalone --keylength 2048 >/dev/null 2>&1; then
@@ -308,7 +312,10 @@ do_install(){
   fi
 
   read -rp "Domain (grey-cloud, resolved to this host): " DOMAIN
+  # Clean common input mistakes: strip spaces, scheme and any path
+  DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | sed -E 's#^https?://##; s#/.*$##')"
   [ -n "$DOMAIN" ] || { err "Domain is required"; exit 1; }
+  [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { err "Invalid domain: only letters, digits, '.' and '-' are allowed. Re-enter in half-width characters."; exit 1; }
   read -rp "Node name [${def_name}]: " NODE_NAME; NODE_NAME="${NODE_NAME:-$def_name}"
   read -rp "REALITY borrow SNI [www.apple.com]: " REALITY_SNI; REALITY_SNI="${REALITY_SNI:-www.apple.com}"
   read -rp "VLESS TCP port [443]: " VLESS_PORT; VLESS_PORT="${VLESS_PORT:-443}"
