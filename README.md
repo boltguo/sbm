@@ -39,6 +39,30 @@
 
    > 80 端口在安装与每次自动续期时都需要短暂空闲；脚本已让 nginx 仅监听订阅端口、不占用 80。
 
+3. **甲骨文 Oracle Cloud 专属坑（其它云可跳过）**
+
+   甲骨文有**两层**防火墙：云端安全列表 + **实例自带 iptables（默认 REJECT，只放行 22）**。光在控制台开安全列表没用，必须再进 SSH 改 iptables，否则证书申请会卡在 80 端口验证失败。
+
+   先看 REJECT 在第几行：
+
+   ```bash
+   iptables -L INPUT -n --line-numbers
+   ```
+
+   把放行规则插到 `REJECT` 那一行**之前**（下例假设 REJECT 在第 5 行，按实际行号替换）：
+
+   ```bash
+   iptables -I INPUT 5 -p tcp --dport 80 -j ACCEPT
+   iptables -I INPUT 5 -p tcp --dport 443 -j ACCEPT
+   iptables -I INPUT 5 -p udp --dport 443 -j ACCEPT
+   iptables -I INPUT 5 -p tcp --dport 2096 -j ACCEPT
+   netfilter-persistent save
+   ```
+
+   > `netfilter-persistent save` 把规则写入磁盘，重启后不丢失（缺命令则先 `apt install -y iptables-persistent`）。
+   >
+   > 各云对比：**AWS / GCP / Azure / 阿里云 / 腾讯云**实例自带防火墙通常关闭，只需在控制台开安全组；**搬瓦工 / Vultr / DO / Linode**默认全开，开箱即用；**只有甲骨文**需要额外做这步 iptables。
+
 ---
 
 ## 三、安装步骤
@@ -168,7 +192,12 @@ vnstat -l     # 实时
 **证书申请失败？**
 - 确认域名 A 记录已指向本机，Cloudflare 为「灰云」。
 - 确认 80 端口在云安全组中已放行且未被其他程序占用。
+- 报错含 `acme-challenge ... Error getting validation data`：80 端口公网不可达，**甲骨文 Oracle 需按上面第二节做实例 iptables 放行**。
+- 域名只能用字母 / 数字 / `.` / `-`，**不能有下划线 `_`**（Let's Encrypt 不签）。
 - 重试：`sudo sbm`（若已安装则需先卸载重装），或手动检查 `~/.acme.sh/`。
+
+**提示 `Could not get lock /var/lib/dpkg/lock-frontend`？**
+- 系统自动更新（unattended-upgrades）正占用 apt，等其跑完（`pgrep unattended-upgr` 无输出）再重试，或 `systemctl stop unattended-upgrades`。
 
 **装完连不上？**
 - 检查云安全组是否放行了 VLESS(TCP) / HY2(UDP) / 订阅(TCP) 端口。
