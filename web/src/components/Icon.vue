@@ -1,0 +1,41 @@
+<script setup lang="ts">
+import {
+  Check,
+  Copy,
+  Grid2X2,
+  LogOut,
+  Pencil,
+  Plus,
+  Power,
+  RotateCcw,
+  Route,
+  Server,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from '@lucide/vue'
+
+type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check'
+
+defineProps<{ name: IconName }>()
+
+const icons = {
+  grid: Grid2X2,
+  route: Route,
+  server: Server,
+  sliders: SlidersHorizontal,
+  copy: Copy,
+  refresh: RotateCcw,
+  power: Power,
+  logout: LogOut,
+  plus: Plus,
+  x: X,
+  edit: Pencil,
+  trash: Trash2,
+  check: Check,
+}
+</script>
+
+<template>
+  <component :is="icons[name]" class="icon" :stroke-width="1.8" aria-hidden="true" />
+</template>

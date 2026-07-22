@@ -1,0 +1,7 @@
+/sbm-panel
+/dist/
+/.dev-preview/
+/.playwright-cli/
+/web/node_modules/
+*.test
+.DS_Store

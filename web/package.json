@@ -1,0 +1,26 @@
+{
+  "name": "sbm-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.25.0",
+    "qrcode": "^1.5.4",
+    "reka-ui": "^2.6.0",
+    "vue": "^3.5.17"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.4",
+    "vue-tsc": "^3.0.1"
+  }
+}
