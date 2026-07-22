@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/boltguo/sing-box/internal/model"
-	"github.com/boltguo/sing-box/internal/protocol"
+	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/protocol"
 )
 
 type Renderer struct {

@@ -30,7 +30,7 @@ Run as root:
 
 ```bash
 sudo -i
-bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sing-box/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer asks for:

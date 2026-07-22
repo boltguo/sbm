@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boltguo/sing-box/internal/model"
-	"github.com/boltguo/sing-box/internal/store"
+	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/store"
 )
 
 type CoreControl interface {

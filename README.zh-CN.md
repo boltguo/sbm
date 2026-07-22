@@ -30,7 +30,7 @@ SBM 是管理单台 sing-box 服务器的轻量 Web 面板。安装后默认创�
 
 ```bash
 sudo -i
-bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sing-box/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 安装脚本会询问：

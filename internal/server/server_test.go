@@ -14,13 +14,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/boltguo/sing-box/internal/auth"
-	"github.com/boltguo/sing-box/internal/core"
-	"github.com/boltguo/sing-box/internal/model"
-	"github.com/boltguo/sing-box/internal/protocol"
-	"github.com/boltguo/sing-box/internal/store"
-	"github.com/boltguo/sing-box/internal/systeminfo"
-	"github.com/boltguo/sing-box/internal/traffic"
+	"github.com/boltguo/sbm/internal/auth"
+	"github.com/boltguo/sbm/internal/core"
+	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/protocol"
+	"github.com/boltguo/sbm/internal/store"
+	"github.com/boltguo/sbm/internal/systeminfo"
+	"github.com/boltguo/sbm/internal/traffic"
 	"golang.org/x/crypto/bcrypt"
 )
 

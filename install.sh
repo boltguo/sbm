@@ -2,7 +2,7 @@
 # SBM — 极简单人 sing-box 面板安装与管理脚本
 set -Eeuo pipefail
 
-readonly REPO="boltguo/sing-box"
+readonly REPO="boltguo/sbm"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"

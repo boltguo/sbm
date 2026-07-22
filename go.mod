@@ -1,4 +1,4 @@
-module github.com/boltguo/sing-box
+module github.com/boltguo/sbm
 
 go 1.24.0
 

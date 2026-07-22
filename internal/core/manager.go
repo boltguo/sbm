@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boltguo/sing-box/internal/model"
+	"github.com/boltguo/sbm/internal/model"
 )
 
 type Commander interface {

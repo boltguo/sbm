@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/boltguo/sing-box/internal/model"
+	"github.com/boltguo/sbm/internal/model"
 )
 
 type ConfigStore struct {

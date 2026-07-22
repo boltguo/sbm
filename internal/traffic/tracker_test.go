@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltguo/sing-box/internal/model"
+	"github.com/boltguo/sbm/internal/model"
 )
 
 type configSource struct{ cfg model.Config }

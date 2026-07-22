@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boltguo/sing-box/internal/model"
+	"github.com/boltguo/sbm/internal/model"
 )
 
 func testConfig() model.Config {
