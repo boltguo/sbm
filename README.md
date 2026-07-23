@@ -43,7 +43,7 @@ Domain: node.example.com
 节点名称 [Japan-Tokyo]:
 ```
 
-Press Enter to keep port 2096. The suggested node name comes from the server's public IP and looks like `Japan-Tokyo`; you can replace it. SBM creates `Japan-Tokyo-VLESS` and `Japan-Tokyo-HY2`, which lets clients such as Shadowrocket match the country from the node name without adding an emoji. At the end, the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
+Press Enter to keep port 2096. The suggested node name comes from the server's public IP and looks like `Japan-Tokyo`; you can replace it. SBM creates `Japan-Tokyo-VLESS` and `Japan-Tokyo-HY2`. At the end, the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
 
 The script installs missing packages, then checks the architecture, free disk space, systemd, DNS, certificate services, and the ports you selected. It refuses to continue if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, it checks the listeners and makes a local HTTPS request to the panel.
 
@@ -135,7 +135,7 @@ journalctl -u sing-box -e --no-pager
 
 If certificate issuance fails, check the A record, Cloudflare grey-cloud mode, TCP/80, and whether another process is already using port 80.
 
-Older versions of the installer could stop at acme.sh when `cron` was missing. Run the current install command again; it installs and starts cron before requesting the certificate. The message `debconf: delaying package configuration, since apt-utils is not installed` is normal on minimal Debian images.
+The message `debconf: delaying package configuration, since apt-utils is not installed` is normal on minimal Debian images.
 
 ## License
 

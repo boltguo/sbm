@@ -179,8 +179,6 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.listInbounds(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/inbounds":
 		s.createInbound(w, r)
-	case r.Method == "POST" && r.URL.Path == "/api/inbounds/rename-legacy":
-		s.renameLegacyInbounds(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/inbounds/"):
 		s.inboundByID(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/settings":
@@ -344,43 +342,6 @@ func (s *Server) createInbound(w http.ResponseWriter, r *http.Request) {
 	}
 	s.openHostFirewall(inbound)
 	writeJSON(w, 201, inbound)
-}
-
-func (s *Server) renameLegacyInbounds(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		BaseName string `json:"baseName"`
-	}
-	if decodeJSON(r, &input) != nil {
-		writeError(w, 400, "请求格式无效")
-		return
-	}
-	baseName := strings.TrimSpace(input.BaseName)
-	if len([]rune(baseName)) < 1 || len([]rune(baseName)) > 74 {
-		writeError(w, 400, "节点基础名称长度必须为 1 到 74 个字符")
-		return
-	}
-	changed := 0
-	if err := s.saveConfig(func(cfg *model.Config) {
-		for i := range cfg.Inbounds {
-			name := strings.TrimSpace(cfg.Inbounds[i].Name)
-			switch {
-			case cfg.Inbounds[i].Type == protocol.TypeVLESSReality && strings.EqualFold(name, "VLESS Reality"):
-				cfg.Inbounds[i].Name = baseName + "-VLESS"
-				changed++
-			case cfg.Inbounds[i].Type == protocol.TypeHysteria2 && strings.EqualFold(name, "Hysteria2"):
-				cfg.Inbounds[i].Name = baseName + "-HY2"
-				changed++
-			}
-		}
-	}); err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
-	if changed == 0 {
-		writeJSON(w, 200, map[string]any{"ok": true, "changed": 0})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "changed": changed})
 }
 
 func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
@@ -730,33 +691,32 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 func writeError(w http.ResponseWriter, status int, message string) {
 	english := map[string]string{
-		"登录尝试过于频繁，请稍后再试":         "Too many sign-in attempts. Try again later.",
-		"请求格式无效":                 "The request format is invalid.",
-		"用户名或密码错误":               "Incorrect username or password.",
-		"无法创建会话":                 "Could not create a session.",
-		"请先登录":                   "Sign in first.",
-		"会话已失效，请重新登录":            "Your session has expired. Sign in again.",
-		"凭据已变更，请重新登录":            "Your credentials changed. Sign in again.",
-		"CSRF 校验失败":              "CSRF validation failed.",
-		"接口不存在":                  "API endpoint not found.",
-		"流量已超限，请先重置流量或提高限额":      "The traffic quota is exhausted. Reset traffic or increase the quota first.",
-		"保存流量状态失败":               "Could not save traffic state.",
-		"重启 sing-box 失败":         "Could not restart sing-box.",
-		"重置流量失败":                 "Could not reset traffic.",
-		"无法读取核心流量，请稍后重试":         "Could not read current core traffic. Try again shortly.",
-		"协议不存在":                  "Protocol not found.",
-		"节点基础名称长度必须为 1 到 74 个字符": "The node base name must be 1 to 74 characters long.",
-		"请求方法不支持":                "Method not allowed.",
-		"更新重置周期失败":               "Could not update the reset schedule.",
-		"应用流量限额失败":               "Could not apply the traffic quota.",
-		"生成 Token 失败":            "Could not generate a token.",
-		"新密码长度必须为 12 到 128 个字符":  "The new password must be 12 to 128 characters long.",
-		"当前密码错误":                 "The current password is incorrect.",
-		"密码处理失败":                 "Could not process the password.",
-		"订阅不存在":                  "Subscription not found.",
-		"流量已用尽，请等待重置":            "The traffic quota is exhausted. Wait for the next reset.",
-		"页面不存在":                  "Page not found.",
-		"服务器状态采集不可用":             "Server status collection is unavailable.",
+		"登录尝试过于频繁，请稍后再试":        "Too many sign-in attempts. Try again later.",
+		"请求格式无效":                "The request format is invalid.",
+		"用户名或密码错误":              "Incorrect username or password.",
+		"无法创建会话":                "Could not create a session.",
+		"请先登录":                  "Sign in first.",
+		"会话已失效，请重新登录":           "Your session has expired. Sign in again.",
+		"凭据已变更，请重新登录":           "Your credentials changed. Sign in again.",
+		"CSRF 校验失败":             "CSRF validation failed.",
+		"接口不存在":                 "API endpoint not found.",
+		"流量已超限，请先重置流量或提高限额":     "The traffic quota is exhausted. Reset traffic or increase the quota first.",
+		"保存流量状态失败":              "Could not save traffic state.",
+		"重启 sing-box 失败":        "Could not restart sing-box.",
+		"重置流量失败":                "Could not reset traffic.",
+		"无法读取核心流量，请稍后重试":        "Could not read current core traffic. Try again shortly.",
+		"协议不存在":                 "Protocol not found.",
+		"请求方法不支持":               "Method not allowed.",
+		"更新重置周期失败":              "Could not update the reset schedule.",
+		"应用流量限额失败":              "Could not apply the traffic quota.",
+		"生成 Token 失败":           "Could not generate a token.",
+		"新密码长度必须为 12 到 128 个字符": "The new password must be 12 to 128 characters long.",
+		"当前密码错误":                "The current password is incorrect.",
+		"密码处理失败":                "Could not process the password.",
+		"订阅不存在":                 "Subscription not found.",
+		"流量已用尽，请等待重置":           "The traffic quota is exhausted. Wait for the next reset.",
+		"页面不存在":                 "Page not found.",
+		"服务器状态采集不可用":            "Server status collection is unavailable.",
 	}
 	translated := english[message]
 	if translated == "" {

@@ -198,52 +198,6 @@ func TestSubscriptionURLAndTitleUseNodeBaseName(t *testing.T) {
 	}
 }
 
-func TestRenameLegacyInboundNamesRestoresLocationAndProtocolSuffixes(t *testing.T) {
-	s, cfg := testServer(t)
-	cfg.Inbounds = []model.Inbound{
-		{
-			ID: "vless", Type: protocol.TypeVLESSReality, Name: "VLESS Reality", Enabled: true, Port: 443,
-			VLESS: &model.VLESSOptions{
-				UUID: "00000000-0000-4000-8000-000000000000", SNI: "www.microsoft.com",
-				PrivateKey: "private", PublicKey: "public", ShortID: "abcd",
-			},
-		},
-		{ID: "hy2", Type: protocol.TypeHysteria2, Name: "Hysteria2", Enabled: true, Port: 443, Hysteria2: &model.Hysteria2Options{Password: "password-123"}},
-	}
-	if err := s.Config.Replace(cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	response := httptest.NewRecorder()
-	req := authenticatedRequest(t, s, http.MethodPost, "/api/inbounds/rename-legacy", map[string]string{"baseName": "Japan-Tokyo"})
-	s.Handler().ServeHTTP(response, req)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"changed":2`) {
-		t.Fatalf("unexpected response: %s", response.Body.String())
-	}
-	got := s.Config.Get()
-	if got.Inbounds[0].Name != "Japan-Tokyo-VLESS" || got.Inbounds[1].Name != "Japan-Tokyo-HY2" {
-		t.Fatalf("unexpected node names: %q, %q", got.Inbounds[0].Name, got.Inbounds[1].Name)
-	}
-	if url := subscriptionURL(got); !strings.HasSuffix(url, "#Japan-Tokyo") {
-		t.Fatalf("unexpected subscription URL: %s", url)
-	}
-
-	subscription := httptest.NewRecorder()
-	subscriptionRequest := httptest.NewRequest(http.MethodGet, "/sub/"+got.SubscriptionToken, nil)
-	subscriptionRequest.Header.Set("Accept", "text/plain")
-	s.Handler().ServeHTTP(subscription, subscriptionRequest)
-	decoded, err := base64.StdEncoding.DecodeString(subscription.Body.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(decoded), "#Japan-Tokyo-VLESS") || !strings.Contains(string(decoded), "#Japan-Tokyo-HY2") {
-		t.Fatalf("protocol-specific node names missing from subscription: %s", decoded)
-	}
-}
-
 func TestCSRFRequired(t *testing.T) {
 	s, _ := testServer(t)
 	response := httptest.NewRecorder()

@@ -441,26 +441,6 @@ input:focus-visible,
   display: block;
 }
 
-.legacy-name-alert {
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
-.legacy-name-alert > div {
-  display: grid;
-  gap: 4px;
-}
-
-.legacy-name-alert span {
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.legacy-name-alert .secondary {
-  flex: 0 0 auto;
-}
-
 .version-check {
   position: absolute;
   top: 50%;

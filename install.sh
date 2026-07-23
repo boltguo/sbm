@@ -13,7 +13,6 @@ readonly STATE_FILE="/var/lib/sbm/state.json"
 readonly CERT_DIR="/etc/sbm/cert"
 readonly CORE_DIR="/etc/sing-box"
 readonly CORE_CONFIG="/etc/sing-box/config.json"
-readonly LEGACY_ENV="/etc/sing-box/sbm.env"
 readonly ACME_BIN="/root/.acme.sh/acme.sh"
 readonly CERT_RELOAD="/usr/local/lib/sbm/cert-reload.sh"
 readonly FIREWALL_HELPER="/usr/local/lib/sbm/open-port.sh"
@@ -615,14 +614,6 @@ install_sbm_command() {
     chmod 0755 "$SBM_CMD"
   fi
 }
-protect_legacy_install() {
-  [[ ! -f "$LEGACY_ENV" ]] && return
-  local backup
-  backup="/root/sbm-legacy-$(date +%Y%m%d-%H%M%S).tar.gz"
-  tar -czf "$backup" -C / etc/sing-box 2>/dev/null || true
-  chmod 0600 "$backup" 2>/dev/null || true
-  die "检测到旧版 ${LEGACY_ENV}，已备份到 ${backup}。请先用旧脚本卸载或手动迁移。"
-}
 do_install() {
   need_root; check_os; check_systemd; arch_tag >/dev/null
   [[ ! -f "$CONFIG_FILE" ]] || { menu; return; }
@@ -650,7 +641,7 @@ do_install() {
   fi
   read -r -p "节点名称 [${default_node_name}]: " node_name
   node_name="${node_name:-$default_node_name}"; node_name="${node_name//$'\r'/}"; validate_node_name "$node_name"
-  protect_legacy_install; check_disk_space; check_network; check_dns "$domain"
+  check_disk_space; check_network; check_dns "$domain"
   enable_bbr; install_sing_box; install_panel; write_services; open_firewall "$cloud_provider" "$panel_port"; issue_certificate "$domain"
   admin_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-24)"
   password_file="$(mktemp /tmp/sbm-password.XXXXXX)"; chmod 0600 "$password_file"; printf '%s' "$admin_password" > "$password_file"
