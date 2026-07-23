@@ -71,7 +71,7 @@ onBeforeUnmount(() => clearInterval(timer))
 
 <template>
   <div v-if="data" class="page dashboard">
-    <header class="page-head"><div><span class="eyebrow">OVERVIEW / LIVE</span><h1>{{ t('dashboard.title') }}</h1></div><div class="head-actions"><ConfirmAction :title="t('dashboard.reset')" :message="t('dashboard.resetConfirm')" @confirm="reset"><button class="secondary"><Icon name="refresh"/>{{ t('dashboard.reset') }}</button></ConfirmAction><button class="primary" :disabled="data.quotaExceeded" @click="restart"><Icon name="power"/>{{ t('dashboard.restart') }}</button></div></header>
+    <header class="page-head"><div><span class="eyebrow">OVERVIEW / LIVE</span><h1>{{ t('dashboard.title') }}</h1></div><div class="head-actions"><ConfirmAction :title="t('dashboard.reset')" :message="t('dashboard.resetConfirm')" @confirm="reset"><button class="secondary"><Icon name="refresh"/>{{ t('dashboard.reset') }}</button></ConfirmAction><ConfirmAction :title="t('dashboard.restart')" :message="t('dashboard.restartConfirm')" @confirm="restart"><button class="primary" :disabled="data.quotaExceeded"><Icon name="power"/>{{ t('dashboard.restart') }}</button></ConfirmAction></div></header>
     <div v-if="data.quotaExceeded" class="alert danger"><strong>{{ t('dashboard.exceeded') }}</strong><span>{{ t('dashboard.exceededHelp') }}</span></div>
     <section class="status-strip">
       <div><span class="status-dot" :class="data.active ? 'online' : 'offline'"></span><small>CORE STATUS</small><strong>{{ data.active ? t('dashboard.running') : t('dashboard.stopped') }}</strong></div>

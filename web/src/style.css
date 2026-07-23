@@ -378,8 +378,11 @@ input:focus-visible,
 }
 
 .status-strip > div {
-  display: block;
+  display: flex;
   min-width: 0;
+  min-height: 92px;
+  flex-direction: column;
+  justify-content: center;
   padding: 18px 20px;
   border-right: 1px solid var(--line);
 }
@@ -410,7 +413,9 @@ input:focus-visible,
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
+  align-content: center;
   column-gap: 10px;
+  row-gap: 6px;
 }
 
 .status-strip > div:first-child small,
@@ -428,13 +433,32 @@ input:focus-visible,
 
 .status-strip > .version-cell {
   position: relative;
-  display: block;
   padding-right: 52px;
 }
 
 .version-cell small,
 .version-cell strong {
   display: block;
+}
+
+.legacy-name-alert {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.legacy-name-alert > div {
+  display: grid;
+  gap: 4px;
+}
+
+.legacy-name-alert span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.legacy-name-alert .secondary {
+  flex: 0 0 auto;
 }
 
 .version-check {

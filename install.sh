@@ -136,6 +136,13 @@ country_flag() {
   printf -v second_escape '\\U%08x' "$((0x1F1E6 + second - 65))"
   printf '%b%b' "$first_escape" "$second_escape"
 }
+location_node_name() {
+  local country="${1:-}" country_code="${2:-}" city="${3:-}" location
+  location="${country:-$country_code}"
+  [[ -n "$city" && "$city" != "$country" ]] && location="${location}-${city}"
+  location="${location//[[:space:]]/}"
+  printf '%s\n' "$location"
+}
 detect_geo() {
   GEO_CC=""; GEO_COUNTRY=""; GEO_CITY=""; GEO_ISP=""
   local response trace
@@ -630,15 +637,13 @@ do_install() {
   cloud_provider="$(detect_cloud_provider)"
   info "云平台识别：$(cloud_provider_name "$cloud_provider")"
   show_cloud_firewall_guide "$cloud_provider" "$panel_port"
-  info "检测服务器所在地区，用于生成小火箭可识别的国旗节点名称…"
+  info "检测服务器所在地区，用于生成国家—城市节点名称…"
   detect_geo
   default_node_name="MyNode"
   if [[ -n "$GEO_CC" ]]; then
     flag="$(country_flag "$GEO_CC")"
-    location="${GEO_COUNTRY:-$GEO_CC}"
-    [[ -n "$GEO_CITY" && "$GEO_CITY" != "$GEO_COUNTRY" ]] && location="${location}-${GEO_CITY}"
-    location="${location//[[:space:]]/}"
-    default_node_name="${flag}${location}"
+    location="$(location_node_name "$GEO_COUNTRY" "$GEO_CC" "$GEO_CITY")"
+    default_node_name="$location"
     info "检测到：${flag} ${GEO_COUNTRY:-$GEO_CC} ${GEO_CITY}${GEO_ISP:+ · $GEO_ISP}"
   else
     warn "地区检测失败，将使用 MyNode；安装仍可继续，之后可在面板中修改节点名称。"

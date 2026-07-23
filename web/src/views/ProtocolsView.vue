@@ -15,15 +15,28 @@ const emit = defineEmits<{ toast: [message: string] }>()
 const items = ref<Inbound[]>([])
 const editing = ref<Inbound | null>(null)
 const creating = ref(false)
+const renamingLegacy = ref(false)
+const legacyNameForm = ref({ baseName: '' })
 const qr = ref('')
 const qrItem = ref<Inbound | null>(null)
 const createForm = ref({ type: 'vless-reality' as Inbound['type'], name: t('protocol.defaultName'), port: 8443 })
 const duplicate = computed(() => items.value.some(i => i.type === createForm.value.type))
+const hasLegacyNames = computed(() => items.value.some(item =>
+  (item.type === 'vless-reality' && item.name.trim().toLowerCase() === 'vless reality') ||
+  (item.type === 'hysteria2' && item.name.trim().toLowerCase() === 'hysteria2')
+))
 const protocolOptions = [{ value: 'vless-reality', label: 'VLESS + Vision + REALITY' }, { value: 'hysteria2', label: 'Hysteria2' }]
 const obfsOptions = computed(() => [{ value: 'none', label: t('protocol.off') }, { value: 'salamander', label: 'Salamander' }])
 
 async function load() { items.value = await api<Inbound[]>('/api/inbounds') }
 async function create() { await post('/api/inbounds', createForm.value); creating.value = false; emit('toast', t('protocol.created')); await load() }
+async function renameLegacy() {
+  await post('/api/inbounds/rename-legacy', legacyNameForm.value)
+  renamingLegacy.value = false
+  legacyNameForm.value.baseName = ''
+  emit('toast', t('protocol.legacyRenamed'))
+  await load()
+}
 async function save() { if (!editing.value) return; await put(`/api/inbounds/${editing.value.id}`, editing.value); editing.value = null; emit('toast', t('protocol.saved')); await load() }
 async function toggle(item: Inbound) { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() }
 async function remove(item: Inbound) { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() }
@@ -37,6 +50,10 @@ onMounted(load)
 <template>
   <div class="page">
     <header class="page-head"><div><span class="eyebrow">INBOUND ROUTES</span><h1>{{ t('protocol.title') }}</h1><p>{{ t('protocol.help') }}</p></div><button class="primary" @click="openCreate"><Icon name="plus"/>{{ t('protocol.add') }}</button></header>
+    <div v-if="hasLegacyNames" class="alert warning legacy-name-alert">
+      <div><strong>{{ t('protocol.legacyNameTitle') }}</strong><span>{{ t('protocol.legacyNameHelp') }}</span></div>
+      <button class="secondary" @click="renamingLegacy = true">{{ t('protocol.fixLegacyName') }}</button>
+    </div>
     <div class="protocol-grid">
       <article v-for="item in items" :key="item.id" class="protocol-card" :class="{ disabled: !item.enabled }">
         <div class="protocol-top"><div class="protocol-glyph">{{ item.type === 'vless-reality' ? 'VL' : 'H2' }}</div><div><span class="pill">{{ item.type === 'vless-reality' ? 'VLESS · REALITY' : 'HYSTERIA2' }}</span><h2>{{ item.name }}</h2></div><SwitchRoot :model-value="item.enabled" class="relative h-6 w-11 rounded-full border border-[var(--ink)] bg-transparent p-[3px] data-[state=checked]:bg-[var(--signal)]" :aria-label="item.enabled ? t('protocol.disable') : t('protocol.enable')" @update:model-value="toggle(item)"><SwitchThumb class="block size-4 rounded-full bg-[var(--muted)] transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-[var(--ink)]" /></SwitchRoot></div>
@@ -55,6 +72,13 @@ onMounted(load)
         <label>{{ t('protocol.name') }}<input v-model.trim="createForm.name" maxlength="80" required></label>
         <label>{{ t('protocol.port') }}<input v-model.number="createForm.port" type="number" min="1" max="65535" required><small>{{ t('protocol.portHelp', { network: createForm.type === 'vless-reality' ? 'TCP' : 'UDP' }) }}</small></label>
         <div class="modal-actions"><button type="button" class="secondary" @click="creating = false">{{ t('protocol.cancel') }}</button><button class="primary">{{ t('protocol.generate') }}</button></div>
+      </form>
+    </Modal>
+
+    <Modal v-if="renamingLegacy" :title="t('protocol.fixLegacyName')" :description="t('protocol.legacyNameHelp')" @close="renamingLegacy = false">
+      <form class="form-grid" @submit.prevent="renameLegacy">
+        <label>{{ t('protocol.baseName') }}<input v-model.trim="legacyNameForm.baseName" maxlength="74" placeholder="Japan-Tokyo" required><small>{{ t('protocol.baseNameHelp') }}</small></label>
+        <div class="modal-actions"><button type="button" class="secondary" @click="renamingLegacy = false">{{ t('protocol.cancel') }}</button><button class="primary">{{ t('protocol.rename') }}</button></div>
       </form>
     </Modal>
 

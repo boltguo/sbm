@@ -14,8 +14,10 @@ validate_domain node.example.com
 custom_panel_port=24443
 validate_panel_port "$custom_panel_port"
 [[ "$(country_flag US)" == "🇺🇸" ]]
-validate_node_name "🇯🇵Japan-Tokyo"
-[[ "$(urlencode_fragment '🇯🇵Japan Tokyo#1')" == "%F0%9F%87%AF%F0%9F%87%B5Japan%20Tokyo%231" ]]
+[[ "$(location_node_name Japan JP Tokyo)" == "Japan-Tokyo" ]]
+[[ "$(location_node_name Singapore SG Singapore)" == "Singapore" ]]
+validate_node_name "Japan-Tokyo"
+[[ "$(urlencode_fragment 'Japan Tokyo#1')" == "Japan%20Tokyo%231" ]]
 [[ "$(cloud_provider_name oracle)" == "Oracle Cloud (OCI)" ]]
 [[ "$(cloud_provider_name alibaba)" == "Alibaba Cloud ECS / 阿里云" ]]
 [[ "$(cloud_provider_name tencent)" == "Tencent Cloud CVM / 腾讯云" ]]

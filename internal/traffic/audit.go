@@ -34,13 +34,14 @@ type networkSample struct {
 // NetworkAudit compares sing-box payload deltas with the public interface.
 // It is deliberately advisory and never participates in quota enforcement.
 type NetworkAudit struct {
-	mu        sync.Mutex
-	procRoot  string
-	startedAt time.Time
-	baseProxy uint64
-	base      networkSample
-	ready     bool
-	now       func() time.Time
+	mu              sync.Mutex
+	procRoot        string
+	startedAt       time.Time
+	periodStartedAt time.Time
+	baseProxy       uint64
+	base            networkSample
+	ready           bool
+	now             func() time.Time
 }
 
 func NewNetworkAudit(procRoot string) *NetworkAudit {
@@ -50,7 +51,7 @@ func NewNetworkAudit(procRoot string) *NetworkAudit {
 	return &NetworkAudit{procRoot: procRoot, now: time.Now}
 }
 
-func (a *NetworkAudit) Check(proxyTotal int64) AuditResult {
+func (a *NetworkAudit) Check(proxyTotal int64, periodStartedAt time.Time) AuditResult {
 	if proxyTotal < 0 {
 		return AuditResult{Status: "unavailable"}
 	}
@@ -61,9 +62,15 @@ func (a *NetworkAudit) Check(proxyTotal int64) AuditResult {
 	proxy := uint64(proxyTotal)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.ready || sample.Interface != a.base.Interface || sample.ReceiveBytes < a.base.ReceiveBytes || sample.TransmitBytes < a.base.TransmitBytes || proxy < a.baseProxy {
+	if !a.ready ||
+		sample.Interface != a.base.Interface ||
+		sample.ReceiveBytes < a.base.ReceiveBytes ||
+		sample.TransmitBytes < a.base.TransmitBytes ||
+		proxy < a.baseProxy ||
+		!periodStartedAt.Equal(a.periodStartedAt) {
 		a.base = sample
 		a.baseProxy = proxy
+		a.periodStartedAt = periodStartedAt
 		a.startedAt = a.now()
 		a.ready = true
 		return AuditResult{Status: "collecting", Interface: sample.Interface, StartedAt: a.startedAt}

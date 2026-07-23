@@ -40,10 +40,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```text
 Domain: node.example.com
 面板端口 [2096]:
-节点名称 [🇯🇵Japan-Tokyo]:
+节点名称 [Japan-Tokyo]:
 ```
 
-端口直接回车就是 2096。节点名称会根据服务器公网 IP 生成，例如 `🇯🇵Japan-Tokyo`，不喜欢可以直接改。安装结束后，终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
+端口直接回车就是 2096。节点名称会根据服务器公网 IP 生成，例如 `Japan-Tokyo`，不喜欢可以直接改。SBM 会生成 `Japan-Tokyo-VLESS` 和 `Japan-Tokyo-HY2`，小火箭等客户端可以直接根据名称识别国家，不需要在前面加 emoji。安装结束后，终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
 
 脚本先补齐缺少的软件包，再检查架构、磁盘、systemd、DNS、证书服务和端口。TCP/80、TCP/443、UDP/443 或面板端口已经被占用时，安装会停下来并说明原因。服务启动后，脚本还会检查监听端口，并从本机请求一次面板 HTTPS。
 

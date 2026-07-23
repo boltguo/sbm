@@ -40,10 +40,10 @@ The installer asks for:
 ```text
 Domain: node.example.com
 面板端口 [2096]:
-节点名称 [🇯🇵Japan-Tokyo]:
+节点名称 [Japan-Tokyo]:
 ```
 
-Press Enter to keep port 2096. The suggested node name comes from the server's public IP and looks like `🇯🇵Japan-Tokyo`; you can replace it. At the end, the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
+Press Enter to keep port 2096. The suggested node name comes from the server's public IP and looks like `Japan-Tokyo`; you can replace it. SBM creates `Japan-Tokyo-VLESS` and `Japan-Tokyo-HY2`, which lets clients such as Shadowrocket match the country from the node name without adding an emoji. At the end, the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
 
 The script installs missing packages, then checks the architecture, free disk space, systemd, DNS, certificate services, and the ports you selected. It refuses to continue if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, it checks the listeners and makes a local HTTPS request to the panel.
 
