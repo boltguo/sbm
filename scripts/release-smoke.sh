@@ -17,8 +17,9 @@ fi
 for arch in amd64 arm64; do
   archive="dist/sbm-panel_${version}_linux_${arch}.tar.gz"
   [[ -f "$archive" ]]
-  tar -tzf "$archive" | grep -Fxq sbm-panel
-  tar -tzf "$archive" | grep -Fxq sbm
+  contents="$(tar -tzf "$archive")"
+  grep -Fxq sbm-panel <<<"$contents"
+  grep -Fxq sbm <<<"$contents"
 done
 
 tar -xzf "dist/sbm-panel_${version}_linux_amd64.tar.gz" -C "$temp_dir"
