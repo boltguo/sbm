@@ -2,22 +2,43 @@ package traffic
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/store"
 )
 
 type configSource struct{ cfg model.Config }
 
 func (s *configSource) Get() model.Config { return s.cfg }
 
-type fakeCore struct{ starts, stops int }
+type fakeCore struct {
+	running                     bool
+	starts, stops               int
+	startErr, stopErr, stateErr error
+}
 
-func (f *fakeCore) Start(context.Context) error { f.starts++; return nil }
-func (f *fakeCore) Stop(context.Context) error  { f.stops++; return nil }
+func (f *fakeCore) Active(context.Context) (bool, error) { return f.running, f.stateErr }
+func (f *fakeCore) Start(context.Context) error {
+	f.starts++
+	if f.startErr != nil {
+		return f.startErr
+	}
+	f.running = true
+	return nil
+}
+func (f *fakeCore) Stop(context.Context) error {
+	f.stops++
+	if f.stopErr != nil {
+		return f.stopErr
+	}
+	f.running = false
+	return nil
+}
 
 func stateAt(now time.Time) model.State {
 	return model.State{Version: 1, PeriodStartedAt: now, UpdatedAt: now}
@@ -110,10 +131,25 @@ func TestMonthlyResetAndNextTime(t *testing.T) {
 	}
 }
 
+func TestInvalidScheduleDoesNotEraseCurrentResetTime(t *testing.T) {
+	now := time.Now()
+	existing := now.Add(24 * time.Hour)
+	state := stateAt(now)
+	state.NextResetAt = existing
+	source := &configSource{cfg: model.Config{Reset: model.ResetConfig{Mode: "monthly", Day: 1, Timezone: "Not/A-Timezone"}}}
+	tracker := NewForTest(state, source, nil, func() time.Time { return now })
+	if err := tracker.UpdateSchedule(); err == nil {
+		t.Fatal("expected invalid timezone error")
+	}
+	if got := tracker.State().NextResetAt; !got.Equal(existing) {
+		t.Fatalf("invalid schedule erased the current reset time: got=%v want=%v", got, existing)
+	}
+}
+
 func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 	now := time.Now()
 	source := &configSource{cfg: model.Config{TotalBytes: 100}}
-	core := &fakeCore{}
+	core := &fakeCore{running: true}
 	tracker := NewForTest(stateAt(now), source, core, time.Now)
 	exceeded, err := tracker.ApplySample(context.Background(), 60, 40)
 	if err != nil {
@@ -133,6 +169,78 @@ func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 	exceeded, _ = unlimited.ApplySample(context.Background(), 1<<40, 1<<40)
 	if exceeded || unlimited.State().QuotaExceeded {
 		t.Fatal("unlimited quota was exceeded")
+	}
+}
+
+func TestQuotaEnforcementRetriesAfterStopFailure(t *testing.T) {
+	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	core := &fakeCore{running: true, stopErr: errors.New("systemctl failed")}
+	tracker := NewForTest(stateAt(time.Now()), source, core, time.Now)
+	if exceeded, err := tracker.ApplySample(context.Background(), 100, 0); !exceeded || err == nil {
+		t.Fatalf("first sample should exceed quota and report stop failure: exceeded=%v err=%v", exceeded, err)
+	}
+	if !tracker.State().QuotaExceeded || core.stops != 1 || !core.running {
+		t.Fatalf("unexpected state after failed stop: state=%+v core=%+v", tracker.State(), core)
+	}
+	core.stopErr = nil
+	if exceeded, err := tracker.ApplySample(context.Background(), 101, 0); exceeded || err != nil {
+		t.Fatalf("retry sample failed: exceeded=%v err=%v", exceeded, err)
+	}
+	if core.stops != 2 || core.running {
+		t.Fatalf("stop was not retried: %+v", core)
+	}
+}
+
+func TestQuotaEnforcementContinuesWhenPersistenceFails(t *testing.T) {
+	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	core := &fakeCore{running: true}
+	tracker := NewForTest(stateAt(time.Now()), source, core, time.Now)
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tracker.file = store.NewJSONFile[model.State](filepath.Join(blocked, "state.json"))
+	if exceeded, err := tracker.ApplySample(context.Background(), 100, 0); !exceeded || err == nil {
+		t.Fatalf("expected quota transition and persistence error: exceeded=%v err=%v", exceeded, err)
+	}
+	if core.stops != 1 || core.running || !tracker.State().QuotaExceeded {
+		t.Fatalf("core was not stopped after persistence failure: state=%+v core=%+v", tracker.State(), core)
+	}
+}
+
+func TestReconcileQuotaConvergesWithoutStateTransition(t *testing.T) {
+	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	state := stateAt(time.Now())
+	state.Upload = 100
+	state.QuotaExceeded = true
+	core := &fakeCore{running: true}
+	tracker := NewForTest(state, source, core, time.Now)
+	if err := tracker.ReconcileQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if core.stops != 1 || core.running {
+		t.Fatalf("persisted quota state did not stop the core: %+v", core)
+	}
+}
+
+func TestQuotaRecoveryRetriesAfterStartFailure(t *testing.T) {
+	state := stateAt(time.Now())
+	state.QuotaExceeded = true
+	state.Upload = 100
+	core := &fakeCore{startErr: errors.New("systemctl failed")}
+	tracker := NewForTest(state, &configSource{}, core, time.Now)
+	if err := tracker.Reset(context.Background()); err == nil {
+		t.Fatal("expected start failure")
+	}
+	if tracker.State().QuotaExceeded || core.starts != 1 || core.running {
+		t.Fatalf("unexpected state after failed start: state=%+v core=%+v", tracker.State(), core)
+	}
+	core.startErr = nil
+	if err := tracker.ReconcileQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if core.starts != 2 || !core.running {
+		t.Fatalf("start was not retried: %+v", core)
 	}
 }
 

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/store"
@@ -17,16 +19,18 @@ import (
 type CoreControl interface {
 	Stop(context.Context) error
 	Start(context.Context) error
+	Active(context.Context) (bool, error)
 }
 type ConfigSource interface{ Get() model.Config }
 
 type Tracker struct {
-	mu     sync.RWMutex
-	state  model.State
-	file   *store.JSONFile[model.State]
-	config ConfigSource
-	core   CoreControl
-	now    func() time.Time
+	mu        sync.RWMutex
+	controlMu sync.Mutex
+	state     model.State
+	file      *store.JSONFile[model.State]
+	config    ConfigSource
+	core      CoreControl
+	now       func() time.Time
 }
 
 func Open(path string, config ConfigSource, core CoreControl, now func() time.Time) (*Tracker, error) {
@@ -46,7 +50,10 @@ func Open(path string, config ConfigSource, core CoreControl, now func() time.Ti
 		}
 		state = model.DefaultState(now())
 		if cfg := config.Get(); cfg.Reset.Mode == "monthly" {
-			state.NextResetAt, _ = NextMonthlyReset(now(), cfg.Reset)
+			state.NextResetAt, err = NextMonthlyReset(now(), cfg.Reset)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if saveErr := file.SaveWithoutBackup(state); saveErr != nil {
 			return nil, fmt.Errorf("初始化流量状态: %w", saveErr)
@@ -59,17 +66,17 @@ func Open(path string, config ConfigSource, core CoreControl, now func() time.Ti
 }
 
 func (t *Tracker) UpdateSchedule() error {
-	t.mu.Lock()
 	now := t.now()
-	t.state.NextResetAt = time.Time{}
+	next := time.Time{}
 	if cfg := t.config.Get(); cfg.Reset.Mode == "monthly" {
 		var err error
-		t.state.NextResetAt, err = NextMonthlyReset(now, cfg.Reset)
+		next, err = NextMonthlyReset(now, cfg.Reset)
 		if err != nil {
-			t.mu.Unlock()
 			return err
 		}
 	}
+	t.mu.Lock()
+	t.state.NextResetAt = next
 	t.state.UpdatedAt = now
 	snapshot := t.state
 	t.mu.Unlock()
@@ -104,72 +111,97 @@ func (t *Tracker) ApplySample(ctx context.Context, currentUpload, currentDownloa
 	t.state.LastCoreDownload = currentDownload
 	t.state.UpdatedAt = t.now()
 	cfg := t.config.Get()
-	newlyExceeded := !t.state.QuotaExceeded && cfg.TotalBytes > 0 && t.state.Total() >= cfg.TotalBytes
+	shouldExceed := cfg.TotalBytes > 0 && t.state.Total() >= cfg.TotalBytes
+	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {
 		t.state.QuotaExceeded = true
 	}
 	snapshot := t.state
 	t.mu.Unlock()
-	if newlyExceeded {
-		if err := t.persist(snapshot); err != nil {
-			return true, err
-		}
-		if t.core != nil {
-			return true, t.core.Stop(ctx)
-		}
+	var persistErr error
+	var coreErr error
+	if shouldExceed {
+		persistErr = t.persist(snapshot)
+		coreErr = t.reconcileCore(ctx)
 	}
-	return false, nil
+	return newlyExceeded, errors.Join(persistErr, coreErr)
 }
 
 func (t *Tracker) Reset(ctx context.Context) error {
+	now := t.now()
+	next := time.Time{}
+	if cfg := t.config.Get(); cfg.Reset.Mode == "monthly" {
+		var err error
+		next, err = NextMonthlyReset(now, cfg.Reset)
+		if err != nil {
+			return err
+		}
+	}
 	t.mu.Lock()
 	wasExceeded := t.state.QuotaExceeded
-	now := t.now()
 	t.state.Upload = 0
 	t.state.Download = 0
 	// Keep the latest core baselines so pre-reset bytes are never counted twice.
 	t.state.QuotaExceeded = false
 	t.state.PeriodStartedAt = now
 	t.state.UpdatedAt = now
-	t.state.NextResetAt = time.Time{}
-	if cfg := t.config.Get(); cfg.Reset.Mode == "monthly" {
-		t.state.NextResetAt, _ = NextMonthlyReset(now, cfg.Reset)
-	}
+	t.state.NextResetAt = next
 	snapshot := t.state
 	t.mu.Unlock()
 	if err := t.persist(snapshot); err != nil {
 		return err
 	}
-	if wasExceeded && t.core != nil {
-		return t.core.Start(ctx)
+	if wasExceeded {
+		return t.reconcileCore(ctx)
 	}
 	return nil
 }
 
-// ReconcileQuota applies a changed quota without clearing already-accounted traffic.
+// ReconcileQuota updates the desired quota state and makes the core converge on it.
 func (t *Tracker) ReconcileQuota(ctx context.Context) error {
 	t.mu.Lock()
 	cfg := t.config.Get()
 	shouldExceed := cfg.TotalBytes > 0 && t.state.Total() >= cfg.TotalBytes
 	wasExceeded := t.state.QuotaExceeded
-	if shouldExceed == wasExceeded {
-		t.mu.Unlock()
-		return nil
+	changed := shouldExceed != wasExceeded
+	if changed {
+		t.state.QuotaExceeded = shouldExceed
+		t.state.UpdatedAt = t.now()
 	}
-	t.state.QuotaExceeded = shouldExceed
-	t.state.UpdatedAt = t.now()
 	snapshot := t.state
 	t.mu.Unlock()
-	if err := t.persist(snapshot); err != nil {
-		return err
+	var persistErr error
+	if changed {
+		persistErr = t.persist(snapshot)
 	}
+	return errors.Join(persistErr, t.reconcileCore(ctx))
+}
+
+func (t *Tracker) reconcileCore(ctx context.Context) error {
 	if t.core == nil {
 		return nil
 	}
-	if shouldExceed {
-		return t.core.Stop(ctx)
+	t.controlMu.Lock()
+	defer t.controlMu.Unlock()
+	shouldExceed := t.State().QuotaExceeded
+	active, err := t.core.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("检查 sing-box 运行状态: %w", err)
 	}
-	return t.core.Start(ctx)
+	shouldBeActive := !shouldExceed
+	if active == shouldBeActive {
+		return nil
+	}
+	if shouldExceed {
+		if err := t.core.Stop(ctx); err != nil {
+			return fmt.Errorf("应用流量限额: %w", err)
+		}
+		return nil
+	}
+	if err := t.core.Start(ctx); err != nil {
+		return fmt.Errorf("恢复 sing-box: %w", err)
+	}
+	return nil
 }
 
 func (t *Tracker) CheckScheduledReset(ctx context.Context) error {
@@ -258,25 +290,51 @@ func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
 }
 
 func (t *Tracker) Run(ctx context.Context, client ClashClient) {
-	poll := time.NewTicker(4 * time.Second)
+	poll := time.NewTicker(time.Second)
+	schedule := time.NewTicker(15 * time.Second)
 	persist := time.NewTicker(30 * time.Second)
 	defer poll.Stop()
+	defer schedule.Stop()
 	defer persist.Stop()
+	sampleFailed := false
 	for {
 		select {
 		case <-ctx.Done():
-			_ = t.Persist()
+			if err := t.Persist(); err != nil {
+				log.Printf("traffic: final state save failed: %v", err)
+			}
 			return
 		case <-poll.C:
 			upload, download, err := client.Sample(ctx)
 			if err == nil {
-				_, _ = t.ApplySample(ctx, upload, download)
-				_ = t.CheckScheduledReset(ctx)
-			} else if t.State().QuotaExceeded {
-				_ = t.CheckScheduledReset(ctx)
+				sampleFailed = false
+				if _, err := t.ApplySample(ctx, upload, download); err != nil {
+					log.Printf("traffic: apply sample failed: %v", err)
+				}
+				continue
+			}
+			if t.State().QuotaExceeded {
+				sampleFailed = false
+				continue
+			}
+			if !sampleFailed {
+				log.Printf("traffic: read core counters failed: %v", err)
+				sampleFailed = true
+			}
+			if err := t.ReconcileQuota(ctx); err != nil {
+				log.Printf("traffic: reconcile core state failed: %v", err)
+			}
+		case <-schedule.C:
+			if err := t.ReconcileQuota(ctx); err != nil {
+				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
+			}
+			if err := t.CheckScheduledReset(ctx); err != nil {
+				log.Printf("traffic: scheduled reset failed: %v", err)
 			}
 		case <-persist.C:
-			_ = t.Persist()
+			if err := t.Persist(); err != nil {
+				log.Printf("traffic: periodic state save failed: %v", err)
+			}
 		}
 	}
 }

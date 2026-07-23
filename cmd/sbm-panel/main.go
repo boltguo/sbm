@@ -212,6 +212,9 @@ func runServe(args []string) {
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if err := tracker.ReconcileQuota(ctx); err != nil {
+		log.Printf("启动时校正流量限额失败：%v", err)
+	}
 	go tracker.Run(ctx, clashClient)
 	errCh := make(chan error, 1)
 	go func() {
@@ -231,7 +234,9 @@ func runServe(args []string) {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = tracker.Persist()
+	if err := tracker.Persist(); err != nil {
+		log.Printf("关闭时保存流量状态失败：%v", err)
+	}
 	_ = httpServer.Shutdown(shutdownCtx)
 }
 
