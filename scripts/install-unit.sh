@@ -88,7 +88,7 @@ apt-get() {
     installed_iptables=true
   fi
 }
-# shellcheck disable=SC2329 # Discovered through command -v inside install_deps.
+# shellcheck disable=SC2317,SC2329 # Discovered through command -v inside install_deps.
 crontab() { return 0; }
 systemctl() { return 0; }
 check_required_commands() { return 0; }

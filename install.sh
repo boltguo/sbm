@@ -780,7 +780,9 @@ uninstall() {
   case "$answer" in y|Y) ;; *) return ;; esac
   domain="$(json_string domain "$CONFIG_FILE")"
   systemctl disable --now sbm-panel.service sing-box.service sbm-firewall.service >/dev/null 2>&1 || true
-  [[ -x "$ACME_BIN" && -n "$domain" ]] && "$ACME_BIN" --remove -d "$domain" >/dev/null 2>&1 || true
+  if [[ -x "$ACME_BIN" && -n "$domain" ]]; then
+    "$ACME_BIN" --remove -d "$domain" >/dev/null 2>&1 || true
+  fi
   rm -f "$FIREWALL_SERVICE" /etc/systemd/system/sbm-panel.service /etc/systemd/system/sing-box.service "$SBM_BIN" "$SING_BOX_BIN" "$SBM_CMD" "$CERT_RELOAD" "$FIREWALL_HELPER" "$CORE_GUARD"
   rmdir /usr/local/lib/sbm 2>/dev/null || true
   rm -rf /etc/sbm /var/lib/sbm /etc/sing-box /var/lib/sing-box
