@@ -12,6 +12,18 @@ export interface Dashboard {
   nextResetAt?: string
   quotaExceeded: boolean
   subscriptionURL: string
+  trafficAudit: TrafficAudit
+}
+
+export interface TrafficAudit {
+  status: 'collecting' | 'normal' | 'different' | 'unavailable'
+  interface?: string
+  proxyBytes: number
+  receiveBytes: number
+  transmitBytes: number
+  receiveRatio: number
+  transmitRatio: number
+  startedAt?: string
 }
 
 export interface UpdateStatus {

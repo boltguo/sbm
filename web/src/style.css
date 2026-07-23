@@ -515,6 +515,45 @@ input:focus-visible,
   min-width: 0;
 }
 
+.traffic-kicker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.traffic-refresh {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 700 9px/1 var(--mono);
+  letter-spacing: .05em;
+}
+
+.traffic-refresh:hover {
+  border-color: var(--ink);
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.traffic-refresh:disabled {
+  cursor: wait;
+}
+
+.traffic-refresh .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.traffic-refresh.refreshing .icon {
+  animation: version-spin .8s linear infinite;
+}
+
 .traffic-copy h2 {
   margin: 8px 0;
   font: 800 clamp(44px, 5.5vw, 68px)/1 var(--display);
@@ -525,6 +564,39 @@ input:focus-visible,
 .traffic-copy p {
   margin: 0;
   color: var(--muted);
+}
+
+.traffic-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+  color: var(--muted);
+  font: 9px/1.4 var(--mono);
+  letter-spacing: .03em;
+}
+
+.traffic-source i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #70b81d;
+  box-shadow: 0 0 0 3px rgba(112, 184, 29, .12);
+}
+
+.traffic-source.warning {
+  color: var(--red);
+}
+
+.traffic-source.warning i {
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(187, 54, 43, .12);
+}
+
+.traffic-source.pending i {
+  background: var(--muted);
+  box-shadow: 0 0 0 3px rgba(98, 102, 95, .1);
 }
 
 .traffic-ring {
@@ -1081,6 +1153,32 @@ label small {
 .settings-fields.full-fields .danger-outline {
   height: 100%;
   min-height: 46px;
+}
+
+.quota-guide {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 7px;
+  padding: 15px 16px;
+  border-left: 3px solid var(--signal);
+  background: var(--paper-2);
+}
+
+.quota-guide strong {
+  font: 800 13px/1.3 var(--display);
+}
+
+.quota-guide p,
+.quota-guide small {
+  margin: 0;
+  color: var(--muted);
+  font: 11px/1.55 var(--mono);
+}
+
+.quota-guide small {
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
 }
 
 .self-end {

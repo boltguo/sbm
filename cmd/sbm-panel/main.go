@@ -207,7 +207,7 @@ func runServe(args []string) {
 		Factory: protocol.Factory{Keys: protocol.SingBoxKeyGenerator{Binary: p.singBox}}, Clash: clashClient,
 		System: systemCollector, Assets: assets, Limiter: auth.NewLimiter(),
 		Sessions: auth.Sessions{Secret: []byte(cfg.SessionSecret), Lifetime: 24 * time.Hour}, PanelVersion: version,
-		Releases: releasecheck.NewGitHub("boltguo/sbm"),
+		Releases: releasecheck.NewGitHub("boltguo/sbm"), TrafficAudit: traffic.NewNetworkAudit(*procRoot),
 	}
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

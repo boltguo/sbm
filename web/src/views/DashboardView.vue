@@ -11,6 +11,7 @@ const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
 const update = ref<UpdateStatus | null>(null)
 const checkingUpdate = ref(false)
+const refreshingTraffic = ref(false)
 const qr = ref('')
 let timer = 0
 
@@ -22,8 +23,34 @@ const bytes = (value: number) => {
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
 const updateLabel = () => update.value?.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.checkUpdate')
+const auditLabel = () => {
+  if (!data.value || data.value.trafficAudit.status === 'unavailable') return t('dashboard.trafficSource')
+  return `${t('dashboard.trafficSource')} · ${t(`dashboard.audit.${data.value.trafficAudit.status}`)}`
+}
+const auditDetail = () => {
+  if (!data.value || data.value.trafficAudit.status === 'unavailable') return t('dashboard.audit.unavailableHelp')
+  const audit = data.value.trafficAudit
+  if (audit.status === 'collecting') return t('dashboard.audit.collectingHelp', { amount: bytes(audit.proxyBytes) })
+  return t('dashboard.audit.detail', { interface: audit.interface || 'WAN', proxy: bytes(audit.proxyBytes), receive: bytes(audit.receiveBytes), transmit: bytes(audit.transmitBytes) })
+}
 
-async function load() { data.value = await api<Dashboard>('/api/dashboard'); qr.value = await QRCode.toDataURL(data.value.subscriptionURL, { width: 256, margin: 1, color: { dark: '#111712', light: '#f4f1e8' } }) }
+async function load() {
+  const next = await api<Dashboard>('/api/dashboard')
+  if (!data.value || data.value.subscriptionURL !== next.subscriptionURL) {
+    qr.value = await QRCode.toDataURL(next.subscriptionURL, { width: 256, margin: 1, color: { dark: '#111712', light: '#f4f1e8' } })
+  }
+  data.value = next
+}
+async function refreshTraffic() {
+  if (refreshingTraffic.value) return
+  refreshingTraffic.value = true
+  try {
+    await load()
+    emit('toast', t('dashboard.refreshed'))
+  } finally {
+    refreshingTraffic.value = false
+  }
+}
 async function copy(value: string) { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) }
 async function restart() { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() }
 async function reset() { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() }
@@ -58,7 +85,15 @@ onBeforeUnmount(() => clearInterval(timer))
       <div><small>NEXT RESET</small><strong>{{ date(data.nextResetAt) }}</strong></div>
     </section>
     <section class="traffic-panel">
-      <div class="traffic-copy"><span class="eyebrow">SHARED TRAFFIC POOL</span><h2>{{ bytes(data.used) }}</h2><p>{{ data.totalBytes ? t('dashboard.totalRemaining', { total: bytes(data.totalBytes), remaining: bytes(data.remaining) }) : t('dashboard.unlimitedHelp') }}</p></div>
+      <div class="traffic-copy">
+        <div class="traffic-kicker">
+          <span class="eyebrow">SHARED TRAFFIC POOL</span>
+          <button class="traffic-refresh" :class="{ refreshing: refreshingTraffic }" :disabled="refreshingTraffic" :title="t('dashboard.refreshHelp')" @click="refreshTraffic"><Icon name="refresh"/>{{ t('dashboard.refresh') }}</button>
+        </div>
+        <h2>{{ bytes(data.used) }}</h2>
+        <p>{{ data.totalBytes ? t('dashboard.totalRemaining', { total: bytes(data.totalBytes), remaining: bytes(data.remaining) }) : t('dashboard.unlimitedHelp') }}</p>
+        <small class="traffic-source" :class="{ warning: data.trafficAudit.status === 'different', pending: data.trafficAudit.status === 'collecting' || data.trafficAudit.status === 'unavailable' }" :title="auditDetail()"><i></i>{{ auditLabel() }}</small>
+      </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.totalBytes ? data.progress : 0}%` }"><div><b>{{ data.totalBytes ? Math.round(data.progress) : '∞' }}</b><small>{{ data.totalBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
       <div class="progress-track"><i :style="{ width: data.totalBytes ? `${data.progress}%` : '0%' }"></i></div>

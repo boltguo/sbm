@@ -47,6 +47,7 @@ type Server struct {
 	Sessions     auth.Sessions
 	PanelVersion string
 	Releases     releasecheck.Source
+	TrafficAudit *traffic.NetworkAudit
 	AuditLog     *log.Logger
 	mutationMu   sync.Mutex
 	releaseMu    sync.Mutex
@@ -210,6 +211,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	cfg, state := s.Config.Get(), s.Traffic.State()
 	active, _ := s.Core.Active(r.Context())
 	coreVersion := s.Core.Version(r.Context())
+	trafficAudit := traffic.AuditResult{Status: "unavailable"}
+	if s.TrafficAudit != nil {
+		trafficAudit = s.TrafficAudit.Check(state.Total())
+	}
 	remaining := int64(0)
 	progress := float64(0)
 	if cfg.TotalBytes > 0 {
@@ -219,7 +224,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"active": active, "version": coreVersion, "coreVersion": coreVersion, "panelVersion": s.PanelVersion, "upload": state.Upload, "download": state.Download, "used": state.Total(),
 		"totalBytes": cfg.TotalBytes, "remaining": remaining, "progress": progress, "periodStartedAt": state.PeriodStartedAt,
-		"nextResetAt": state.NextResetAt, "quotaExceeded": state.QuotaExceeded, "subscriptionURL": subscriptionURL(cfg),
+		"nextResetAt": state.NextResetAt, "quotaExceeded": state.QuotaExceeded, "subscriptionURL": subscriptionURL(cfg), "trafficAudit": trafficAudit,
 	})
 }
 

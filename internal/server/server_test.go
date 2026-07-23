@@ -100,6 +100,9 @@ func TestDashboardSeparatesPanelAndCoreVersions(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"panelVersion":"0.1.0"`) || !strings.Contains(response.Body.String(), `"coreVersion":"sing-box version 1.12.0"`) {
 		t.Fatalf("panel and core versions missing: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"trafficAudit":{"status":"unavailable"`) {
+		t.Fatalf("traffic audit status missing: %s", response.Body.String())
+	}
 }
 
 func TestUpdateCheckFindsNewReleaseAndCachesResult(t *testing.T) {
