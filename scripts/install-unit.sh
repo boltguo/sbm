@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+trap 'status=$?; printf "install-unit failed at line %d: %s\n" "$LINENO" "$BASH_COMMAND" >&2; exit "$status"' ERR
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The installer is linted separately; this path is resolved dynamically.

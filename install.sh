@@ -50,9 +50,10 @@ arch_tag() {
 }
 cleanup_domain() {
   local value="$1"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
   value="${value//[[:space:]]/}"
   value="${value#http://}"; value="${value#https://}"; value="${value%%/*}"; value="${value%%:*}"
-  printf '%s\n' "$value" | tr '[:upper:]' '[:lower:]'
+  printf '%s\n' "$value"
 }
 validate_domain() {
   local domain="$1"
