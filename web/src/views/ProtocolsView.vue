@@ -8,6 +8,7 @@ import Icon from '../components/Icon.vue'
 import Modal from '../components/Modal.vue'
 import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
+import PasswordInput from '../components/PasswordInput.vue'
 import { t } from '../i18n'
 
 const emit = defineEmits<{ toast: [message: string] }>()
@@ -47,7 +48,7 @@ onMounted(load)
       <button class="add-card" @click="openCreate"><Icon name="plus"/><strong>{{ t('protocol.addAnother') }}</strong><span>{{ t('protocol.addAnotherHelp') }}</span></button>
     </div>
 
-    <Modal v-if="creating" :title="t('protocol.newTitle')" @close="creating = false">
+    <Modal v-if="creating" :title="t('protocol.newTitle')" :description="t('protocol.addAnotherHelp')" @close="creating = false">
       <form class="form-grid" @submit.prevent="create">
         <label>{{ t('protocol.type') }}<SelectControl v-model="createForm.type" :options="protocolOptions" /></label>
         <div v-if="duplicate" class="alert warning">{{ t('protocol.duplicate') }}</div>
@@ -57,15 +58,15 @@ onMounted(load)
       </form>
     </Modal>
 
-    <Modal v-if="editing" :title="t('protocol.editTitle')" wide @close="editing = null">
+    <Modal v-if="editing" :title="t('protocol.editTitle')" :description="t('protocol.firewall')" wide @close="editing = null">
       <form class="form-grid two" @submit.prevent="save">
         <label>{{ t('protocol.name') }}<input v-model.trim="editing.name" maxlength="80" required></label><label>{{ t('protocol.port') }}<input v-model.number="editing.port" type="number" min="1" max="65535" required></label>
-        <template v-if="editing.vless"><label>UUID<input v-model="editing.vless.uuid" required></label><label>Reality SNI<input v-model.trim="editing.vless.sni" required></label><label>{{ t('protocol.privateKey') }}<input v-model="editing.vless.privateKey" required></label><label>{{ t('protocol.publicKey') }}<input v-model="editing.vless.publicKey" required></label><label>Short ID<input v-model="editing.vless.shortId" required></label></template>
-        <template v-if="editing.hysteria2"><label>{{ t('protocol.password') }}<input v-model="editing.hysteria2.password" minlength="8" required></label><label>{{ t('protocol.obfs') }}<SelectControl :model-value="editing.hysteria2.obfs || 'none'" :options="obfsOptions" @update:model-value="value => { if (editing?.hysteria2) editing.hysteria2.obfs = value === 'none' ? '' : value }" /></label><label v-if="editing.hysteria2.obfs" class="span-two">{{ t('protocol.obfsPassword') }}<input v-model="editing.hysteria2.obfsPassword" minlength="8" required></label></template>
+        <template v-if="editing.vless"><label>UUID<input v-model="editing.vless.uuid" required></label><label>Reality SNI<input v-model.trim="editing.vless.sni" required></label><label>{{ t('protocol.privateKey') }}<PasswordInput v-model="editing.vless.privateKey" :aria-label="t('protocol.privateKey')" autocomplete="off" required /></label><label>{{ t('protocol.publicKey') }}<input v-model="editing.vless.publicKey" required></label><label>Short ID<input v-model="editing.vless.shortId" required></label></template>
+        <template v-if="editing.hysteria2"><label>{{ t('protocol.password') }}<PasswordInput v-model="editing.hysteria2.password" :aria-label="t('protocol.password')" autocomplete="off" minlength="8" required /></label><label>{{ t('protocol.obfs') }}<SelectControl :model-value="editing.hysteria2.obfs || 'none'" :options="obfsOptions" @update:model-value="value => { if (editing?.hysteria2) editing.hysteria2.obfs = value === 'none' ? '' : value }" /></label><label v-if="editing.hysteria2.obfs" class="span-two">{{ t('protocol.obfsPassword') }}<PasswordInput v-model="editing.hysteria2.obfsPassword" :aria-label="t('protocol.obfsPassword')" autocomplete="off" minlength="8" required /></label></template>
         <div class="alert subtle span-two">{{ t('protocol.firewall') }}</div>
         <div class="modal-actions span-two"><button type="button" class="secondary" @click="editing = null">{{ t('protocol.cancel') }}</button><button class="primary">{{ t('protocol.apply') }}</button></div>
       </form>
     </Modal>
-    <Modal v-if="qrItem" :title="qrItem.name" @close="qrItem = null"><div class="large-qr"><img :src="qr" :alt="t('protocol.qrAlt')"><p>{{ t('protocol.qrHelp') }}</p></div></Modal>
+    <Modal v-if="qrItem" :title="qrItem.name" :description="t('protocol.qrHelp')" @close="qrItem = null"><div class="large-qr"><img :src="qr" :alt="t('protocol.qrAlt')"><p>{{ t('protocol.qrHelp') }}</p></div></Modal>
   </div>
 </template>

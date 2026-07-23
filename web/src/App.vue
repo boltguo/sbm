@@ -33,6 +33,7 @@ onMounted(check)
       <div class="app-header-brand" aria-hidden="true"><div class="brand-mark"><span>SB</span><b>M</b></div></div>
       <div class="app-header-actions">
         <button class="app-header-control locale-control" @click="toggleLocale">{{ t('language') }}</button>
+        <a class="app-header-control github-control" href="https://github.com/boltguo/sbm" target="_blank" rel="noopener noreferrer" title="GitHub" aria-label="GitHub"><Icon name="github"/></a>
         <button class="app-header-control logout-control" :title="t('logout')" :aria-label="t('logout')" @click="logout"><Icon name="logout"/><span>{{ t('logout') }}</span></button>
       </div>
     </header>

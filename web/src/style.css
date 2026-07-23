@@ -49,6 +49,7 @@ button {
 
 button:focus-visible,
 input:focus-visible,
+[href]:focus-visible,
 [role="combobox"]:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
@@ -152,6 +153,7 @@ input:focus-visible,
   border: 1px solid var(--ink);
   background: transparent;
   font: 700 10px/1 var(--mono);
+  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -161,6 +163,17 @@ input:focus-visible,
 
 .locale-control {
   background: var(--signal);
+}
+
+.github-control {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.github-control:hover {
+  background: var(--ink);
+  color: var(--signal);
 }
 
 .logout-control {
@@ -358,18 +371,15 @@ input:focus-visible,
 /* Overview */
 .status-strip {
   display: grid;
-  grid-template-columns: 1fr 1.55fr 1.15fr 1.15fr;
+  grid-template-columns: 1fr 1fr 1.55fr 1.15fr 1.15fr;
   margin-bottom: 20px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, .58);
 }
 
 .status-strip > div {
-  display: grid;
+  display: block;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 5px 10px;
   padding: 18px 20px;
   border-right: 1px solid var(--line);
 }
@@ -388,15 +398,88 @@ input:focus-visible,
 }
 
 .status-strip strong {
-  grid-column: 2;
+  display: block;
   overflow: hidden;
+  margin-top: 6px;
   font: 600 12px/1.35 var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.status-strip .status-dot {
+.status-strip > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+
+.status-strip > div:first-child small,
+.status-strip > div:first-child strong {
+  grid-column: 2;
+}
+
+.status-strip > div:first-child strong {
+  margin-top: 0;
+}
+
+.status-strip > div:first-child .status-dot {
   grid-row: 1 / 3;
+}
+
+.status-strip > .version-cell {
+  position: relative;
+  display: block;
+  padding-right: 52px;
+}
+
+.version-cell small,
+.version-cell strong {
+  display: block;
+}
+
+.version-check {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+
+.version-check:hover {
+  border-color: var(--ink);
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.version-check:disabled {
+  cursor: wait;
+}
+
+.version-check .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.version-check.checking .icon {
+  animation: version-spin .8s linear infinite;
+}
+
+.version-update-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  background: var(--red);
 }
 
 .status-dot {
@@ -841,6 +924,42 @@ select:focus {
   box-shadow: inset 3px 0 var(--signal);
 }
 
+.password-input {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.password-input input {
+  padding-right: 50px;
+}
+
+.password-input input::-ms-reveal,
+.password-input input::-ms-clear {
+  display: none;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  width: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: var(--paper-strong);
+  color: var(--muted);
+}
+
+.password-toggle:hover,
+.password-toggle[aria-pressed="true"] {
+  background: var(--signal);
+  color: var(--ink);
+}
+
 label small {
   color: var(--muted);
   font: 10px/1.5 var(--mono);
@@ -1182,21 +1301,14 @@ label small {
 }
 
 /* Authentication */
-.locale-switch {
+.login-actions {
   position: fixed;
   z-index: 35;
   top: 16px;
   right: 22px;
-  display: grid;
-  width: 56px;
-  height: 32px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--ink);
-  background: var(--signal);
-  font: 700 10px var(--mono);
-  letter-spacing: .04em;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .login-page {
@@ -1261,12 +1373,6 @@ label small {
   margin-top: 22px;
 }
 
-.login-locale {
-  border-color: var(--ink);
-  background: var(--signal);
-  color: var(--ink);
-}
-
 .toast {
   display: flex;
   align-items: center;
@@ -1286,6 +1392,10 @@ label small {
   from { opacity: 0; transform: translateY(8px); }
 }
 
+@keyframes version-spin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes toast-out {
   to { opacity: 0; transform: translateY(8px); }
 }
@@ -1295,12 +1405,17 @@ label small {
     grid-template-columns: 1fr 1.35fr;
   }
 
-  .status-strip > div:nth-child(2) {
+  .status-strip > div:nth-child(even),
+  .status-strip > div:last-child {
     border-right: 0;
   }
 
-  .status-strip > div:nth-child(-n + 2) {
+  .status-strip > div:nth-child(-n + 4) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .status-strip > div:last-child {
+    grid-column: 1 / -1;
   }
 
   .traffic-panel {
@@ -1476,6 +1591,7 @@ label small {
   }
 
   .status-strip > div:last-child {
+    grid-column: auto;
     border-bottom: 0;
   }
 
@@ -1668,7 +1784,7 @@ label small {
     font-size: 13px;
   }
 
-  .locale-switch {
+  .login-actions {
     top: 12px;
     right: 12px;
   }

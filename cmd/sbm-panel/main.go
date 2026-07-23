@@ -20,6 +20,7 @@ import (
 	"github.com/boltguo/sbm/internal/core"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
+	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/server"
 	"github.com/boltguo/sbm/internal/store"
 	"github.com/boltguo/sbm/internal/systeminfo"
@@ -79,6 +80,7 @@ func runInit(args []string) {
 	p := pathFlags(set)
 	domain := set.String("domain", "", "已解析到服务器的域名")
 	panelPort := set.Int("panel-port", model.DefaultConfig().PanelPort, "面板监听端口")
+	nodeName := set.String("node-name", "MyNode", "节点基础名称")
 	passwordFile := set.String("admin-password-file", "", "管理员初始密码文件")
 	_ = set.Parse(args)
 	if *domain == "" || *passwordFile == "" {
@@ -96,6 +98,10 @@ func runInit(args []string) {
 	password := strings.TrimSpace(string(passwordBytes))
 	if len(password) < 12 || len(password) > 128 {
 		fatal("管理员密码长度必须为 12 到 128")
+	}
+	baseName := strings.TrimSpace(*nodeName)
+	if len([]rune(baseName)) == 0 || len([]rune(baseName)) > 74 {
+		fatal("节点基础名称长度必须为 1 到 74 个字符")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -117,9 +123,9 @@ func runInit(args []string) {
 	factory := protocol.Factory{Keys: protocol.SingBoxKeyGenerator{Binary: p.singBox}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	vless, err := factory.New(ctx, protocol.TypeVLESSReality, "VLESS Reality", 443)
+	vless, err := factory.New(ctx, protocol.TypeVLESSReality, baseName+"-VLESS", 443)
 	must(err)
-	hy2, err := factory.New(ctx, protocol.TypeHysteria2, "Hysteria2", 443)
+	hy2, err := factory.New(ctx, protocol.TypeHysteria2, baseName+"-HY2", 443)
 	must(err)
 	cfg.Inbounds = []model.Inbound{vless, hy2}
 	if err := protocol.DefaultRegistry().ValidateConfig(cfg); err != nil {
@@ -196,7 +202,13 @@ func runServe(args []string) {
 	clashClient := traffic.ClashClient{URL: "http://127.0.0.1:9090/connections", Secret: cfg.ClashAPISecret}
 	systemCollector := systeminfo.New()
 	systemCollector.ProcRoot, systemCollector.OSReleasePath, systemCollector.DiskPath = *procRoot, *osRelease, *diskPath
-	app := &server.Server{Config: cfgStore, Traffic: tracker, Core: manager, Registry: protocol.DefaultRegistry(), Factory: protocol.Factory{Keys: protocol.SingBoxKeyGenerator{Binary: p.singBox}}, Clash: clashClient, System: systemCollector, Assets: assets, Limiter: auth.NewLimiter(), Sessions: auth.Sessions{Secret: []byte(cfg.SessionSecret), Lifetime: 24 * time.Hour}}
+	app := &server.Server{
+		Config: cfgStore, Traffic: tracker, Core: manager, Registry: protocol.DefaultRegistry(),
+		Factory: protocol.Factory{Keys: protocol.SingBoxKeyGenerator{Binary: p.singBox}}, Clash: clashClient,
+		System: systemCollector, Assets: assets, Limiter: auth.NewLimiter(),
+		Sessions: auth.Sessions{Secret: []byte(cfg.SessionSecret), Lifetime: 24 * time.Hour}, PanelVersion: version,
+		Releases: releasecheck.NewGitHub("boltguo/sbm"),
+	}
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

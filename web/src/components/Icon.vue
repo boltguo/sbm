@@ -2,6 +2,8 @@
 import {
   Check,
   Copy,
+  Eye,
+  EyeOff,
   Grid2X2,
   LogOut,
   Pencil,
@@ -14,8 +16,9 @@ import {
   Trash2,
   X,
 } from '@lucide/vue'
+import GithubMark from './GithubMark.vue'
 
-type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check'
+type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check' | 'eye' | 'eye-off' | 'github'
 
 defineProps<{ name: IconName }>()
 
@@ -33,6 +36,9 @@ const icons = {
   edit: Pencil,
   trash: Trash2,
   check: Check,
+  eye: Eye,
+  'eye-off': EyeOff,
+  github: GithubMark,
 }
 </script>
 

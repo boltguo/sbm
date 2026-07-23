@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { post, setCSRF } from '../api'
 import { t, toggleLocale } from '../i18n'
+import Icon from '../components/Icon.vue'
+import PasswordInput from '../components/PasswordInput.vue'
 
 const emit = defineEmits<{ loggedIn: [username: string] }>()
 const username = ref('admin')
@@ -21,14 +23,17 @@ async function login() {
 
 <template>
   <main class="login-page">
-    <button class="locale-switch login-locale" @click="toggleLocale">{{ t('language') }}</button>
+    <div class="login-actions">
+      <button class="app-header-control locale-control" @click="toggleLocale">{{ t('language') }}</button>
+      <a class="app-header-control github-control" href="https://github.com/boltguo/sbm" target="_blank" rel="noopener noreferrer" title="GitHub" aria-label="GitHub"><Icon name="github"/></a>
+    </div>
     <div class="login-grid" aria-hidden="true"></div>
     <form class="login-card" @submit.prevent="login">
       <div class="brand-mark large login-card-brand"><span>SB</span><b>M</b></div>
       <h2>{{ t('login.title') }}</h2>
       <p>{{ t('login.help') }}</p>
       <label>{{ t('login.username') }}<input v-model="username" autocomplete="username" required></label>
-      <label>{{ t('login.password') }}<input v-model="password" type="password" autocomplete="current-password" autofocus required></label>
+      <label>{{ t('login.password') }}<PasswordInput v-model="password" :aria-label="t('login.password')" autocomplete="current-password" autofocus required /></label>
       <p v-if="error" class="form-error">{{ error }}</p>
       <button class="primary full" :disabled="loading">{{ loading ? t('login.loading') : t('login.submit') }}<span>↗</span></button>
     </form>

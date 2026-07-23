@@ -2,13 +2,15 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
 import { api, post } from '../api'
-import type { Dashboard } from '../types'
+import type { Dashboard, UpdateStatus } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import { dateLocale, t } from '../i18n'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
+const update = ref<UpdateStatus | null>(null)
+const checkingUpdate = ref(false)
 const qr = ref('')
 let timer = 0
 
@@ -18,12 +20,25 @@ const bytes = (value: number) => {
   return `${(value / 1024 ** i).toFixed(i > 2 ? 2 : 1)} ${units[i]}`
 }
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
+const updateLabel = () => update.value?.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.checkUpdate')
 
 async function load() { data.value = await api<Dashboard>('/api/dashboard'); qr.value = await QRCode.toDataURL(data.value.subscriptionURL, { width: 256, margin: 1, color: { dark: '#111712', light: '#f4f1e8' } }) }
 async function copy(value: string) { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) }
 async function restart() { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() }
 async function reset() { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() }
-onMounted(() => { load(); timer = window.setInterval(load, 5000) })
+async function checkUpdate(notify = true) {
+  checkingUpdate.value = true
+  try {
+    update.value = await api<UpdateStatus>('/api/update')
+    if (notify) emit('toast', update.value.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.updateCurrent'))
+  } catch {
+    if (notify) emit('toast', t('dashboard.updateFailed'))
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+onMounted(() => { load(); checkUpdate(false); timer = window.setInterval(load, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 
@@ -33,7 +48,12 @@ onBeforeUnmount(() => clearInterval(timer))
     <div v-if="data.quotaExceeded" class="alert danger"><strong>{{ t('dashboard.exceeded') }}</strong><span>{{ t('dashboard.exceededHelp') }}</span></div>
     <section class="status-strip">
       <div><span class="status-dot" :class="data.active ? 'online' : 'offline'"></span><small>CORE STATUS</small><strong>{{ data.active ? t('dashboard.running') : t('dashboard.stopped') }}</strong></div>
-      <div><small>CORE VERSION</small><strong>{{ data.version }}</strong></div>
+      <div class="version-cell">
+        <small>SBM VERSION</small>
+        <strong>{{ panelVersion(data.panelVersion) }}</strong>
+        <button class="version-check" :class="{ checking: checkingUpdate }" :disabled="checkingUpdate" :title="updateLabel()" :aria-label="updateLabel()" @click="checkUpdate()"><Icon name="refresh"/><span v-if="update?.updateAvailable" class="version-update-dot"></span></button>
+      </div>
+      <div><small>SING-BOX VERSION</small><strong>{{ data.coreVersion }}</strong></div>
       <div><small>PERIOD START</small><strong>{{ date(data.periodStartedAt) }}</strong></div>
       <div><small>NEXT RESET</small><strong>{{ date(data.nextResetAt) }}</strong></div>
     </section>

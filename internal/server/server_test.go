@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/boltguo/sbm/internal/core"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
+	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/store"
 	"github.com/boltguo/sbm/internal/systeminfo"
 	"github.com/boltguo/sbm/internal/traffic"
@@ -28,6 +30,17 @@ type successCommander struct{}
 
 func (successCommander) Run(context.Context, string, ...string) ([]byte, error) {
 	return []byte("sing-box version 1.12.0"), nil
+}
+
+type fakeReleases struct {
+	calls int
+	info  releasecheck.Info
+	err   error
+}
+
+func (f *fakeReleases) Latest(context.Context) (releasecheck.Info, error) {
+	f.calls++
+	return f.info, f.err
 }
 
 func testServer(t *testing.T) (*Server, model.Config) {
@@ -47,7 +60,7 @@ func testServer(t *testing.T) (*Server, model.Config) {
 	manager := &core.Manager{Binary: "/fake/sing-box", ConfigPath: filepath.Join(dir, "sing-box.json"), Service: "sing-box.service", Commands: successCommander{}, Renderer: core.Renderer{Registry: registry, BuildContext: protocol.BuildContext{CertificatePath: "/cert", KeyPath: "/key"}}}
 	tracker := traffic.NewForTest(model.DefaultState(time.Now()), cfgStore, manager, time.Now)
 	assets, _ := fs.Sub(fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("index")}}, "dist")
-	return &Server{Config: cfgStore, Traffic: tracker, Core: manager, Registry: registry, Factory: protocol.Factory{}, System: systeminfo.New(), Assets: assets, Limiter: auth.NewLimiter(), Sessions: auth.Sessions{Secret: []byte(secret), Lifetime: time.Hour}}, cfg
+	return &Server{Config: cfgStore, Traffic: tracker, Core: manager, Registry: registry, Factory: protocol.Factory{}, System: systeminfo.New(), Assets: assets, Limiter: auth.NewLimiter(), Sessions: auth.Sessions{Secret: []byte(secret), Lifetime: time.Hour}, PanelVersion: "0.1.0"}, cfg
 }
 
 func authenticatedRequest(t *testing.T, s *Server, method, target string, body any) *http.Request {
@@ -74,6 +87,52 @@ func TestUnauthenticatedAPIRejected(t *testing.T) {
 	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/dashboard", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestDashboardSeparatesPanelAndCoreVersions(t *testing.T) {
+	s, _ := testServer(t)
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/dashboard", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"panelVersion":"0.1.0"`) || !strings.Contains(response.Body.String(), `"coreVersion":"sing-box version 1.12.0"`) {
+		t.Fatalf("panel and core versions missing: %s", response.Body.String())
+	}
+}
+
+func TestUpdateCheckFindsNewReleaseAndCachesResult(t *testing.T) {
+	s, _ := testServer(t)
+	releases := &fakeReleases{info: releasecheck.Info{TagName: "v0.2.0", URL: "https://github.com/boltguo/sbm/releases/tag/v0.2.0"}}
+	s.Releases = releases
+	for range 2 {
+		response := httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/update", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), `"updateAvailable":true`) || !strings.Contains(response.Body.String(), `"latestVersion":"v0.2.0"`) {
+			t.Fatalf("unexpected update response: %s", response.Body.String())
+		}
+	}
+	if releases.calls != 1 {
+		t.Fatalf("release API called %d times, want 1", releases.calls)
+	}
+}
+
+func TestFailedLoginIsAuditedWithoutCredentials(t *testing.T) {
+	s, _ := testServer(t)
+	var audit bytes.Buffer
+	s.AuditLog = log.New(&audit, "", 0)
+	response := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"Username":"admin","Password":"do-not-log-this"}`))
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(audit.String(), "event=login") || !strings.Contains(audit.String(), "result=failed") || strings.Contains(audit.String(), "do-not-log-this") {
+		t.Fatalf("unexpected audit log %q", audit.String())
 	}
 }
 
@@ -112,6 +171,27 @@ func TestSubscriptionContentAndHeaders(t *testing.T) {
 	}
 	if response.Header().Get("Subscription-Userinfo") == "" || response.Header().Get("Profile-Title") == "" {
 		t.Fatal("subscription headers missing")
+	}
+}
+
+func TestSubscriptionURLAndTitleUseNodeBaseName(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.Inbounds[0].Name = "🇯🇵Japan-Tokyo-HY2"
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	wantFragment := "#%F0%9F%87%AF%F0%9F%87%B5Japan-Tokyo"
+	if got := subscriptionURL(cfg); !strings.HasSuffix(got, wantFragment) {
+		t.Fatalf("subscription URL %q does not end with %q", got, wantFragment)
+	}
+
+	response := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+cfg.SubscriptionToken, nil)
+	req.Header.Set("Accept", "text/plain")
+	s.Handler().ServeHTTP(response, req)
+	title, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(response.Header().Get("Profile-Title"), "base64:"))
+	if err != nil || string(title) != "🇯🇵Japan-Tokyo" {
+		t.Fatalf("unexpected profile title %q: %v", title, err)
 	}
 }
 

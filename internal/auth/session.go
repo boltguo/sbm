@@ -89,7 +89,7 @@ func (l *Limiter) Allow(remote string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	key := clientIP(remote)
+	key := ClientIP(remote)
 	item := l.attempts[key]
 	if now.Before(item.BlockedUntil) {
 		return false
@@ -103,7 +103,7 @@ func (l *Limiter) Fail(remote string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	key := clientIP(remote)
+	key := ClientIP(remote)
 	item := l.attempts[key]
 	if item.Window.IsZero() || now.Sub(item.Window) >= l.Window {
 		item = attempt{Window: now}
@@ -116,11 +116,11 @@ func (l *Limiter) Fail(remote string) {
 }
 func (l *Limiter) Success(remote string) {
 	l.mu.Lock()
-	delete(l.attempts, clientIP(remote))
+	delete(l.attempts, ClientIP(remote))
 	l.mu.Unlock()
 }
 
-func clientIP(remote string) string {
+func ClientIP(remote string) string {
 	host, _, err := net.SplitHostPort(remote)
 	if err == nil {
 		return host

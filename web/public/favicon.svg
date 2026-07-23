@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SBM">
+  <rect width="64" height="64" fill="#111711"/>
+  <path fill="#c6f43d" d="M50 0h14v14H50z"/>
+  <text x="7" y="42" fill="#f7f7f3" font-family="Arial Narrow,Arial,sans-serif" font-size="25" font-weight="800" letter-spacing="-2">SB</text>
+  <text x="36" y="42" fill="#c6f43d" font-family="Arial Narrow,Arial,sans-serif" font-size="25" font-weight="800" letter-spacing="-2">M</text>
+</svg>

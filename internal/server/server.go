@@ -10,8 +10,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"strconv"
@@ -23,6 +27,7 @@ import (
 	"github.com/boltguo/sbm/internal/core"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
+	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/store"
 	"github.com/boltguo/sbm/internal/systeminfo"
 	"github.com/boltguo/sbm/internal/traffic"
@@ -30,17 +35,23 @@ import (
 )
 
 type Server struct {
-	Config     *store.ConfigStore
-	Traffic    *traffic.Tracker
-	Core       *core.Manager
-	Registry   *protocol.Registry
-	Factory    protocol.Factory
-	Clash      traffic.ClashClient
-	System     *systeminfo.Collector
-	Assets     fs.FS
-	Limiter    *auth.Limiter
-	Sessions   auth.Sessions
-	mutationMu sync.Mutex
+	Config       *store.ConfigStore
+	Traffic      *traffic.Tracker
+	Core         *core.Manager
+	Registry     *protocol.Registry
+	Factory      protocol.Factory
+	Clash        traffic.ClashClient
+	System       *systeminfo.Collector
+	Assets       fs.FS
+	Limiter      *auth.Limiter
+	Sessions     auth.Sessions
+	PanelVersion string
+	Releases     releasecheck.Source
+	AuditLog     *log.Logger
+	mutationMu   sync.Mutex
+	releaseMu    sync.Mutex
+	releaseCache *updateStatus
+	releaseUntil time.Time
 }
 
 type contextKey string
@@ -73,6 +84,7 @@ func securityHeaders(next http.Handler) http.Handler {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.Limiter.Allow(r.RemoteAddr) {
+		s.auditLogin(r, "blocked")
 		writeError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
 		return
 	}
@@ -86,6 +98,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	passwordOK := bcrypt.CompareHashAndPassword([]byte(cfg.AdminPasswordHash), []byte(input.Password)) == nil
 	if !userOK || !passwordOK {
 		s.Limiter.Fail(r.RemoteAddr)
+		s.auditLogin(r, "failed")
 		time.Sleep(250 * time.Millisecond)
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
@@ -103,7 +116,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Sessions.SetCookie(w, value, expires)
+	s.auditLogin(r, "succeeded")
 	writeJSON(w, 200, map[string]any{"username": cfg.AdminUsername, "csrfToken": csrf})
+}
+
+func (s *Server) auditLogin(r *http.Request, result string) {
+	message := fmt.Sprintf("audit event=login remote=%s result=%s", auth.ClientIP(r.RemoteAddr), result)
+	if s.AuditLog != nil {
+		s.AuditLog.Print(message)
+		return
+	}
+	log.Print(message)
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
@@ -143,6 +166,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case r.Method == "GET" && r.URL.Path == "/api/dashboard":
 		s.dashboard(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/update":
+		s.checkUpdate(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/server":
 		s.serverStatus(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/core/restart":
@@ -184,6 +209,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	cfg, state := s.Config.Get(), s.Traffic.State()
 	active, _ := s.Core.Active(r.Context())
+	coreVersion := s.Core.Version(r.Context())
 	remaining := int64(0)
 	progress := float64(0)
 	if cfg.TotalBytes > 0 {
@@ -191,10 +217,49 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		progress = min(100, float64(state.Total())/float64(cfg.TotalBytes)*100)
 	}
 	writeJSON(w, 200, map[string]any{
-		"active": active, "version": s.Core.Version(r.Context()), "upload": state.Upload, "download": state.Download, "used": state.Total(),
+		"active": active, "version": coreVersion, "coreVersion": coreVersion, "panelVersion": s.PanelVersion, "upload": state.Upload, "download": state.Download, "used": state.Total(),
 		"totalBytes": cfg.TotalBytes, "remaining": remaining, "progress": progress, "periodStartedAt": state.PeriodStartedAt,
 		"nextResetAt": state.NextResetAt, "quotaExceeded": state.QuotaExceeded, "subscriptionURL": subscriptionURL(cfg),
 	})
+}
+
+type updateStatus struct {
+	CurrentVersion  string    `json:"currentVersion"`
+	LatestVersion   string    `json:"latestVersion"`
+	UpdateAvailable bool      `json:"updateAvailable"`
+	ReleaseURL      string    `json:"releaseURL"`
+	CheckedAt       time.Time `json:"checkedAt"`
+}
+
+func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.Releases == nil {
+		writeError(w, http.StatusServiceUnavailable, "版本检查不可用")
+		return
+	}
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	now := time.Now()
+	if s.releaseCache != nil && now.Before(s.releaseUntil) {
+		writeJSON(w, http.StatusOK, *s.releaseCache)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	info, err := s.Releases.Latest(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
+		return
+	}
+	status := updateStatus{
+		CurrentVersion:  s.PanelVersion,
+		LatestVersion:   info.TagName,
+		UpdateAvailable: releasecheck.IsNewer(info.TagName, s.PanelVersion),
+		ReleaseURL:      info.URL,
+		CheckedAt:       now.UTC(),
+	}
+	s.releaseCache = &status
+	s.releaseUntil = now.Add(15 * time.Minute)
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +335,7 @@ func (s *Server) createInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	s.openUFW(inbound)
+	s.openHostFirewall(inbound)
 	writeJSON(w, 201, inbound)
 }
 
@@ -312,7 +377,7 @@ func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error())
 			return
 		}
-		s.openUFW(input)
+		s.openHostFirewall(input)
 		writeJSON(w, 200, input)
 	case http.MethodDelete:
 		found := false
@@ -496,7 +561,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", state.Upload, state.Download, cfg.TotalBytes))
 	w.Header().Set("Profile-Update-Interval", "12")
-	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte("SBM · "+cfg.Domain)))
+	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(subscriptionName(cfg))))
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "zh") {
@@ -511,7 +576,37 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 }
 
 func subscriptionURL(cfg model.Config) string {
-	return "https://" + cfg.Domain + ":" + strconv.Itoa(cfg.PanelPort) + "/sub/" + cfg.SubscriptionToken
+	u := &url.URL{
+		Scheme:   "https",
+		Host:     net.JoinHostPort(cfg.Domain, strconv.Itoa(cfg.PanelPort)),
+		Path:     "/sub/" + cfg.SubscriptionToken,
+		Fragment: subscriptionName(cfg),
+	}
+	return u.String()
+}
+
+func subscriptionName(cfg model.Config) string {
+	for _, enabledOnly := range []bool{true, false} {
+		for _, inbound := range cfg.Inbounds {
+			if enabledOnly && !inbound.Enabled {
+				continue
+			}
+			name := strings.TrimSpace(inbound.Name)
+			if name == "" {
+				continue
+			}
+			upperName := strings.ToUpper(name)
+			for _, suffix := range []string{"-VLESS", "-HY2"} {
+				if strings.HasSuffix(upperName, suffix) {
+					if base := strings.TrimSpace(name[:len(name)-len(suffix)]); base != "" {
+						return base
+					}
+				}
+			}
+			return name
+		}
+	}
+	return cfg.Domain
 }
 
 func credentialTag(cfg model.Config) string {
@@ -519,13 +614,21 @@ func credentialTag(cfg model.Config) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
-func (s *Server) openUFW(inbound model.Inbound) {
+func (s *Server) openHostFirewall(inbound model.Inbound) {
 	driver, ok := s.Registry.Get(inbound.Type)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	const firewallHelper = "/usr/local/lib/sbm/open-port.sh"
+	if info, err := os.Stat(firewallHelper); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
+		if err := exec.CommandContext(ctx, firewallHelper, driver.Network(), strconv.Itoa(inbound.Port)).Run(); err == nil {
+			return
+		} else {
+			log.Printf("host firewall helper failed: network=%s port=%d error=%v", driver.Network(), inbound.Port, err)
+		}
+	}
 	status, err := exec.CommandContext(ctx, "ufw", "status").Output()
 	if err != nil || !strings.Contains(string(status), "Status: active") {
 		return

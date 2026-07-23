@@ -5,6 +5,7 @@ import type { Settings } from '../types'
 import Icon from '../components/Icon.vue'
 import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
+import PasswordInput from '../components/PasswordInput.vue'
 import { t } from '../i18n'
 
 const emit = defineEmits<{ toast: [message: string]; loggedOut: [] }>()
@@ -30,7 +31,7 @@ onMounted(load)
       <div class="save-row"><button class="primary">{{ t('settings.save') }}</button></div>
     </form>
     <section class="settings-section"><div class="section-intro"><h2>{{ t('settings.subscription') }}</h2><p>{{ t('settings.subscriptionHelp') }}</p></div><div class="settings-fields full-fields"><div class="copy-field"><code>{{ settings.subscriptionURL }}</code><button @click="copy(settings.subscriptionURL)"><Icon name="copy"/>{{ t('settings.copy') }}</button></div><ConfirmAction :title="t('settings.regenerate')" :message="t('settings.tokenConfirm')" destructive @confirm="token"><button class="secondary danger-outline">{{ t('settings.regenerate') }}</button></ConfirmAction></div></section>
-    <form class="settings-section" @submit.prevent="changePassword"><div class="section-intro"><h2>{{ t('settings.password') }}</h2><p>{{ t('settings.passwordHelp') }}</p></div><div class="settings-fields"><label>{{ t('settings.currentPassword') }}<input v-model="password.currentPassword" type="password" required></label><label>{{ t('settings.newPassword') }}<input v-model="password.newPassword" type="password" minlength="12" maxlength="128" required></label><label>{{ t('settings.confirmPassword') }}<input v-model="password.confirm" type="password" minlength="12" maxlength="128" required></label><button class="secondary self-end">{{ t('settings.changePassword') }}</button></div></form>
+    <form class="settings-section" @submit.prevent="changePassword"><input type="text" name="username" value="admin" autocomplete="username" hidden readonly><div class="section-intro"><h2>{{ t('settings.password') }}</h2><p>{{ t('settings.passwordHelp') }}</p></div><div class="settings-fields"><label>{{ t('settings.currentPassword') }}<PasswordInput v-model="password.currentPassword" :aria-label="t('settings.currentPassword')" autocomplete="current-password" required /></label><label>{{ t('settings.newPassword') }}<PasswordInput v-model="password.newPassword" :aria-label="t('settings.newPassword')" autocomplete="new-password" minlength="12" maxlength="128" required /></label><label>{{ t('settings.confirmPassword') }}<PasswordInput v-model="password.confirm" :aria-label="t('settings.confirmPassword')" autocomplete="new-password" minlength="12" maxlength="128" required /></label><button class="secondary self-end">{{ t('settings.changePassword') }}</button></div></form>
     <section class="machine-info"><span>HOST</span><strong>{{ settings.domain }}</strong><span>PANEL</span><strong>TCP/{{ settings.panelPort }}</strong><span>DATA</span><strong>JSON / LOCAL</strong></section>
   </div>
   <div v-else class="loading">{{ t('settings.loading') }}</div>

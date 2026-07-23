@@ -16,6 +16,11 @@ readonly CORE_CONFIG="/etc/sing-box/config.json"
 readonly LEGACY_ENV="/etc/sing-box/sbm.env"
 readonly ACME_BIN="/root/.acme.sh/acme.sh"
 readonly CERT_RELOAD="/usr/local/lib/sbm/cert-reload.sh"
+readonly FIREWALL_HELPER="/usr/local/lib/sbm/open-port.sh"
+readonly FIREWALL_MODE="/etc/sbm/firewall-mode"
+readonly FIREWALL_PORTS="/etc/sbm/firewall-ports"
+readonly FIREWALL_SERVICE="/etc/systemd/system/sbm-firewall.service"
+readonly CORE_GUARD="/usr/local/lib/sbm/core-start-allowed.sh"
 readonly SELF_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'; RESET=$'\e[0m'
@@ -31,6 +36,11 @@ check_os() {
   case "${ID:-}" in debian|ubuntu) ;; *) die "仅支持 Debian 和 Ubuntu。" ;; esac
   command -v apt-get >/dev/null || die "未找到 apt-get。"
 }
+check_systemd() {
+  command -v systemctl >/dev/null || die "未找到 systemctl；SBM 需要使用 systemd 的 Debian/Ubuntu。"
+  [[ -d /run/systemd/system ]] || die "当前环境没有运行 systemd；不支持未启用 systemd 的容器或 WSL。"
+  systemctl show-environment >/dev/null 2>&1 || die "无法连接 systemd，请确认当前系统以 systemd 作为 PID 1。"
+}
 arch_tag() {
   case "$(uname -m)" in
     x86_64|amd64) printf 'amd64\n' ;;
@@ -42,19 +52,134 @@ cleanup_domain() {
   local value="$1"
   value="${value//[[:space:]]/}"
   value="${value#http://}"; value="${value#https://}"; value="${value%%/*}"; value="${value%%:*}"
-  printf '%s\n' "${value,,}"
+  printf '%s\n' "$value" | tr '[:upper:]' '[:lower:]'
 }
 validate_domain() {
   local domain="$1"
   [[ ${#domain} -le 253 && "$domain" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "域名格式无效。"
 }
 public_ipv4() { curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || true; }
+cloud_provider_from_identity() {
+  local identity
+  identity="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$identity" in
+    *oracle*|*oci*) printf 'oracle\n' ;;
+    *amazon*|*ec2*|*aws*) printf 'aws\n' ;;
+    *google*|*compute-engine*|*gce*) printf 'gcp\n' ;;
+    *microsoft*|*azure*) printf 'azure\n' ;;
+    *alibaba*|*aliyun*) printf 'alibaba\n' ;;
+    *tencent*|*qcloud*) printf 'tencent\n' ;;
+    *digitalocean*) printf 'digitalocean\n' ;;
+    *hetzner*) printf 'hetzner\n' ;;
+    *vultr*) printf 'vultr\n' ;;
+    *linode*|*akamai*) printf 'linode\n' ;;
+    *) printf 'generic\n' ;;
+  esac
+}
+detect_cloud_provider() {
+  local cloud_id="" identity=""
+  if command -v cloud-id >/dev/null 2>&1; then
+    cloud_id="$(cloud-id 2>/dev/null || true)"
+  fi
+  for identity_file in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/chassis_asset_tag; do
+    [[ -r "$identity_file" ]] && identity+=" $(<"$identity_file")"
+  done
+  cloud_provider_from_identity "$cloud_id $identity"
+}
+cloud_provider_name() {
+  case "$1" in
+    oracle) printf 'Oracle Cloud (OCI)' ;;
+    aws) printf 'AWS EC2 / Lightsail' ;;
+    gcp) printf 'Google Cloud (GCP)' ;;
+    azure) printf 'Microsoft Azure' ;;
+    alibaba) printf 'Alibaba Cloud ECS / 阿里云' ;;
+    tencent) printf 'Tencent Cloud CVM / 腾讯云' ;;
+    digitalocean) printf 'DigitalOcean' ;;
+    hetzner) printf 'Hetzner Cloud' ;;
+    vultr) printf 'Vultr' ;;
+    linode) printf 'Akamai/Linode' ;;
+    *) printf '通用 KVM（含 DMIT 等）' ;;
+  esac
+}
+show_cloud_firewall_guide() {
+  local provider="$1" panel_port="$2"
+  warn "云平台外层防火墙无法从虚拟机内自动修改，请确认入站：TCP/80、TCP/443、UDP/443、TCP/${panel_port}。面板端口也供客户端更新订阅，来源限制需覆盖实际客户端。"
+  warn "请保持云防火墙允许全部出站，并让域名 A 记录直连本机；Cloudflare 必须使用 DNS only / 灰云。"
+  case "$provider" in
+    oracle) warn "OCI：VNIC NSG 与子网 Security List 的允许规则取并集，任选实际生效的一层添加即可；系统防火墙仍需放行。脚本只增量处理 iptables，不会清空原规则。" ;;
+    aws) warn "AWS：检查网卡实际关联的 EC2 Security Group；仅当使用自定义 Network ACL 时才需额外允许双向返回流量。Lightsail 的 IPv4/IPv6 防火墙需分别配置。" ;;
+    gcp) warn "GCP：VPC 防火墙规则必须命中本机的目标标签或服务账号，并且不能被更高优先级的拒绝规则覆盖。" ;;
+    azure) warn "Azure：NIC 和子网关联的 NSG 都必须允许这些端口；优先级数字越小越先执行。" ;;
+    alibaba) warn "阿里云：分别放行 TCP 与 UDP，不要只选预置 HTTPS 而漏掉 UDP/443；企业安全组还要确认出方向允许。" ;;
+    tencent) warn "腾讯云：分别添加 TCP 与 UDP；多个安全组按优先级执行，自定义安全组还要确认出站允许。" ;;
+    digitalocean) warn "DigitalOcean：Cloud Firewall 必须关联当前 Droplet；没有出站规则时也会阻止全部出站流量。" ;;
+    hetzner) warn "Hetzner：Cloud Firewall 入站为隐式拒绝，并要在 Apply to 中确认目标 Server/Label。" ;;
+    vultr) warn "Vultr：确认 Firewall Group 已关联到当前实例，并分别添加 TCP/UDP 规则。" ;;
+    linode) warn "Linode：Cloud Firewall 默认入站策略通常为 Drop，需添加允许规则，并确认状态为 Enabled、设备已关联。" ;;
+    *) warn "DMIT/通用 KVM：若商家控制台启用了 Firewall/Security Group，也必须在那里放行上述端口。" ;;
+  esac
+  warn "各云控制台的具体点击路径：https://github.com/${REPO}/blob/main/docs/VPS-COMPATIBILITY.md"
+  case "$provider" in
+    aws) warn "EC2 普通公网 IPv4 在 Stop/Start 后通常会变化；域名长期使用前建议绑定 Elastic IP。" ;;
+    gcp) warn "GCP 临时外部 IP 会在停止/挂起后释放；域名长期使用前建议提升为静态外部 IP。" ;;
+    azure) warn "Azure 动态公网 IP 在 Stop/Deallocate 后可能变化；域名长期使用前建议设为 Static。" ;;
+  esac
+}
+country_flag() {
+  local country_code first second first_escape second_escape
+  country_code="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  [[ ${#country_code} -eq 2 && "$country_code" =~ ^[A-Z]{2}$ ]] || return 0
+  printf -v first '%d' "'${country_code:0:1}"
+  printf -v second '%d' "'${country_code:1:1}"
+  printf -v first_escape '\\U%08x' "$((0x1F1E6 + first - 65))"
+  printf -v second_escape '\\U%08x' "$((0x1F1E6 + second - 65))"
+  printf '%b%b' "$first_escape" "$second_escape"
+}
+detect_geo() {
+  GEO_CC=""; GEO_COUNTRY=""; GEO_CITY=""; GEO_ISP=""
+  local response trace
+  response="$(curl -4fsSL --max-time 5 'https://ipwho.is/' 2>/dev/null || true)"
+  if grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<<"$response"; then
+    GEO_CC="$(sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
+    GEO_COUNTRY="$(sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
+    GEO_CITY="$(sed -n 's/.*"city"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
+    GEO_ISP="$(sed -n 's/.*"isp"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
+  fi
+  if [[ ! "$GEO_CC" =~ ^[A-Za-z]{2}$ ]]; then
+    GEO_CC=""; GEO_COUNTRY=""; GEO_CITY=""; GEO_ISP=""
+    trace="$(curl -4fsSL --max-time 5 'https://www.cloudflare.com/cdn-cgi/trace' 2>/dev/null || true)"
+    GEO_CC="$(sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' <<<"$trace" | head -n 1)"
+    GEO_COUNTRY="$GEO_CC"
+  fi
+}
+validate_node_name() {
+  local node_name="$1"
+  [[ -n "${node_name//[[:space:]]/}" ]] || die "节点名称不能为空。"
+  [[ ! "$node_name" =~ [[:cntrl:]] ]] || die "节点名称不能包含控制字符。"
+  (( ${#node_name} <= 74 )) || die "节点名称不能超过 74 个字符。"
+}
+urlencode_fragment() {
+  local hex byte output="" character
+  hex="$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n' | tr '[:lower:]' '[:upper:]')"
+  while [[ -n "$hex" ]]; do
+    byte="${hex:0:2}"; hex="${hex:2}"
+    case "$byte" in
+      2D|2E|5F|7E|3[0-9]|4[1-9A-F]|5[0-9A]|6[1-9A-F]|7[0-9A])
+        printf -v character '%b' "\\x${byte}"
+        output+="$character"
+        ;;
+      *) output+="%${byte}" ;;
+    esac
+  done
+  printf '%s\n' "$output"
+}
 check_dns() {
   local domain="$1" public resolved
   public="$(public_ipv4)"
+  [[ -n "$public" ]] || die "无法获取本机公网 IPv4，请确认服务器具有可用的 IPv4 出口。"
   resolved="$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u || true)"
   [[ -n "$resolved" ]] || die "域名 ${domain} 没有可用的 A 记录。"
-  if [[ -n "$public" ]] && ! grep -Fxq "$public" <<<"$resolved"; then
+  if ! grep -Fxq "$public" <<<"$resolved"; then
     die "域名解析未指向本机（本机公网 IPv4：${public}）。Cloudflare 必须使用 DNS only / 灰云。"
   fi
   info "域名解析检查通过。"
@@ -70,7 +195,9 @@ port_free() {
 }
 validate_panel_port() {
   local port="$1"
-  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || die "面板端口必须是 1 到 65535 的整数。"
+  if ! [[ "$port" =~ ^[0-9]+$ ]] || ! (( port >= 1 && port <= 65535 )); then
+    die "面板端口必须是 1 到 65535 的整数。"
+  fi
   case "$port" in
     80|443|9090) die "TCP/${port} 已由证书、默认入站或本机 Clash API 使用，请换一个面板端口。" ;;
   esac
@@ -81,38 +208,113 @@ check_ports() {
   port_free 443 tcp || die "TCP/443 已被占用。"
   port_free 443 udp || die "UDP/443 已被占用。"
   port_free "$panel_port" tcp || die "TCP/${panel_port} 已被占用。"
+  info "本机端口预检通过：TCP/80、TCP/443、UDP/443、TCP/${panel_port} 均可用。"
+}
+post_install_check() {
+  local domain="$1" panel_port="$2" status
+  port_free 443 tcp && die "安装后检查失败：sing-box 未监听 TCP/443。"
+  port_free 443 udp && die "安装后检查失败：sing-box 未监听 UDP/443。"
+  port_free "$panel_port" tcp && die "安装后检查失败：面板未监听 TCP/${panel_port}。"
+  status="$(curl -sS --max-time 8 --resolve "${domain}:${panel_port}:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${domain}:${panel_port}/api/me" 2>/dev/null || true)"
+  [[ "$status" == 401 ]] || die "安装后检查失败：面板 HTTPS 健康检查未通过（HTTP ${status:-无响应}）。"
+  info "安装后检查通过：TCP/443、UDP/443 和 TCP/${panel_port} 正在监听，面板 HTTPS 响应正常。"
 }
 install_deps() {
   info "安装最少运行依赖…"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y >/dev/null
-  apt-get install -y ca-certificates curl openssl socat tar gzip iproute2 >/dev/null
+  apt-get update -y >/dev/null || die "apt 软件源更新失败，请检查 /etc/apt/sources.list 和服务器网络。"
+  apt-get install -y --no-install-recommends \
+    bash ca-certificates coreutils cron curl gawk grep gzip iproute2 iptables libc-bin openssl procps sed socat tar >/dev/null \
+    || die "运行依赖安装失败，请修复 apt 报错后重新运行安装命令。"
+  check_required_commands
+  command -v crontab >/dev/null || die "cron 已安装，但未找到 crontab，无法配置证书自动续期。"
+  systemctl enable --now cron.service >/dev/null 2>&1 || die "无法启动 cron 服务，证书将不能自动续期。"
+}
+check_required_commands() {
+  local command_name missing=()
+  for command_name in awk chmod cp crontab curl cut date df getent grep gzip head install iptables journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr; do
+    command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
+  done
+  ((${#missing[@]} == 0)) || die "依赖安装后仍缺少命令：${missing[*]}。请检查 apt 软件源后重试。"
+  info "运行依赖检查通过。"
+}
+check_network() {
+  local target
+  for target in \
+    "GitHub API|https://api.github.com/repos/${REPO}/releases/latest" \
+    "GitHub Release|https://github.com/${REPO}/releases/latest" \
+    "acme.sh|https://get.acme.sh" \
+    "Let's Encrypt|https://acme-v02.api.letsencrypt.org/directory" \
+    "公网 IPv4 检测|https://api.ipify.org"; do
+    if ! curl -4fsSL --max-time 15 -o /dev/null "${target#*|}"; then
+      die "无法访问 ${target%%|*}（${target#*|}）。请检查 DNS、防火墙或服务器网络后重试。"
+    fi
+  done
+  info "外部网络检查通过：GitHub、acme.sh、Let's Encrypt 均可访问。"
+}
+check_disk_space() {
+  local available_kb
+  available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+  [[ "$available_kb" =~ ^[0-9]+$ ]] || die "无法读取根分区可用空间。"
+  (( available_kb >= 200 * 1024 )) || die "根分区可用空间不足 200 MiB，请清理磁盘后重试。"
+  info "磁盘空间检查通过。"
 }
 enable_bbr() {
   install -d -m 0755 /etc/sysctl.d
   printf '%s\n' 'net.core.default_qdisc=fq' 'net.ipv4.tcp_congestion_control=bbr' > /etc/sysctl.d/99-sbm-bbr.conf
-  sysctl --system >/dev/null 2>&1 || true
+  if sysctl --system >/dev/null 2>&1; then
+    info "BBR 网络参数已应用。"
+  else
+    warn "当前内核未能应用 BBR 参数；这不影响 SBM 安装，可稍后检查内核支持。"
+  fi
 }
 github_latest_tag() {
   local repository="$1"
-  curl -fsSL "https://api.github.com/repos/${repository}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+  curl -fsSL "https://api.github.com/repos/${repository}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+normalize_tag() {
+  local tag="$1"
+  [[ "$tag" == v* ]] && printf '%s\n' "$tag" || printf 'v%s\n' "$tag"
+}
+github_asset_sha256() {
+  local repository="$1" tag="$2" asset="$3"
+  curl -fsSL "https://api.github.com/repos/${repository}/releases/tags/${tag}" | awk -v target="$asset" '
+    index($0, "\"name\": \"" target "\"") { found=1 }
+    found && result == "" && /"digest": "sha256:/ {
+      value=$0
+      sub(/^.*"digest": "sha256:/, "", value)
+      sub(/".*$/, "", value)
+      result=value
+      found=0
+    }
+    found && /"browser_download_url"/ { found=0 }
+    END { if (result != "") print result }
+  '
 }
 install_sing_box() {
-  local arch tag release_version url temp_dir
-  arch="$(arch_tag)"; tag="$(github_latest_tag SagerNet/sing-box)"; [[ -n "$tag" ]] || die "无法查询 sing-box 最新版本。"
-  release_version="${tag#v}"
-  url="https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${release_version}-linux-${arch}.tar.gz"
+  local arch tag release_version asset url temp_dir expected actual candidate
+  arch="$(arch_tag)"; tag="${SING_BOX_VERSION:-$(github_latest_tag SagerNet/sing-box)}"; [[ -n "$tag" ]] || die "无法查询 sing-box 最新版本。"
+  tag="$(normalize_tag "$tag")"; release_version="${tag#v}"; asset="sing-box-${release_version}-linux-${arch}.tar.gz"
+  url="https://github.com/SagerNet/sing-box/releases/download/${tag}/${asset}"
+  expected="$(github_asset_sha256 SagerNet/sing-box "$tag" "$asset")"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "无法获取 sing-box Release 的 SHA-256 摘要。"
   temp_dir="$(mktemp -d /tmp/sbm-sing-box.XXXXXX)"
-  curl -fsSL "$url" -o "${temp_dir}/sing-box.tar.gz" || { rm -rf "$temp_dir"; die "下载 sing-box 失败。"; }
-  tar -xzf "${temp_dir}/sing-box.tar.gz" -C "$temp_dir"
-  install -m 0755 "${temp_dir}/sing-box-${release_version}-linux-${arch}/sing-box" "$SING_BOX_BIN"
+  curl -fsSL "$url" -o "${temp_dir}/${asset}" || { rm -rf "$temp_dir"; die "下载 sing-box 失败。"; }
+  actual="$(sha256sum "${temp_dir}/${asset}" | awk '{print $1}')"
+  [[ "$expected" == "$actual" ]] || { rm -rf "$temp_dir"; die "sing-box 下载校验失败。"; }
+  tar -xzf "${temp_dir}/${asset}" -C "$temp_dir"
+  candidate="${temp_dir}/sing-box-${release_version}-linux-${arch}/sing-box"
+  [[ -x "$candidate" ]] || { rm -rf "$temp_dir"; die "sing-box Release 内容无效。"; }
+  "$candidate" version >/dev/null || { rm -rf "$temp_dir"; die "sing-box 新版本无法运行。"; }
+  [[ -x "$SING_BOX_BIN" ]] && cp -p "$SING_BOX_BIN" "${SING_BOX_BIN}.bak"
+  install -m 0755 "$candidate" "$SING_BOX_BIN"
   rm -rf "$temp_dir"
-  info "已安装 $($SING_BOX_BIN version | head -n1)。"
+  info "已安装 $($SING_BOX_BIN version | sed -n '1p')。"
 }
 install_panel() {
   local arch tag release_version asset base_url temp_dir expected actual
   arch="$(arch_tag)"; tag="${SBM_PANEL_VERSION:-$(github_latest_tag "$REPO")}"; [[ -n "$tag" ]] || die "无法查询 sbm-panel 最新版本。"
-  release_version="${tag#v}"; asset="sbm-panel_${release_version}_linux_${arch}.tar.gz"
+  tag="$(normalize_tag "$tag")"; release_version="${tag#v}"; asset="sbm-panel_${release_version}_linux_${arch}.tar.gz"
   base_url="https://github.com/${REPO}/releases/download/${tag}"
   temp_dir="$(mktemp -d /tmp/sbm-panel.XXXXXX)"
   curl -fsSL "${base_url}/${asset}" -o "${temp_dir}/${asset}" || { rm -rf "$temp_dir"; die "下载 sbm-panel 失败；请确认仓库已有对应架构的 Release。"; }
@@ -121,9 +323,12 @@ install_panel() {
   actual="$(sha256sum "${temp_dir}/${asset}" | awk '{print $1}')"
   [[ -n "$expected" && "$expected" == "$actual" ]] || { rm -rf "$temp_dir"; die "sbm-panel 下载校验失败。"; }
   tar -xzf "${temp_dir}/${asset}" -C "$temp_dir"
+  [[ -x "${temp_dir}/sbm-panel" && "$("${temp_dir}/sbm-panel" version)" == "$release_version" ]] || { rm -rf "$temp_dir"; die "sbm-panel Release 内容或版本无效。"; }
+  [[ -x "$SBM_BIN" ]] && cp -p "$SBM_BIN" "${SBM_BIN}.bak"
   install -m 0755 "${temp_dir}/sbm-panel" "$SBM_BIN"
   if [[ -f "${temp_dir}/sbm" ]]; then
     bash -n "${temp_dir}/sbm" || { rm -rf "$temp_dir"; die "Release 中的 sbm 管理脚本校验失败。"; }
+    [[ -f "$SBM_CMD" ]] && cp -p "$SBM_CMD" "${SBM_CMD}.bak"
     install -m 0755 "${temp_dir}/sbm" "$SBM_CMD"
   fi
   rm -rf "$temp_dir"
@@ -133,19 +338,44 @@ issue_certificate() {
   local domain="$1"
   if [[ ! -x "$ACME_BIN" ]]; then
     info "安装 acme.sh…"
-    curl -fsSL https://get.acme.sh | sh >/dev/null
+    if ! curl -fsSL https://get.acme.sh | sh >/dev/null; then
+      die "acme.sh 安装失败。请确认 cron 服务和网络正常后重试。"
+    fi
+    [[ -x "$ACME_BIN" ]] || die "acme.sh 安装未生成 ${ACME_BIN}，已停止后续证书操作。"
   fi
-  "$ACME_BIN" --set-default-ca --server letsencrypt >/dev/null
+  "$ACME_BIN" --version >/dev/null 2>&1 || die "acme.sh 客户端不可用，请删除 /root/.acme.sh 后重试。"
+  ensure_acme_cron
+  "$ACME_BIN" --set-default-ca --server letsencrypt >/dev/null || die "无法设置 Let's Encrypt 为默认证书机构。"
   "$ACME_BIN" --register-account >/dev/null 2>&1 || true
   info "通过 Let's Encrypt HTTP-01 申请证书…"
-  "$ACME_BIN" --issue --standalone -d "$domain" --keylength 2048
+  "$ACME_BIN" --issue --standalone -d "$domain" --keylength 2048 \
+    || die "Let's Encrypt 证书申请失败，请检查域名 A 记录、Cloudflare 灰云、云平台外层防火墙与系统防火墙的 TCP/80，以及系统时间。"
   install -d -m 0700 "$CERT_DIR" /usr/local/lib/sbm
   write_cert_reload_hook
   "$ACME_BIN" --install-cert -d "$domain" \
     --key-file "${CERT_DIR}/key.pem" \
     --fullchain-file "${CERT_DIR}/fullchain.pem" \
-    --reloadcmd "$CERT_RELOAD"
+    --reloadcmd "$CERT_RELOAD" \
+    || die "证书签发成功，但安装到 ${CERT_DIR} 失败。"
   chmod 0600 "${CERT_DIR}/key.pem" "${CERT_DIR}/fullchain.pem"
+  [[ -s "${CERT_DIR}/key.pem" && -s "${CERT_DIR}/fullchain.pem" ]] || die "证书安装失败：证书或私钥文件为空。"
+  openssl pkey -in "${CERT_DIR}/key.pem" -noout >/dev/null 2>&1 || die "证书安装失败：私钥文件无效。"
+  openssl x509 -in "${CERT_DIR}/fullchain.pem" -noout -checkend 86400 >/dev/null 2>&1 || die "证书安装失败：证书无效或将在 24 小时内过期。"
+  info "证书与私钥检查通过，自动续期任务已启用。"
+}
+ensure_acme_cron() {
+  local cron_file
+  if crontab -l 2>/dev/null | grep -E 'acme\.sh.*--cron' >/dev/null; then
+    return
+  fi
+  warn "acme.sh 未创建自动续期任务，正在自动补齐。"
+  cron_file="$(mktemp /tmp/sbm-crontab.XXXXXX)"
+  crontab -l > "$cron_file" 2>/dev/null || true
+  [[ ! -s "$cron_file" ]] || printf '\n' >> "$cron_file"
+  printf '17 3 * * * "%s" --cron --home "/root/.acme.sh" > /dev/null\n' "$ACME_BIN" >> "$cron_file"
+  crontab "$cron_file" || { rm -f "$cron_file"; die "无法写入证书自动续期任务。"; }
+  rm -f "$cron_file"
+  crontab -l 2>/dev/null | grep -E 'acme\.sh.*--cron' >/dev/null || die "证书自动续期任务验证失败。"
 }
 write_cert_reload_hook() {
   install -d -m 0755 /usr/local/lib/sbm
@@ -161,20 +391,104 @@ fi
 HOOK
   chmod 0755 "$CERT_RELOAD"
 }
+write_firewall_helper() {
+  install -d -m 0755 /usr/local/lib/sbm
+  cat > "$FIREWALL_HELPER" <<'HELPER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+readonly MODE_FILE="/etc/sbm/firewall-mode"
+readonly PORTS_FILE="/etc/sbm/firewall-ports"
+
+valid_rule() {
+  [[ "${1:-}" == tcp || "${1:-}" == udp ]] && [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 65535 ))
+}
+apply_rule() {
+  local network="$1" port="$2" mode
+  if [[ -r "$MODE_FILE" ]]; then mode="$(<"$MODE_FILE")"; else mode="none"; fi
+  case "$mode" in
+    ufw)
+      ufw allow "${port}/${network}" >/dev/null
+      ;;
+    firewalld)
+      firewall-cmd --quiet --permanent --query-port="${port}/${network}" || firewall-cmd --quiet --permanent --add-port="${port}/${network}"
+      firewall-cmd --quiet --query-port="${port}/${network}" || firewall-cmd --quiet --add-port="${port}/${network}"
+      ;;
+    iptables)
+      iptables -w -C INPUT -p "$network" --dport "$port" -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -p "$network" --dport "$port" -j ACCEPT
+      ;;
+    none) ;;
+    *) printf '未知的 SBM 防火墙模式：%s\n' "$mode" >&2; exit 1 ;;
+  esac
+}
+record_rule() {
+  local rule="$1 $2"
+  install -d -m 0700 /etc/sbm
+  touch "$PORTS_FILE"; chmod 0600 "$PORTS_FILE"
+  grep -Fqx "$rule" "$PORTS_FILE" 2>/dev/null || printf '%s\n' "$rule" >> "$PORTS_FILE"
+}
+
+if [[ "${1:-}" == --restore ]]; then
+  [[ -r "$PORTS_FILE" ]] || exit 0
+  while read -r network port; do
+    [[ -n "${network:-}" ]] || continue
+    valid_rule "$network" "$port" || { printf '忽略无效的防火墙规则：%s %s\n' "$network" "$port" >&2; continue; }
+    apply_rule "$network" "$port"
+  done < "$PORTS_FILE"
+  exit 0
+fi
+
+valid_rule "${1:-}" "${2:-}" || { printf '用法：open-port.sh <tcp|udp> <1-65535>\n' >&2; exit 2; }
+record_rule "$1" "$2"
+apply_rule "$1" "$2"
+HELPER
+  chmod 0755 "$FIREWALL_HELPER"
+}
+write_core_guard() {
+  install -d -m 0755 /usr/local/lib/sbm
+  cat > "$CORE_GUARD" <<'GUARD'
+#!/usr/bin/env bash
+set -euo pipefail
+if grep -Eq '"quotaExceeded"[[:space:]]*:[[:space:]]*true' /var/lib/sbm/state.json 2>/dev/null; then
+  echo "SBM 流量配额已超限，sing-box 保持停止。" >&2
+  exit 1
+fi
+GUARD
+  chmod 0755 "$CORE_GUARD"
+}
 write_services() {
   install -d -m 0700 "$CONFIG_DIR" "$STATE_DIR" "$CORE_DIR"
+  write_firewall_helper
+  write_core_guard
+  cat > "$FIREWALL_SERVICE" <<EOF
+[Unit]
+Description=Restore SBM host firewall rules
+After=local-fs.target ufw.service firewalld.service netfilter-persistent.service
+Before=sing-box.service sbm-panel.service
+
+[Service]
+Type=oneshot
+ExecStart=${FIREWALL_HELPER} --restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
   cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
 Description=sing-box proxy core
-After=network-online.target
-Wants=network-online.target
+After=network-online.target sbm-firewall.service
+Wants=network-online.target sbm-firewall.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+ExecCondition=${CORE_GUARD}
 ExecStartPre=${SING_BOX_BIN} check -c ${CORE_CONFIG}
 ExecStart=${SING_BOX_BIN} run -c ${CORE_CONFIG} -D /var/lib/sing-box
-Restart=on-failure
-RestartSec=3s
+Restart=always
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
 LimitNOFILE=1048576
 UMask=0077
 
@@ -184,14 +498,17 @@ EOF
   cat > /etc/systemd/system/sbm-panel.service <<EOF
 [Unit]
 Description=SBM sing-box management panel
-After=network-online.target sing-box.service
-Wants=network-online.target
+After=network-online.target sbm-firewall.service sing-box.service
+Wants=network-online.target sbm-firewall.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=${SBM_BIN} serve
-Restart=on-failure
-RestartSec=3s
+Restart=always
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -207,19 +524,84 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
 }
-open_firewall() {
-  local panel_port="$1"
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-    info "放行 UFW 默认端口…"
-    ufw allow 80/tcp >/dev/null
-    ufw allow 443/tcp >/dev/null
-    ufw allow 443/udp >/dev/null
-    ufw allow "${panel_port}/tcp" >/dev/null
+detect_host_firewall_mode() {
+  local provider="$1" input_rules
+  if [[ "$provider" == oracle ]]; then
+    printf 'iptables\n'; return
   fi
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    printf 'ufw\n'; return
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld.service; then
+    printf 'firewalld\n'; return
+  fi
+  input_rules="$(iptables -S INPUT 2>/dev/null || true)"
+  if grep -Eq '^-P INPUT (DROP|REJECT)|[[:space:]]-j (DROP|REJECT)([[:space:]]|$)' <<<"$input_rules"; then
+    printf 'iptables\n'; return
+  fi
+  printf 'none\n'
+}
+open_firewall() {
+  local provider="$1" panel_port="$2" mode
+  mode="$(detect_host_firewall_mode "$provider")"
+  printf '%s\n' "$mode" > "$FIREWALL_MODE"; chmod 0600 "$FIREWALL_MODE"
+  touch "$FIREWALL_PORTS"; chmod 0600 "$FIREWALL_PORTS"
+  "$FIREWALL_HELPER" tcp 80
+  "$FIREWALL_HELPER" tcp 443
+  "$FIREWALL_HELPER" udp 443
+  "$FIREWALL_HELPER" tcp "$panel_port"
+  if [[ -r "$CONFIG_FILE" ]]; then
+    while read -r inbound_network inbound_port; do
+      [[ -n "${inbound_network:-}" ]] && "$FIREWALL_HELPER" "$inbound_network" "$inbound_port"
+    done < <(awk -F'"' '
+      $2 == "type" && $4 == "vless-reality" { network="tcp"; next }
+      $2 == "type" && $4 == "hysteria2" { network="udp"; next }
+      network != "" && $2 == "port" {
+        value=$0; sub(/^.*:[[:space:]]*/, "", value); sub(/,.*/, "", value)
+        print network, value; network=""
+      }
+    ' "$CONFIG_FILE")
+  fi
+  case "$mode" in
+    ufw) info "已通过 UFW 放行 SBM 端口，规则会在重启后保留。" ;;
+    firewalld) info "已通过 firewalld 永久放行 SBM 端口。" ;;
+    iptables) info "已增量放行 iptables 规则，并配置开机自动恢复；未清空系统原有规则。" ;;
+    none) info "未检测到启用的宿主机入站防火墙；未额外修改系统防火墙规则。" ;;
+  esac
+}
+repair_runtime() {
+  local provider panel_port
+  install_deps
+  provider="$(detect_cloud_provider)"
+  panel_port="$(json_number panelPort "$CONFIG_FILE")"
+  [[ -n "$panel_port" ]] || { warn "无法从配置读取面板端口。"; return 1; }
+  info "修复运行环境：$(cloud_provider_name "$provider")"
+  show_cloud_firewall_guide "$provider" "$panel_port"
+  write_services
+  open_firewall "$provider" "$panel_port"
+  verify_boot_services
+  systemctl restart sbm-firewall.service || return 1
+  if quota_exceeded; then systemctl stop sing-box.service || true; else systemctl restart sing-box.service || return 1; fi
+  systemctl restart sbm-panel.service || return 1
+  systemctl is-active --quiet sbm-panel.service || return 1
+  quota_exceeded || systemctl is-active --quiet sing-box.service || return 1
+  info "开机启动、宿主机防火墙和运行服务均已修复并通过检查。"
+}
+verify_boot_services() {
+  systemd-analyze verify "$FIREWALL_SERVICE" /etc/systemd/system/sing-box.service /etc/systemd/system/sbm-panel.service >/dev/null 2>&1 \
+    || die "systemd 开机启动配置校验失败。"
+  systemctl enable sbm-firewall.service sing-box.service sbm-panel.service >/dev/null \
+    || die "无法启用 SBM 开机启动服务。"
+  for service_name in sbm-firewall.service sing-box.service sbm-panel.service; do
+    systemctl is-enabled --quiet "$service_name" || die "${service_name} 未成功设为开机启动。"
+  done
+  info "开机恢复检查通过：防火墙、sing-box 和面板均已启用，服务异常退出会持续重试。"
 }
 install_sbm_command() {
   if [[ -f "${BASH_SOURCE[0]}" && "${BASH_SOURCE[0]}" != /dev/fd/* ]]; then
     install -m 0755 "${BASH_SOURCE[0]}" "$SBM_CMD"
+  elif [[ -x "$SBM_CMD" ]]; then
+    return
   else
     curl -fsSL "$SELF_URL" -o "$SBM_CMD"
     chmod 0755 "$SBM_CMD"
@@ -234,47 +616,81 @@ protect_legacy_install() {
   die "检测到旧版 ${LEGACY_ENV}，已备份到 ${backup}。请先用旧脚本卸载或手动迁移。"
 }
 do_install() {
-  need_root; check_os; protect_legacy_install
+  need_root; check_os; check_systemd; arch_tag >/dev/null
   [[ ! -f "$CONFIG_FILE" ]] || { menu; return; }
   printf '%s===== SBM 极简 sing-box 面板安装 =====%s\n' "$CYAN" "$RESET"
-  local domain panel_port admin_password password_file
+  local domain panel_port node_name default_node_name flag location cloud_provider admin_password password_file encoded_node_name
   read -r -p "Domain: " domain
   domain="$(cleanup_domain "$domain")"; validate_domain "$domain"
   read -r -p "面板端口 [2096]: " panel_port
   panel_port="${panel_port:-2096}"; validate_panel_port "$panel_port"
-  install_deps; check_dns "$domain"; check_ports "$panel_port"
-  enable_bbr; install_sing_box; install_panel; issue_certificate "$domain"; write_services
+  install_deps
+  check_ports "$panel_port"
+  cloud_provider="$(detect_cloud_provider)"
+  info "云平台识别：$(cloud_provider_name "$cloud_provider")"
+  show_cloud_firewall_guide "$cloud_provider" "$panel_port"
+  info "检测服务器所在地区，用于生成小火箭可识别的国旗节点名称…"
+  detect_geo
+  default_node_name="MyNode"
+  if [[ -n "$GEO_CC" ]]; then
+    flag="$(country_flag "$GEO_CC")"
+    location="${GEO_COUNTRY:-$GEO_CC}"
+    [[ -n "$GEO_CITY" && "$GEO_CITY" != "$GEO_COUNTRY" ]] && location="${location}-${GEO_CITY}"
+    location="${location//[[:space:]]/}"
+    default_node_name="${flag}${location}"
+    info "检测到：${flag} ${GEO_COUNTRY:-$GEO_CC} ${GEO_CITY}${GEO_ISP:+ · $GEO_ISP}"
+  else
+    warn "地区检测失败，将使用 MyNode；安装仍可继续，之后可在面板中修改节点名称。"
+  fi
+  read -r -p "节点名称 [${default_node_name}]: " node_name
+  node_name="${node_name:-$default_node_name}"; node_name="${node_name//$'\r'/}"; validate_node_name "$node_name"
+  protect_legacy_install; check_disk_space; check_network; check_dns "$domain"
+  enable_bbr; install_sing_box; install_panel; write_services; open_firewall "$cloud_provider" "$panel_port"; issue_certificate "$domain"
   admin_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-24)"
   password_file="$(mktemp /tmp/sbm-password.XXXXXX)"; chmod 0600 "$password_file"; printf '%s' "$admin_password" > "$password_file"
-  if ! "$SBM_BIN" init --domain "$domain" --panel-port "$panel_port" --admin-password-file "$password_file"; then rm -f "$password_file"; die "初始化面板配置失败。"; fi
+  if ! "$SBM_BIN" init --domain "$domain" --panel-port "$panel_port" --node-name "$node_name" --admin-password-file "$password_file"; then rm -f "$password_file"; die "初始化面板配置失败。"; fi
   rm -f "$password_file"
   "$SBM_BIN" config apply --no-start
-  open_firewall "$panel_port"; install_sbm_command
-  systemctl enable --now sing-box.service >/dev/null
-  systemctl enable --now sbm-panel.service >/dev/null
+  install_sbm_command
+  verify_boot_services
+  systemctl start sbm-firewall.service >/dev/null || die "宿主机防火墙恢复服务启动失败。"
+  systemctl start sing-box.service >/dev/null || die "sing-box 启动失败，请执行 journalctl -u sing-box -e。"
+  systemctl start sbm-panel.service >/dev/null || die "面板启动失败，请执行 journalctl -u sbm-panel -e。"
   systemctl is-active --quiet sing-box.service || die "sing-box 启动失败，请执行 journalctl -u sing-box -e。"
   systemctl is-active --quiet sbm-panel.service || die "面板启动失败，请执行 journalctl -u sbm-panel -e。"
+  post_install_check "$domain" "$panel_port"
   local token; token="$(json_string subscriptionToken "$CONFIG_FILE")"
+  encoded_node_name="$(urlencode_fragment "$node_name")"
   printf '\n%s安装完成%s\n' "$GREEN" "$RESET"
   printf '面板地址：%shttps://%s:%s/%s\n' "$CYAN" "$domain" "$panel_port" "$RESET"
   printf '用户名：  admin\n密码：    %s%s%s\n' "$YELLOW" "$admin_password" "$RESET"
-  printf '总订阅：  %shttps://%s:%s/sub/%s%s\n' "$CYAN" "$domain" "$panel_port" "$token" "$RESET"
-  warn "密码只显示这一次；请立即保存。云厂商安全组仍需手动放行 TCP/80、TCP/443、UDP/443、TCP/${panel_port}。"
+  printf '总订阅：  %shttps://%s:%s/sub/%s#%s%s\n' "$CYAN" "$domain" "$panel_port" "$token" "$encoded_node_name" "$RESET"
+  warn "密码只显示这一次；请立即保存。本机检查无法判断云厂商安全组，请手动确认已放行 TCP/80、TCP/443、UDP/443、TCP/${panel_port}。"
   printf '以后可运行 sudo sbm：选择 1 重新查看地址，选择 4 重置管理员密码。\n'
 }
 json_string() {
   local key="$1" file="$2"
-  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -n1
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file"
 }
 json_number() {
   local key="$1" file="$2"
-  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$file" | head -n1
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$file"
+}
+subscription_name_from_config() {
+  local name
+  name="$(awk -F'"' '/"inbounds"[[:space:]]*:/ { inbounds=1; next } inbounds && $2 == "name" { print $4; exit }' "$CONFIG_FILE")"
+  case "$name" in
+    *-VLESS) name="${name%-VLESS}" ;;
+    *-HY2) name="${name%-HY2}" ;;
+  esac
+  printf '%s\n' "${name:-SBM}"
 }
 quota_exceeded() { grep -Eq '"quotaExceeded"[[:space:]]*:[[:space:]]*true' "$STATE_FILE" 2>/dev/null; }
 show_status() {
-  local domain panel_port token
-  domain="$(json_string domain "$CONFIG_FILE")"; panel_port="$(json_number panelPort "$CONFIG_FILE")"; token="$(json_string subscriptionToken "$CONFIG_FILE")"
-  printf '面板：  https://%s:%s/\n用户名：admin\n订阅：  https://%s:%s/sub/%s\n\n' "$domain" "$panel_port" "$domain" "$panel_port" "$token"
+  local domain panel_port token subscription_name encoded_subscription_name
+  domain="$(json_string domain "$CONFIG_FILE")"; panel_port="$(json_number panelPort "$CONFIG_FILE")"; token="$(json_string subscriptionToken "$CONFIG_FILE")"; subscription_name="$(subscription_name_from_config)"
+  encoded_subscription_name="$(urlencode_fragment "$subscription_name")"
+  printf '面板：  https://%s:%s/\n用户名：admin\n订阅：  https://%s:%s/sub/%s#%s\n\n' "$domain" "$panel_port" "$domain" "$panel_port" "$token" "$encoded_subscription_name"
   systemctl --no-pager --full status sbm-panel.service sing-box.service | sed -n '1,24p' || true
 }
 restart_core() { quota_exceeded && { warn "流量已超限，禁止直接重启 sing-box。请在面板中重置流量或提高限额。"; return; }; systemctl restart sing-box.service; info "sing-box 已重启。"; }
@@ -290,12 +706,56 @@ reset_admin_password() {
   warn "面板重启失败，请保存上述密码并执行 journalctl -u sbm-panel -e。"
   return 1
 }
-update_panel() { install_panel; systemctl restart sbm-panel.service; info "面板已更新。"; }
-update_core() { install_sing_box; "$SBM_BIN" config apply --no-start; quota_exceeded || systemctl restart sing-box.service; info "sing-box 已更新。"; }
+service_healthy_after_restart() {
+  local service="$1"
+  systemctl restart "$service" || return 1
+  sleep 1
+  systemctl is-active --quiet "$service"
+}
+restore_binary() {
+  local target="$1"
+  [[ -f "${target}.bak" ]] || return 1
+  install -m 0755 "${target}.bak" "$target"
+}
+update_panel() {
+  install_panel
+  if repair_runtime; then
+    info "面板已更新并通过运行检查。"
+    return
+  fi
+  warn "新面板启动失败，正在恢复上一版本。"
+  restore_binary "$SBM_BIN" || { warn "没有可恢复的面板版本。"; return 1; }
+  restore_binary "$SBM_CMD" || true
+  service_healthy_after_restart sbm-panel.service || { warn "恢复后面板仍未正常运行，请查看 journalctl -u sbm-panel -e。"; return 1; }
+  warn "已恢复上一版面板。"
+  return 1
+}
+update_core() {
+  install_sing_box
+  if ! "$SBM_BIN" config apply --no-start; then
+    warn "新 sing-box 无法验证当前配置，正在恢复上一版本。"
+    restore_binary "$SING_BOX_BIN" || { warn "没有可恢复的 sing-box 版本。"; return 1; }
+    return 1
+  fi
+  if quota_exceeded; then
+    info "sing-box 已更新；当前流量超限，核心保持停止。"
+    return
+  fi
+  if service_healthy_after_restart sing-box.service; then
+    info "sing-box 已更新并通过运行检查。"
+    return
+  fi
+  warn "新 sing-box 启动失败，正在恢复上一版本。"
+  restore_binary "$SING_BOX_BIN" || { warn "没有可恢复的 sing-box 版本。"; return 1; }
+  "$SBM_BIN" config apply --no-start || true
+  service_healthy_after_restart sing-box.service || { warn "恢复后 sing-box 仍未正常运行，请查看 journalctl -u sing-box -e。"; return 1; }
+  warn "已恢复上一版 sing-box。"
+  return 1
+}
 backup_config() {
   local target
   target="/root/sbm-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-  tar -czf "$target" -C / etc/sbm var/lib/sbm etc/sing-box/config.json etc/systemd/system/sbm-panel.service etc/systemd/system/sing-box.service
+  tar -czf "$target" -C / etc/sbm var/lib/sbm etc/sing-box/config.json etc/systemd/system/sbm-firewall.service etc/systemd/system/sbm-panel.service etc/systemd/system/sing-box.service usr/local/lib/sbm
   chmod 0600 "$target"; info "备份已保存：${target}"
 }
 restore_config() {
@@ -304,22 +764,25 @@ restore_config() {
   [[ "$archive" == /* && -f "$archive" ]] || { warn "备份文件不存在。"; return; }
   while IFS= read -r entry; do
     [[ "$entry" != /* && "$entry" != *".."* ]] || { warn "备份包含不安全路径，拒绝恢复。"; return; }
-    case "$entry" in etc/sbm/*|var/lib/sbm/*|etc/sing-box/config.json|etc/systemd/system/sbm-panel.service|etc/systemd/system/sing-box.service) ;; *) warn "备份包含未知路径：${entry}"; return ;; esac
+    case "$entry" in etc/sbm/*|var/lib/sbm/*|etc/sing-box/config.json|etc/systemd/system/sbm-firewall.service|etc/systemd/system/sbm-panel.service|etc/systemd/system/sing-box.service|usr/local/lib/sbm/*) ;; *) warn "备份包含未知路径：${entry}"; return ;; esac
   done < <(tar -tzf "$archive")
-  read -r -p "恢复会覆盖当前配置，继续？[y/N]: " answer; [[ "${answer,,}" == y ]] || return
+  read -r -p "恢复会覆盖当前配置，继续？[y/N]: " answer
+  case "$answer" in y|Y) ;; *) return ;; esac
   systemctl stop sbm-panel.service sing-box.service || true
   tar -xzf "$archive" -C /
   chmod 0600 "$CONFIG_FILE" "$STATE_FILE" "$CORE_CONFIG"
-  systemctl daemon-reload; systemctl start sbm-panel.service; quota_exceeded || systemctl start sing-box.service
+  systemctl daemon-reload; systemctl enable sbm-firewall.service sbm-panel.service sing-box.service >/dev/null 2>&1 || true; systemctl start sbm-firewall.service sbm-panel.service; quota_exceeded || systemctl start sing-box.service
   info "备份已恢复。"
 }
 uninstall() {
   local answer domain
-  read -r -p "这会删除 SBM、sing-box、配置、状态和证书。继续？[y/N]: " answer; [[ "${answer,,}" == y ]] || return
+  read -r -p "这会删除 SBM、sing-box、配置、状态和证书。继续？[y/N]: " answer
+  case "$answer" in y|Y) ;; *) return ;; esac
   domain="$(json_string domain "$CONFIG_FILE")"
-  systemctl disable --now sbm-panel.service sing-box.service >/dev/null 2>&1 || true
+  systemctl disable --now sbm-panel.service sing-box.service sbm-firewall.service >/dev/null 2>&1 || true
   [[ -x "$ACME_BIN" && -n "$domain" ]] && "$ACME_BIN" --remove -d "$domain" >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/sbm-panel.service /etc/systemd/system/sing-box.service "$SBM_BIN" "$SING_BOX_BIN" "$SBM_CMD" "$CERT_RELOAD"
+  rm -f "$FIREWALL_SERVICE" /etc/systemd/system/sbm-panel.service /etc/systemd/system/sing-box.service "$SBM_BIN" "$SING_BOX_BIN" "$SBM_CMD" "$CERT_RELOAD" "$FIREWALL_HELPER" "$CORE_GUARD"
+  rmdir /usr/local/lib/sbm 2>/dev/null || true
   rm -rf /etc/sbm /var/lib/sbm /etc/sing-box /var/lib/sing-box
   systemctl daemon-reload
   info "已删除面板、sing-box、配置、状态与证书；/root 下的手动备份和 acme.sh 本体仍保留。"
@@ -328,7 +791,7 @@ menu() {
   need_root
   while true; do
     printf '\n%s========= SBM 管理 =========%s\n' "$CYAN" "$RESET"
-    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 更新 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '0. 退出'
+    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 更新 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '0. 退出'
     read -r -p "选择: " choice
     case "$choice" in
       1) show_status ;;
@@ -341,10 +804,13 @@ menu() {
       8) backup_config ;;
       9) restore_config ;;
       10) uninstall; return ;;
+      11) repair_runtime ;;
       0) return ;;
       *) warn "无效选择。" ;;
     esac
   done
 }
-main() { if [[ -f "$CONFIG_FILE" ]]; then menu; else do_install; fi; }
-main "$@"
+main() { do_install; }
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

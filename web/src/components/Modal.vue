@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
+import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import Icon from './Icon.vue'
 import { t } from '../i18n'
 
-defineProps<{ title: string; wide?: boolean }>()
+defineProps<{ title: string; description?: string; wide?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 </script>
 
@@ -16,7 +16,7 @@ const emit = defineEmits<{ close: [] }>()
         :class="wide ? 'sm:max-w-[760px]' : 'sm:max-w-[520px]'"
       >
         <header class="flex items-center justify-between border-b border-[var(--line)] px-6 py-5">
-          <div><span class="eyebrow">CONFIGURATION</span><DialogTitle class="mt-1 font-[var(--display)] text-3xl font-extrabold">{{ title }}</DialogTitle></div>
+          <div><span class="eyebrow">CONFIGURATION</span><DialogTitle class="mt-1 font-[var(--display)] text-3xl font-extrabold">{{ title }}</DialogTitle><DialogDescription class="sr-only">{{ description || title }}</DialogDescription></div>
           <DialogClose class="icon-button" :aria-label="t('close')"><Icon name="x"/></DialogClose>
         </header>
         <slot />

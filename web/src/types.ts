@@ -1,6 +1,7 @@
 export interface Dashboard {
   active: boolean
-  version: string
+  coreVersion: string
+  panelVersion: string
   upload: number
   download: number
   used: number
@@ -11,6 +12,14 @@ export interface Dashboard {
   nextResetAt?: string
   quotaExceeded: boolean
   subscriptionURL: string
+}
+
+export interface UpdateStatus {
+  currentVersion: string
+  latestVersion: string
+  updateAvailable: boolean
+  releaseURL: string
+  checkedAt: string
 }
 
 export interface VLESSOptions { uuid: string; sni: string; privateKey: string; publicKey: string; shortId: string }
