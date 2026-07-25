@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, post, put } from '../api'
+import { api, guard, post, put } from '../api'
 import type { Settings } from '../types'
 import Icon from '../components/Icon.vue'
 import SelectControl from '../components/SelectControl.vue'
@@ -15,11 +15,12 @@ const password = ref({ currentPassword: '', newPassword: '', confirm: '' })
 const timezones = ['Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'UTC', 'Local']
 const resetOptions = computed(() => [{ value: 'none', label: t('settings.noReset') }, { value: 'monthly', label: t('settings.monthly') }])
 const timezoneOptions = timezones.map(value => ({ value, label: value }))
-async function load() { settings.value = await api<Settings>('/api/settings'); quotaGB.value = Math.round(settings.value.totalBytes / 1024 ** 3 * 100) / 100 }
-async function save() { if (!settings.value) return; settings.value.totalBytes = Math.round(quotaGB.value * 1024 ** 3); await put('/api/settings', { totalBytes: settings.value.totalBytes, reset: settings.value.reset }); emit('toast', t('settings.saved')) }
-async function token() { const result = await post<{ subscriptionURL: string }>('/api/settings/token'); if (settings.value) settings.value.subscriptionURL = result.subscriptionURL; emit('toast', t('settings.tokenDone')) }
-async function changePassword() { if (password.value.newPassword !== password.value.confirm) { emit('toast', t('settings.passwordMismatch')); return }; await post('/api/settings/password', { currentPassword: password.value.currentPassword, newPassword: password.value.newPassword }); emit('toast', t('settings.passwordDone')); emit('loggedOut') }
-async function copy(value: string) { await navigator.clipboard.writeText(value); emit('toast', t('copied')) }
+const safe = guard(message => emit('toast', message))
+const load = safe(async () => { settings.value = await api<Settings>('/api/settings'); quotaGB.value = Math.round(settings.value.totalBytes / 1024 ** 3 * 100) / 100 })
+const save = safe(async () => { if (!settings.value) return; settings.value.totalBytes = Math.round(quotaGB.value * 1024 ** 3); await put('/api/settings', { totalBytes: settings.value.totalBytes, reset: settings.value.reset }); emit('toast', t('settings.saved')) })
+const token = safe(async () => { const result = await post<{ subscriptionURL: string }>('/api/settings/token'); if (settings.value) settings.value.subscriptionURL = result.subscriptionURL; emit('toast', t('settings.tokenDone')) })
+const changePassword = safe(async () => { if (password.value.newPassword !== password.value.confirm) { emit('toast', t('settings.passwordMismatch')); return }; await post('/api/settings/password', { currentPassword: password.value.currentPassword, newPassword: password.value.newPassword }); emit('toast', t('settings.passwordDone')); emit('loggedOut') })
+const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('copied')) })
 onMounted(load)
 </script>
 

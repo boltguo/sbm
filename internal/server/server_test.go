@@ -2,14 +2,17 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -124,6 +127,33 @@ func TestUpdateCheckFindsNewReleaseAndCachesResult(t *testing.T) {
 	}
 }
 
+// GitHub allows 60 unauthenticated calls per hour, so a failure must not be
+// retried on every click.
+func TestUpdateCheckBacksOffAfterFailure(t *testing.T) {
+	s, _ := testServer(t)
+	releases := &fakeReleases{err: errors.New("rate limited")}
+	s.Releases = releases
+	for range 5 {
+		response := httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/update", nil))
+		if response.Code != http.StatusBadGateway {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if releases.calls != 1 {
+		t.Fatalf("release API called %d times during backoff, want 1", releases.calls)
+	}
+
+	// Once the backoff expires the next click reaches GitHub again.
+	s.releaseRetryAt = time.Now().Add(-time.Second)
+	releases.err, releases.info = nil, releasecheck.Info{TagName: "v9.9.9", URL: "https://github.com/boltguo/sbm/releases/tag/v9.9.9"}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/update", nil))
+	if response.Code != http.StatusOK || releases.calls != 2 {
+		t.Fatalf("status=%d calls=%d", response.Code, releases.calls)
+	}
+}
+
 func TestFailedLoginIsAuditedWithoutCredentials(t *testing.T) {
 	s, _ := testServer(t)
 	var audit bytes.Buffer
@@ -195,6 +225,95 @@ func TestSubscriptionURLAndTitleUseNodeBaseName(t *testing.T) {
 	title, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(response.Header().Get("Profile-Title"), "base64:"))
 	if err != nil || string(title) != "Japan-Tokyo" {
 		t.Fatalf("unexpected profile title %q: %v", title, err)
+	}
+}
+
+func TestFirewallReclaimsOnlyUnusedPorts(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.PanelPort = 2096
+	vless := model.Inbound{ID: "vless", Type: protocol.TypeVLESSReality, Name: "node", Enabled: true, Port: 8443}
+	hy2 := cfg.Inbounds[0] // udp/443
+
+	cases := []struct {
+		name       string
+		old, next  []model.Inbound
+		wantOpen   []endpoint
+		wantClosed []endpoint
+	}{
+		{
+			name:     "new inbound opens its port",
+			old:      []model.Inbound{hy2},
+			next:     []model.Inbound{hy2, vless},
+			wantOpen: []endpoint{{"tcp", 8443}},
+		},
+		{
+			name:       "port change releases the old port",
+			old:        []model.Inbound{withPort(vless, 8443)},
+			next:       []model.Inbound{withPort(vless, 9443)},
+			wantOpen:   []endpoint{{"tcp", 9443}},
+			wantClosed: []endpoint{{"tcp", 8443}},
+		},
+		{
+			name:       "deleting an inbound releases its port",
+			old:        []model.Inbound{hy2, vless},
+			next:       []model.Inbound{hy2},
+			wantClosed: []endpoint{{"tcp", 8443}},
+		},
+		{
+			name:       "disabling an inbound releases its port",
+			old:        []model.Inbound{withEnabled(vless, true)},
+			next:       []model.Inbound{withEnabled(vless, false)},
+			wantClosed: []endpoint{{"tcp", 8443}},
+		},
+		{
+			name: "a port another inbound still uses is kept",
+			old:  []model.Inbound{withPort(vless, 8443), withID(withPort(vless, 8443), "twin")},
+			next: []model.Inbound{withID(withPort(vless, 8443), "twin")},
+		},
+		{
+			name: "the panel port is never released",
+			old:  []model.Inbound{withPort(vless, 2096)},
+			next: []model.Inbound{},
+		},
+		{
+			name: "TCP/80 is never released",
+			old:  []model.Inbound{withPort(vless, 80)},
+			next: []model.Inbound{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old, next := cfg, cfg
+			old.Inbounds, next.Inbounds = tc.old, tc.next
+			before, after := s.firewallEndpoints(old), s.firewallEndpoints(next)
+
+			var opened, closed []endpoint
+			for item := range after {
+				if !before[item] {
+					opened = append(opened, item)
+				}
+			}
+			for item := range before {
+				if !after[item] && !isProtectedEndpoint(item, next) {
+					closed = append(closed, item)
+				}
+			}
+			assertEndpoints(t, "opened", opened, tc.wantOpen)
+			assertEndpoints(t, "closed", closed, tc.wantClosed)
+		})
+	}
+}
+
+func withPort(in model.Inbound, port int) model.Inbound   { in.Port = port; return in }
+func withID(in model.Inbound, id string) model.Inbound    { in.ID = id; return in }
+func withEnabled(in model.Inbound, on bool) model.Inbound { in.Enabled = on; return in }
+
+func assertEndpoints(t *testing.T, label string, got, want []endpoint) {
+	t.Helper()
+	slices.SortFunc(got, func(a, b endpoint) int { return cmp.Or(cmp.Compare(a.network, b.network), cmp.Compare(a.port, b.port)) })
+	if len(got) != len(want) || !slices.Equal(got, want) {
+		t.Fatalf("%s=%v want=%v", label, got, want)
 	}
 }
 

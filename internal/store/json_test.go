@@ -38,3 +38,36 @@ func TestAtomicWritePermissionsAndBackupRecovery(t *testing.T) {
 		t.Fatalf("backup value = %q, want first", recovered.Value)
 	}
 }
+
+// The backup exists for the case where the primary is unreadable, so a save
+// while the primary is corrupt must leave the last good copy intact.
+func TestCorruptPrimaryIsNeverPromotedToBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	file := NewJSONFile[testDocument](path)
+	if err := file.Save(testDocument{Version: 1, Value: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Save(testDocument{Version: 1, Value: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Save(testDocument{Version: 1, Value: "third"}); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := readJSON[testDocument](path + ".bak")
+	if err != nil {
+		t.Fatalf("backup no longer parses: %v", err)
+	}
+	if backup.Value != "first" {
+		t.Fatalf("backup value = %q, want the last good copy first", backup.Value)
+	}
+	loaded, err := file.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Value != "third" {
+		t.Fatalf("primary value = %q, want third", loaded.Value)
+	}
+}

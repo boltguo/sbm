@@ -26,12 +26,18 @@ type ConfigSource interface{ Get() model.Config }
 type Tracker struct {
 	mu        sync.RWMutex
 	controlMu sync.Mutex
+	sampleMu  sync.Mutex
 	state     model.State
 	file      *store.JSONFile[model.State]
 	config    ConfigSource
 	core      CoreControl
 	now       func() time.Time
 }
+
+// ErrSampleUnavailable reports that the core counters could not be read. It is
+// distinct from an apply failure so callers can tell "retry later" apart from
+// "the state could not be saved".
+var ErrSampleUnavailable = errors.New("读取核心流量失败")
 
 func Open(path string, config ConfigSource, core CoreControl, now func() time.Time) (*Tracker, error) {
 	if now == nil {
@@ -92,6 +98,25 @@ func NewForTest(state model.State, config ConfigSource, core CoreControl, now fu
 
 func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); return t.state }
 
+// Sample reads the core counters and applies them as one atomic step.
+//
+// Every caller must go through here. ApplySample infers a core restart from a
+// counter that moved backwards, so two concurrent readings applied out of order
+// would look like a restart and add the whole counter a second time. Serialising
+// read and apply keeps at most one reading in flight, which makes that
+// reordering impossible.
+func (t *Tracker) Sample(ctx context.Context, client ClashClient) (bool, error) {
+	t.sampleMu.Lock()
+	defer t.sampleMu.Unlock()
+	upload, download, err := client.Sample(ctx)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrSampleUnavailable, err)
+	}
+	return t.ApplySample(ctx, upload, download)
+}
+
+// ApplySample folds one core counter reading into the period totals. Callers
+// outside tests should use Sample so readings stay serialised.
 func (t *Tracker) ApplySample(ctx context.Context, currentUpload, currentDownload int64) (bool, error) {
 	if currentUpload < 0 || currentDownload < 0 {
 		return false, errors.New("核心流量计数不能为负数")
@@ -185,14 +210,18 @@ func (t *Tracker) reconcileCore(ctx context.Context) error {
 	defer t.controlMu.Unlock()
 	shouldExceed := t.State().QuotaExceeded
 	active, err := t.core.Active(ctx)
-	if err != nil {
+	if err != nil && !shouldExceed {
+		// Nothing to enforce, so leaving the core untouched until the state can
+		// be read again is safe.
 		return fmt.Errorf("检查 sing-box 运行状态: %w", err)
 	}
-	shouldBeActive := !shouldExceed
-	if active == shouldBeActive {
+	if err == nil && active == !shouldExceed {
 		return nil
 	}
 	if shouldExceed {
+		// An unreadable state must never be taken as "already stopped": that
+		// would skip enforcement while the core keeps serving traffic. Stopping
+		// is idempotent, so it is issued again and the error surfaces if it fails.
 		if err := t.core.Stop(ctx); err != nil {
 			return fmt.Errorf("应用流量限额: %w", err)
 		}
@@ -305,12 +334,13 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 			}
 			return
 		case <-poll.C:
-			upload, download, err := client.Sample(ctx)
+			_, err := t.Sample(ctx, client)
 			if err == nil {
 				sampleFailed = false
-				if _, err := t.ApplySample(ctx, upload, download); err != nil {
-					log.Printf("traffic: apply sample failed: %v", err)
-				}
+				continue
+			}
+			if !errors.Is(err, ErrSampleUnavailable) {
+				log.Printf("traffic: apply sample failed: %v", err)
 				continue
 			}
 			if t.State().QuotaExceeded {
@@ -325,11 +355,14 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 				log.Printf("traffic: reconcile core state failed: %v", err)
 			}
 		case <-schedule.C:
-			if err := t.ReconcileQuota(ctx); err != nil {
-				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
-			}
+			// Reset first for the same reason as at startup: on the tick that
+			// crosses the period boundary, enforcing the old quota would stop the
+			// core moments before the reset restarts it.
 			if err := t.CheckScheduledReset(ctx); err != nil {
 				log.Printf("traffic: scheduled reset failed: %v", err)
+			}
+			if err := t.ReconcileQuota(ctx); err != nil {
+				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
 			}
 		case <-persist.C:
 			if err := t.Persist(); err != nil {

@@ -20,7 +20,9 @@ const uptime = (seconds: number) => {
   return days ? t('server.days', { days, hours }) : t('server.hours', { hours, minutes })
 }
 const time = (value: string) => new Intl.DateTimeFormat(dateLocale(), { timeStyle: 'medium' }).format(new Date(value))
-async function load() { data.value = await api<ServerStatus>('/api/server') }
+// Read-only polling: a 401 already returns to the login screen, and any other
+// failure simply leaves the last snapshot on screen until the next tick.
+const load = () => { api<ServerStatus>('/api/server').then(next => { data.value = next }).catch(() => {}) }
 onMounted(() => { load(); timer = window.setInterval(load, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>

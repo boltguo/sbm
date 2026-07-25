@@ -9,7 +9,7 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 - VLESS + Vision + REALITY：TCP/443
 - Hysteria2：UDP/443
 
-两者可以共用 443，因为一个走 TCP，另一个走 UDP。面板还会生成一个总订阅地址，包含所有已启用的入站。
+面板会生成一个总订阅地址，包含所有已启用的入站。
 
 ## 安装
 
@@ -28,26 +28,25 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 TCP/2096 只是默认值。安装时如果换了端口，安全组也要放行你实际填写的端口。
 
-使用 root 运行：
-
 ```bash
-sudo -i
-bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)"
 ```
+
+已经在 root shell 里就去掉开头的 `sudo`。
 
 安装脚本会询问：
 
 ```text
 Domain: node.example.com
 面板端口 [2096]:
-节点名称 [Japan-Tokyo]:
+节点名称 [JP-Tokyo]:
 ```
 
-端口直接回车就是 2096。节点名称会根据服务器公网 IP 生成，例如 `Japan-Tokyo`，不喜欢可以直接改。SBM 会生成 `Japan-Tokyo-VLESS` 和 `Japan-Tokyo-HY2`。安装结束后，终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
+端口直接回车就是 2096。节点名称按服务器公网 IP 生成，国家用两位大写代码，据此生成 `JP-Tokyo-VLESS` 和 `JP-Tokyo-HY2`。安装结束后终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
 
-脚本先补齐缺少的软件包，再检查架构、磁盘、systemd、DNS、证书服务和端口。TCP/80、TCP/443、UDP/443 或面板端口已经被占用时，安装会停下来并说明原因。服务启动后，脚本还会检查监听端口，并从本机请求一次面板 HTTPS。
+TCP/80、TCP/443、UDP/443 或面板端口被占用时安装会中止。服务起来后脚本会检查监听端口，并从本机请求一次面板 HTTPS。
 
-云安全组在 VPS 外面，安装脚本看不到，也不能代替你修改。VPS 内部的 UFW、firewalld 和严格的 iptables 规则会自动处理，已有的 iptables 规则不会被清空。OCI、AWS、GCP、Azure、阿里云和腾讯云等平台的控制台入口写在 [VPS 防火墙指南](docs/VPS-COMPATIBILITY.md) 里。
+VPS 内部的 UFW、firewalld 和 iptables 会自动处理，已有 iptables 规则不会被清空。云安全组在 VPS 外面，脚本改不了，各平台控制台入口见 [VPS 防火墙指南](docs/VPS-COMPATIBILITY.md)。
 
 打开面板：
 
@@ -108,7 +107,7 @@ sudo sbm
 journalctl -u sbm-panel -g 'audit event=login'
 ```
 
-面板能直接管理宿主机服务，所以端口不要放得太宽。总订阅也使用这个端口；如果按来源 IP 限制，记得把需要更新订阅的手机和电脑也算进去。
+面板能直接管理宿主机服务，端口不要放得太宽。总订阅共用这个端口，按来源 IP 限制时要把需要更新订阅的设备算进去。
 
 ## 添加其他入站
 

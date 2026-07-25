@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import { ToastProvider, ToastRoot, ToastTitle, ToastViewport } from 'reka-ui'
-import { api, post, setCSRF } from './api'
+import { api, post, setCSRF, setUnauthorizedHandler } from './api'
 import Icon from './components/Icon.vue'
 import LoginView from './views/LoginView.vue'
 import DashboardView from './views/DashboardView.vue'
@@ -16,17 +16,21 @@ const username = ref('')
 const page = ref<Page>('dashboard')
 const toast = ref('')
 const toastOpen = ref(false)
+const sessionExpired = ref(false)
 
 async function showToast(message: string) { toastOpen.value = false; toast.value = message; await nextTick(); toastOpen.value = true }
 async function check() { try { const me = await api<{ username: string; csrfToken: string }>('/api/me'); username.value = me.username; setCSRF(me.csrfToken) } catch { username.value = '' } finally { ready.value = true } }
-async function logout() { try { await post('/api/logout') } catch {} username.value = ''; page.value = 'dashboard' }
+async function logout() { try { await post('/api/logout') } catch {} sessionExpired.value = false; username.value = ''; page.value = 'dashboard' }
 async function navigate(target: Page) { page.value = target; await nextTick(); window.scrollTo({ top: 0, behavior: 'auto' }) }
+function signedIn(name: string) { sessionExpired.value = false; username.value = name }
+// Any 401 — including one from a background poll — ends the session here.
+setUnauthorizedHandler(() => { if (username.value) sessionExpired.value = true; setCSRF(''); username.value = ''; page.value = 'dashboard' })
 onMounted(check)
 </script>
 
 <template>
   <div v-if="!ready" class="loading-screen"><div class="brand-mark"><span>SB</span><b>M</b></div></div>
-  <LoginView v-else-if="!username" @logged-in="name => username = name" />
+  <LoginView v-else-if="!username" :expired="sessionExpired" @logged-in="signedIn" />
   <div v-else class="shell">
     <ToastProvider :duration="2800" swipe-direction="right">
     <header class="app-header">

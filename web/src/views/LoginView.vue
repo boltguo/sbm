@@ -1,22 +1,24 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { post, setCSRF } from '../api'
+import { computed, ref } from 'vue'
+import { errorMessage, post, setCSRF } from '../api'
 import { t, toggleLocale } from '../i18n'
 import Icon from '../components/Icon.vue'
 import PasswordInput from '../components/PasswordInput.vue'
 
+const props = defineProps<{ expired?: boolean }>()
 const emit = defineEmits<{ loggedIn: [username: string] }>()
 const username = ref('admin')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const notice = computed(() => error.value || (props.expired ? t('login.expired') : ''))
 
 async function login() {
   loading.value = true; error.value = ''
   try {
     const result = await post<{ username: string; csrfToken: string }>('/api/login', { username: username.value, password: password.value })
     setCSRF(result.csrfToken); emit('loggedIn', result.username)
-  } catch (e) { error.value = (e as Error).message }
+  } catch (e) { error.value = errorMessage(e) }
   finally { loading.value = false }
 }
 </script>
@@ -34,7 +36,7 @@ async function login() {
       <p>{{ t('login.help') }}</p>
       <label>{{ t('login.username') }}<input v-model="username" autocomplete="username" required></label>
       <label>{{ t('login.password') }}<PasswordInput v-model="password" :aria-label="t('login.password')" autocomplete="current-password" autofocus required /></label>
-      <p v-if="error" class="form-error">{{ error }}</p>
+      <p v-if="notice" class="form-error">{{ notice }}</p>
       <button class="primary full" :disabled="loading">{{ loading ? t('login.loading') : t('login.submit') }}<span>↗</span></button>
     </form>
   </main>

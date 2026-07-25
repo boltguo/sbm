@@ -73,6 +73,12 @@ type attempt struct {
 	Window       time.Time
 	BlockedUntil time.Time
 }
+
+// maxTrackedClients bounds the failed-login table. Entries are only created by
+// failures, so without a bound a spray from many source addresses would pin
+// memory for as long as the panel runs.
+const maxTrackedClients = 4096
+
 type Limiter struct {
 	mu            sync.Mutex
 	attempts      map[string]attempt
@@ -83,6 +89,26 @@ type Limiter struct {
 
 func NewLimiter() *Limiter {
 	return &Limiter{attempts: make(map[string]attempt), Limit: 5, Window: 15 * time.Minute, Block: 15 * time.Minute, now: time.Now}
+}
+
+// sweep drops entries that no longer restrict anyone. If a genuine distributed
+// attempt keeps the table full of live entries, the oldest ones are evicted so
+// the table stays bounded; those addresses simply get a fresh budget.
+func (l *Limiter) sweep(now time.Time) {
+	var oldest time.Time
+	oldestKey := ""
+	for key, item := range l.attempts {
+		if now.After(item.BlockedUntil) && now.Sub(item.Window) >= l.Window {
+			delete(l.attempts, key)
+			continue
+		}
+		if oldestKey == "" || item.Window.Before(oldest) {
+			oldest, oldestKey = item.Window, key
+		}
+	}
+	if len(l.attempts) >= maxTrackedClients && oldestKey != "" {
+		delete(l.attempts, oldestKey)
+	}
 }
 
 func (l *Limiter) Allow(remote string) bool {
@@ -104,7 +130,10 @@ func (l *Limiter) Fail(remote string) {
 	defer l.mu.Unlock()
 	now := l.now()
 	key := ClientIP(remote)
-	item := l.attempts[key]
+	item, tracked := l.attempts[key]
+	if !tracked && len(l.attempts) >= maxTrackedClients {
+		l.sweep(now)
+	}
 	if item.Window.IsZero() || now.Sub(item.Window) >= l.Window {
 		item = attempt{Window: now}
 	}

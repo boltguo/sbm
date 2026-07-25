@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
-import { api, post } from '../api'
+import { api, guard, post } from '../api'
 import type { Dashboard, UpdateStatus } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
@@ -34,6 +34,8 @@ const auditDetail = () => {
   return t('dashboard.audit.detail', { interface: audit.interface || 'WAN', proxy: bytes(audit.proxyBytes), receive: bytes(audit.receiveBytes), transmit: bytes(audit.transmitBytes) })
 }
 
+const safe = guard(message => emit('toast', message))
+
 async function load() {
   const next = await api<Dashboard>('/api/dashboard')
   if (!data.value || data.value.subscriptionURL !== next.subscriptionURL) {
@@ -41,7 +43,10 @@ async function load() {
   }
   data.value = next
 }
-async function refreshTraffic() {
+// A failed background poll stays quiet — a 401 already returns to the login
+// screen, and toasting every 5 seconds during an outage helps nobody.
+const poll = () => { load().catch(() => {}) }
+const refreshTraffic = safe(async () => {
   if (refreshingTraffic.value) return
   refreshingTraffic.value = true
   try {
@@ -50,10 +55,10 @@ async function refreshTraffic() {
   } finally {
     refreshingTraffic.value = false
   }
-}
-async function copy(value: string) { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) }
-async function restart() { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() }
-async function reset() { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() }
+})
+const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) })
+const restart = safe(async () => { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() })
+const reset = safe(async () => { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() })
 async function checkUpdate(notify = true) {
   checkingUpdate.value = true
   try {
@@ -65,7 +70,7 @@ async function checkUpdate(notify = true) {
     checkingUpdate.value = false
   }
 }
-onMounted(() => { load(); checkUpdate(false); timer = window.setInterval(load, 5000) })
+onMounted(() => { poll(); checkUpdate(false); timer = window.setInterval(poll, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 

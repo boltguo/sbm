@@ -28,6 +28,15 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      # The bundle is committed and embedded by the Go build, so it must match
+      # web/src. Releases rebuild it anyway; this keeps the repo copy honest.
+      - name: Verify the committed frontend bundle is up to date
+        run: |
+          if [[ -n "$(git status --porcelain -- internal/webembed/dist)" ]]; then
+            echo "internal/webembed/dist is stale. Run 'make frontend' and commit the result." >&2
+            git status --porcelain -- internal/webembed/dist >&2
+            exit 1
+          fi
       - run: bash -n install.sh scripts/*.sh
       - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
       - run: shellcheck install.sh scripts/*.sh

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -212,6 +211,12 @@ func runServe(args []string) {
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Cross into the new period first. A machine that was off across the reset
+	// date would otherwise enforce the old period's quota, stop the core, and
+	// only clear it when the scheduler next ticks — a pointless outage.
+	if err := tracker.CheckScheduledReset(ctx); err != nil {
+		log.Printf("启动时检查流量重置失败：%v", err)
+	}
 	if err := tracker.ReconcileQuota(ctx); err != nil {
 		log.Printf("启动时校正流量限额失败：%v", err)
 	}
@@ -259,5 +264,3 @@ func must(err error) {
 		fatal(err.Error())
 	}
 }
-
-func ensureParent(path string) error { return os.MkdirAll(filepath.Dir(path), 0700) }

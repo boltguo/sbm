@@ -3,6 +3,25 @@ set -Eeuo pipefail
 trap 'status=$?; printf "install-unit failed at line %d: %s\n" "$LINENO" "$BASH_COMMAND" >&2; exit "$status"' ERR
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The README tells people to run the installer as a single command, which leaves
+# BASH_SOURCE empty. Under `set -u` that used to abort before main ever ran, so
+# every supported invocation has to reach the root check rather than die early.
+for invocation in single-command process-substitution; do
+  case "$invocation" in
+    single-command) output="$(bash -c "$(cat "$root_dir/install.sh")" 2>&1 || true)" ;;
+    process-substitution) output="$(bash <(cat "$root_dir/install.sh") 2>&1 || true)" ;;
+  esac
+  if [[ "$output" != *"root"* ]]; then
+    printf '%s invocation did not reach the root check: %s\n' "$invocation" "$output" >&2
+    exit 1
+  fi
+  if [[ "$output" == *"unbound variable"* ]]; then
+    printf '%s invocation tripped set -u: %s\n' "$invocation" "$output" >&2
+    exit 1
+  fi
+done
+
 # The installer is linted separately; this path is resolved dynamically.
 # shellcheck disable=SC1091
 source "$root_dir/install.sh"
@@ -14,9 +33,15 @@ validate_domain node.example.com
 custom_panel_port=24443
 validate_panel_port "$custom_panel_port"
 [[ "$(country_flag US)" == "🇺🇸" ]]
-[[ "$(location_node_name Japan JP Tokyo)" == "Japan-Tokyo" ]]
-[[ "$(location_node_name Singapore SG Singapore)" == "Singapore" ]]
-validate_node_name "Japan-Tokyo"
+# Node names use the uppercase country code, not the full country name.
+[[ "$(location_node_name Japan JP Tokyo)" == "JP-Tokyo" ]]
+[[ "$(location_node_name Singapore SG Singapore)" == "SG" ]]
+[[ "$(location_node_name 'United States' US Seattle)" == "US-Seattle" ]]
+[[ "$(location_node_name '' jp Tokyo)" == "JP-Tokyo" ]]
+[[ "$(location_node_name JP JP '')" == "JP" ]]
+# Without a country code the full name is the only thing left to use.
+[[ "$(location_node_name Japan '' Tokyo)" == "Japan-Tokyo" ]]
+validate_node_name "JP-Tokyo"
 [[ "$(urlencode_fragment 'Japan Tokyo#1')" == "Japan%20Tokyo%231" ]]
 [[ "$(cloud_provider_name oracle)" == "Oracle Cloud (OCI)" ]]
 [[ "$(cloud_provider_name alibaba)" == "Alibaba Cloud ECS / 阿里云" ]]
@@ -120,6 +145,60 @@ curl() {
 
 digest="$(github_asset_sha256 SagerNet/sing-box v1.2.3 sing-box-1.2.3-linux-amd64.tar.gz)"
 [[ "$digest" == 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ]]
+
+# Exercise the firewall helper that write_firewall_helper emits. It is a
+# heredoc, so shellcheck and bash -n never see it as part of install.sh.
+helper_dir="$(mktemp -d)"
+helper="$helper_dir/open-port.sh"
+awk 'index($0, "FIREWALL_HELPER\" <<") { capture=1; next } capture && /^HELPER$/ { exit } capture' "$root_dir/install.sh" > "$helper"
+[[ -s "$helper" ]] || { echo "could not extract the firewall helper" >&2; exit 1; }
+chmod 0755 "$helper"
+bash -n "$helper"
+if command -v shellcheck >/dev/null 2>&1; then shellcheck "$helper"; fi
+
+export SBM_FIREWALL_MODE_FILE="$helper_dir/mode" SBM_FIREWALL_PORTS_FILE="$helper_dir/ports"
+printf 'ufw\n' > "$SBM_FIREWALL_MODE_FILE"
+: > "$SBM_FIREWALL_PORTS_FILE"
+ufw_log="$helper_dir/ufw.log"
+mkdir -p "$helper_dir/bin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$ufw_log" > "$helper_dir/bin/ufw"
+chmod 0755 "$helper_dir/bin/ufw"
+PATH="$helper_dir/bin:$PATH"
+
+"$helper" tcp 8443
+"$helper" udp 443
+grep -Fxq 'tcp 8443' "$SBM_FIREWALL_PORTS_FILE"
+grep -Fxq 'allow 8443/tcp' "$ufw_log"
+
+# Closing releases the rule and forgets it, so a reboot does not restore it.
+"$helper" --close tcp 8443
+grep -Fxq 'delete allow 8443/tcp' "$ufw_log"
+if grep -Fxq 'tcp 8443' "$SBM_FIREWALL_PORTS_FILE"; then
+  echo "closed port was still recorded" >&2
+  exit 1
+fi
+grep -Fxq 'udp 443' "$SBM_FIREWALL_PORTS_FILE"
+
+# TCP/80 must survive a close so certificate renewal keeps working.
+"$helper" tcp 80
+: > "$ufw_log"
+"$helper" --close tcp 80
+[[ ! -s "$ufw_log" ]]
+grep -Fxq 'tcp 80' "$SBM_FIREWALL_PORTS_FILE"
+
+# Uninstall revokes everything that was recorded and empties the ledger.
+: > "$ufw_log"
+"$helper" --revoke-all
+grep -Fxq 'delete allow 443/udp' "$ufw_log"
+grep -Fxq 'delete allow 80/tcp' "$ufw_log"
+[[ ! -s "$SBM_FIREWALL_PORTS_FILE" ]]
+
+if ("$helper" --close tcp 70000 >/dev/null 2>&1); then
+  echo "helper accepted an invalid port" >&2
+  exit 1
+fi
+unset SBM_FIREWALL_MODE_FILE SBM_FIREWALL_PORTS_FILE
+rm -rf "$helper_dir"
 
 ss() {
   [[ "$*" == *":2096"* ]] && printf '%s\n' 'LISTEN 0 4096 *:2096 *:*'

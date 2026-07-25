@@ -2,9 +2,14 @@ package traffic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +109,66 @@ func TestManualResetKeepsCoreBaseline(t *testing.T) {
 	got := tracker.State()
 	if got.Upload != 25 || got.Download != 50 {
 		t.Fatalf("reset re-counted old bytes: %+v", got)
+	}
+}
+
+// Two samplers exist in production: the poller in Run and captureTraffic on the
+// HTTP mutation paths. If both could read the core concurrently, the older
+// reading applied last would look like a counter reset and add the whole
+// counter again. Sample must serialise them.
+func TestConcurrentSamplesNeverDoubleCount(t *testing.T) {
+	state := stateAt(time.Now())
+	const base = int64(500 << 30)
+	state.Upload = base
+	state.LastCoreUpload = base
+	tracker := NewForTest(state, &configSource{}, nil, time.Now)
+
+	var counter atomic.Int64
+	counter.Store(base)
+	// Each read advances the core counter and takes a varying amount of time,
+	// so responses would come back out of order without serialisation.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value := counter.Add(1_000)
+		time.Sleep(time.Duration(value%5) * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]int64{"uploadTotal": value, "downloadTotal": 0})
+	}))
+	defer server.Close()
+	client := ClashClient{URL: server.URL, Client: server.Client()}
+
+	const samplers = 8
+	var wg sync.WaitGroup
+	for range samplers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := tracker.Sample(context.Background(), client); err != nil {
+				t.Errorf("sample failed: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	want := counter.Load()
+	if got := tracker.State().Upload; got != want {
+		t.Fatalf("concurrent samples miscounted: got=%d want=%d (drift %+d bytes)", got, want, got-want)
+	}
+	if got := tracker.State().LastCoreUpload; got != want {
+		t.Fatalf("baseline drifted: got=%d want=%d", got, want)
+	}
+}
+
+func TestSampleReportsUnavailableCoreDistinctly(t *testing.T) {
+	tracker := NewForTest(stateAt(time.Now()), &configSource{}, nil, time.Now)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	_, err := tracker.Sample(context.Background(), ClashClient{URL: server.URL, Client: server.Client()})
+	if !errors.Is(err, ErrSampleUnavailable) {
+		t.Fatalf("got %v, want ErrSampleUnavailable", err)
+	}
+	if tracker.State().Upload != 0 {
+		t.Fatal("a failed read changed the totals")
 	}
 }
 
@@ -266,5 +331,37 @@ func TestCorruptStateAndBackupRefusesSilentReset(t *testing.T) {
 	}
 	if _, err := Open(path, &configSource{}, nil, time.Now); err == nil {
 		t.Fatal("corrupt existing state was silently reset")
+	}
+}
+
+// A systemd state that cannot be read must not be treated as "already stopped".
+// Doing so would skip the stop while the core keeps serving traffic past the
+// quota, with the panel reporting the limit as enforced.
+func TestUnreadableCoreStateStillEnforcesQuota(t *testing.T) {
+	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	state := stateAt(now)
+	state.Upload = 200
+	state.QuotaExceeded = true
+	core := &fakeCore{running: true, stateErr: errors.New("Failed to connect to bus")}
+	tracker := NewForTest(state, &configSource{cfg: model.Config{TotalBytes: 100}}, core, func() time.Time { return now })
+	if err := tracker.ReconcileQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if core.stops != 1 {
+		t.Fatalf("stops = %d, want 1", core.stops)
+	}
+}
+
+// With nothing to enforce there is no reason to touch the core, so an
+// unreadable state is only reported.
+func TestUnreadableCoreStateWithoutQuotaLeavesCoreAlone(t *testing.T) {
+	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	core := &fakeCore{running: true, stateErr: errors.New("Failed to connect to bus")}
+	tracker := NewForTest(stateAt(now), &configSource{cfg: model.Config{TotalBytes: 100}}, core, func() time.Time { return now })
+	if err := tracker.ReconcileQuota(context.Background()); err == nil {
+		t.Fatal("an unreadable state should be reported")
+	}
+	if core.stops != 0 || core.starts != 0 {
+		t.Fatalf("stops = %d starts = %d, want the core untouched", core.stops, core.starts)
 	}
 }

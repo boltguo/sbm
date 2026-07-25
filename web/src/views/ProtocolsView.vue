@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
 import { SwitchRoot, SwitchThumb } from 'reka-ui'
-import { api, del, post, put } from '../api'
+import { api, del, guard, post, put } from '../api'
 import type { Inbound } from '../types'
 import Icon from '../components/Icon.vue'
 import Modal from '../components/Modal.vue'
@@ -22,13 +22,14 @@ const duplicate = computed(() => items.value.some(i => i.type === createForm.val
 const protocolOptions = [{ value: 'vless-reality', label: 'VLESS + Vision + REALITY' }, { value: 'hysteria2', label: 'Hysteria2' }]
 const obfsOptions = computed(() => [{ value: 'none', label: t('protocol.off') }, { value: 'salamander', label: 'Salamander' }])
 
-async function load() { items.value = await api<Inbound[]>('/api/inbounds') }
-async function create() { await post('/api/inbounds', createForm.value); creating.value = false; emit('toast', t('protocol.created')); await load() }
-async function save() { if (!editing.value) return; await put(`/api/inbounds/${editing.value.id}`, editing.value); editing.value = null; emit('toast', t('protocol.saved')); await load() }
-async function toggle(item: Inbound) { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() }
-async function remove(item: Inbound) { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() }
-async function copy(value: string) { await navigator.clipboard.writeText(value); emit('toast', t('protocol.linkCopied')) }
-async function showQR(item: Inbound) { qrItem.value = item; qr.value = await QRCode.toDataURL(item.link, { width: 320, margin: 2, color: { dark: '#111712', light: '#f4f1e8' } }) }
+const safe = guard(message => emit('toast', message))
+const load = safe(async () => { items.value = await api<Inbound[]>('/api/inbounds') })
+const create = safe(async () => { await post('/api/inbounds', createForm.value); creating.value = false; emit('toast', t('protocol.created')); await load() })
+const save = safe(async () => { if (!editing.value) return; await put(`/api/inbounds/${editing.value.id}`, editing.value); editing.value = null; emit('toast', t('protocol.saved')); await load() })
+const toggle = safe(async (item: Inbound) => { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() })
+const remove = safe(async (item: Inbound) => { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() })
+const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('protocol.linkCopied')) })
+const showQR = safe(async (item: Inbound) => { qrItem.value = item; qr.value = await QRCode.toDataURL(item.link, { width: 320, margin: 2, color: { dark: '#111712', light: '#f4f1e8' } }) })
 function edit(item: Inbound) { editing.value = JSON.parse(JSON.stringify(item)); delete (editing.value as any).link; delete (editing.value as any).network }
 function openCreate() { createForm.value = { type: 'vless-reality', name: t('protocol.defaultName'), port: 8443 }; creating.value = true }
 onMounted(load)

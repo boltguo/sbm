@@ -18,8 +18,6 @@ type JSONFile[T any] struct {
 
 func NewJSONFile[T any](path string) *JSONFile[T] { return &JSONFile[T]{path: path} }
 
-func (f *JSONFile[T]) Path() string { return f.path }
-
 func (f *JSONFile[T]) Load() (T, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -38,13 +36,21 @@ func (f *JSONFile[T]) Load() (T, error) {
 func (f *JSONFile[T]) Save(value T) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return writeJSONAtomic(f.path, value, true)
+	// Only a primary file that still parses is allowed to become the backup.
+	// A corrupt primary is exactly the case Load falls back to the backup for,
+	// so copying it over would destroy the last good copy on the next save.
+	if _, err := readJSON[T](f.path); err == nil {
+		if err := copyAtomic(f.path, f.path+".bak"); err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+	}
+	return writeJSONAtomic(f.path, value)
 }
 
 func (f *JSONFile[T]) SaveWithoutBackup(value T) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return writeJSONAtomic(f.path, value, false)
+	return writeJSONAtomic(f.path, value)
 }
 
 func readJSON[T any](path string) (T, error) {
@@ -76,7 +82,7 @@ func ensureEOF(dec *json.Decoder) error {
 	return err
 }
 
-func writeJSONAtomic(path string, value any, backup bool) error {
+func writeJSONAtomic(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -85,15 +91,6 @@ func writeJSONAtomic(path string, value any, backup bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
-	}
-	if backup {
-		if _, err := os.Stat(path); err == nil {
-			if err := copyAtomic(path, path+".bak"); err != nil {
-				return fmt.Errorf("backup: %w", err)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
 	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {

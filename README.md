@@ -9,7 +9,7 @@ A fresh install starts two inbounds:
 - VLESS + Vision + REALITY on TCP/443
 - Hysteria2 on UDP/443
 
-They can share port 443 because one uses TCP and the other uses UDP. The panel also gives you one subscription URL for all enabled inbounds.
+The panel gives you one subscription URL for all enabled inbounds.
 
 ## Install
 
@@ -28,26 +28,25 @@ You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
 TCP/2096 is only the default panel port. If you choose another one during installation, open that port instead.
 
-Run as root:
-
 ```bash
-sudo -i
-bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)"
 ```
+
+Drop the leading `sudo` if you are already in a root shell.
 
 The installer asks for:
 
 ```text
 Domain: node.example.com
 面板端口 [2096]:
-节点名称 [Japan-Tokyo]:
+节点名称 [JP-Tokyo]:
 ```
 
-Press Enter to keep port 2096. The suggested node name comes from the server's public IP and looks like `Japan-Tokyo`; you can replace it. SBM creates `Japan-Tokyo-VLESS` and `Japan-Tokyo-HY2`. At the end, the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
+The prompts are in Chinese and ask for the domain, the panel port, and the node name. Press Enter to keep port 2096. The suggested node name comes from the server's public IP and uses the two-letter country code, producing `JP-Tokyo-VLESS` and `JP-Tokyo-HY2`. At the end the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
 
-The script installs missing packages, then checks the architecture, free disk space, systemd, DNS, certificate services, and the ports you selected. It refuses to continue if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, it checks the listeners and makes a local HTTPS request to the panel.
+Installation aborts if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, the script checks the listeners and makes a local HTTPS request to the panel.
 
-Cloud firewalls are outside the VPS, so the script cannot test or edit them. It can handle UFW, firewalld, and restrictive iptables rules inside the server. Existing iptables rules are kept; SBM only adds its own ports and restores them after a reboot. The [VPS firewall guide](docs/VPS-COMPATIBILITY.en.md) has the console paths for OCI, AWS, GCP, Azure, Alibaba Cloud, Tencent Cloud, and several common VPS providers.
+UFW, firewalld, and iptables inside the VPS are handled automatically, and existing iptables rules are kept. Cloud firewalls sit outside the VPS and the script cannot change them; the [VPS firewall guide](docs/VPS-COMPATIBILITY.en.md) has the console paths for OCI, AWS, GCP, Azure, Alibaba Cloud, Tencent Cloud, and other common providers.
 
 Open the panel at:
 
@@ -108,7 +107,7 @@ Successful, failed, and rate-limited sign-in attempts are recorded in the system
 journalctl -u sbm-panel -g 'audit event=login'
 ```
 
-The panel manages host services, so do not expose its port more widely than needed. Remember that subscriptions use the same port: if you restrict it by source IP, every device that updates the subscription must be allowed.
+The panel manages host services, so do not expose its port more widely than needed. Subscriptions share that port, so a source-IP restriction must allow every device that updates the subscription.
 
 ## Adding another inbound
 

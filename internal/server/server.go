@@ -35,25 +35,28 @@ import (
 )
 
 type Server struct {
-	Config       *store.ConfigStore
-	Traffic      *traffic.Tracker
-	Core         *core.Manager
-	Registry     *protocol.Registry
-	Factory      protocol.Factory
-	Clash        traffic.ClashClient
-	System       *systeminfo.Collector
-	Assets       fs.FS
-	Limiter      *auth.Limiter
-	Sessions     auth.Sessions
-	PanelVersion string
-	Releases     releasecheck.Source
-	TrafficAudit *traffic.NetworkAudit
-	AuditLog     *log.Logger
-	mutationMu   sync.Mutex
-	releaseMu    sync.Mutex
-	releaseCache *updateStatus
-	releaseUntil time.Time
+	Config         *store.ConfigStore
+	Traffic        *traffic.Tracker
+	Core           *core.Manager
+	Registry       *protocol.Registry
+	Factory        protocol.Factory
+	Clash          traffic.ClashClient
+	System         *systeminfo.Collector
+	Assets         fs.FS
+	Limiter        *auth.Limiter
+	Sessions       auth.Sessions
+	PanelVersion   string
+	Releases       releasecheck.Source
+	TrafficAudit   *traffic.NetworkAudit
+	AuditLog       *log.Logger
+	mutationMu     sync.Mutex
+	releaseMu      sync.Mutex
+	releaseCache   *updateStatus
+	releaseUntil   time.Time
+	releaseRetryAt time.Time
 }
+
+const releaseRetryDelay = 2 * time.Minute
 
 type contextKey string
 
@@ -248,10 +251,18 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, *s.releaseCache)
 		return
 	}
+	// GitHub allows 60 unauthenticated calls per hour per address. Without a
+	// backoff, a rate-limited or unreachable API would be retried on every
+	// click and keep the panel pinned at the limit.
+	if now.Before(s.releaseRetryAt) {
+		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 	defer cancel()
 	info, err := s.Releases.Latest(ctx)
 	if err != nil {
+		s.releaseRetryAt = now.Add(releaseRetryDelay)
 		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
 		return
 	}
@@ -340,7 +351,6 @@ func (s *Server) createInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	s.openHostFirewall(inbound)
 	writeJSON(w, 201, inbound)
 }
 
@@ -382,7 +392,6 @@ func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error())
 			return
 		}
-		s.openHostFirewall(input)
 		writeJSON(w, 200, input)
 	case http.MethodDelete:
 		found := false
@@ -440,6 +449,7 @@ func (s *Server) mutate(ctx context.Context, change func(*model.Config)) error {
 		_ = s.Config.Replace(old)
 		return err
 	}
+	s.syncHostFirewall(old, next)
 	return nil
 }
 
@@ -447,11 +457,10 @@ func (s *Server) captureTraffic(ctx context.Context) error {
 	if s.Clash.URL == "" || s.Traffic.State().QuotaExceeded {
 		return nil
 	}
-	upload, download, err := s.Clash.Sample(ctx)
-	if err != nil {
+	_, err := s.Traffic.Sample(ctx, s.Clash)
+	if errors.Is(err, traffic.ErrSampleUnavailable) {
 		return errors.New("无法读取核心流量，请稍后重试")
 	}
-	_, err = s.Traffic.ApplySample(ctx, upload, download)
 	return err
 }
 
@@ -619,26 +628,78 @@ func credentialTag(cfg model.Config) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
-func (s *Server) openHostFirewall(inbound model.Inbound) {
-	driver, ok := s.Registry.Get(inbound.Type)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	const firewallHelper = "/usr/local/lib/sbm/open-port.sh"
-	if info, err := os.Stat(firewallHelper); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
-		if err := exec.CommandContext(ctx, firewallHelper, driver.Network(), strconv.Itoa(inbound.Port)).Run(); err == nil {
-			return
-		} else {
-			log.Printf("host firewall helper failed: network=%s port=%d error=%v", driver.Network(), inbound.Port, err)
+const firewallHelper = "/usr/local/lib/sbm/open-port.sh"
+
+type endpoint struct {
+	network string
+	port    int
+}
+
+// firewallEndpoints lists the ports a config actually needs open. A disabled
+// inbound is not listening, so its port is not included.
+func (s *Server) firewallEndpoints(cfg model.Config) map[endpoint]bool {
+	result := make(map[endpoint]bool, len(cfg.Inbounds))
+	for _, inbound := range cfg.Inbounds {
+		if !inbound.Enabled {
+			continue
+		}
+		if driver, ok := s.Registry.Get(inbound.Type); ok {
+			result[endpoint{driver.Network(), inbound.Port}] = true
 		}
 	}
+	return result
+}
+
+// syncHostFirewall opens what the new config needs and revokes what it no
+// longer uses, so a port change or a deleted inbound does not leave the host
+// firewall open forever. Ports the panel itself depends on are never revoked.
+func (s *Server) syncHostFirewall(old, next model.Config) {
+	before, after := s.firewallEndpoints(old), s.firewallEndpoints(next)
+	for item := range after {
+		if !before[item] {
+			s.hostFirewall("", item)
+		}
+	}
+	for item := range before {
+		if after[item] || isProtectedEndpoint(item, next) {
+			continue
+		}
+		s.hostFirewall("--close", item)
+	}
+}
+
+// TCP/80 keeps Let's Encrypt renewal working and the panel port keeps the
+// operator from locking themselves out; neither is ever closed here.
+func isProtectedEndpoint(item endpoint, cfg model.Config) bool {
+	return item.network == "tcp" && (item.port == 80 || item.port == cfg.PanelPort)
+}
+
+func (s *Server) hostFirewall(action string, item endpoint) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	port := strconv.Itoa(item.port)
+	args := []string{item.network, port}
+	if action != "" {
+		args = append([]string{action}, args...)
+	}
+	if info, err := os.Stat(firewallHelper); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
+		if err := exec.CommandContext(ctx, firewallHelper, args...).Run(); err == nil {
+			return
+		} else {
+			log.Printf("host firewall helper failed: action=%q network=%s port=%d error=%v", action, item.network, item.port, err)
+		}
+	}
+	// Fallback for installs whose helper is missing or predates --close.
 	status, err := exec.CommandContext(ctx, "ufw", "status").Output()
 	if err != nil || !strings.Contains(string(status), "Status: active") {
 		return
 	}
-	_ = exec.CommandContext(ctx, "ufw", "allow", fmt.Sprintf("%d/%s", inbound.Port, driver.Network())).Run()
+	rule := fmt.Sprintf("%s/%s", port, item.network)
+	if action == "--close" {
+		_ = exec.CommandContext(ctx, "ufw", "delete", "allow", rule).Run()
+		return
+	}
+	_ = exec.CommandContext(ctx, "ufw", "allow", rule).Run()
 }
 
 func (s *Server) static(w http.ResponseWriter, r *http.Request) {

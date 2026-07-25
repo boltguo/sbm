@@ -27,7 +27,7 @@ info() { printf '%s[*]%s %s\n' "$GREEN" "$RESET" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$YELLOW" "$RESET" "$*"; }
 die() { printf '%s[x]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 
-need_root() { [[ $(id -u) -eq 0 ]] || die "请先执行 sudo -i，再运行安装命令。"; }
+need_root() { [[ $(id -u) -eq 0 ]] || die "需要 root 权限：安装请在命令前加 sudo，管理请执行 sudo sbm。"; }
 check_os() {
   [[ -r /etc/os-release ]] || die "无法识别操作系统。"
   # shellcheck source=/dev/null
@@ -137,8 +137,16 @@ country_flag() {
 }
 location_node_name() {
   local country="${1:-}" country_code="${2:-}" city="${3:-}" location
-  location="${country:-$country_code}"
-  [[ -n "$city" && "$city" != "$country" ]] && location="${location}-${city}"
+  # Prefer the two-letter code: it keeps names short and predictable where the
+  # full country name would be long or multi-word ("United States-Seattle").
+  if [[ -n "$country_code" ]]; then
+    location="$(printf '%s' "$country_code" | tr '[:lower:]' '[:upper:]')"
+  else
+    location="$country"
+  fi
+  if [[ -n "$city" && "$city" != "$country" && "$city" != "$location" ]]; then
+    location="${location}-${city}"
+  fi
   location="${location//[[:space:]]/}"
   printf '%s\n' "$location"
 }
@@ -403,8 +411,8 @@ write_firewall_helper() {
   cat > "$FIREWALL_HELPER" <<'HELPER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-readonly MODE_FILE="/etc/sbm/firewall-mode"
-readonly PORTS_FILE="/etc/sbm/firewall-ports"
+readonly MODE_FILE="${SBM_FIREWALL_MODE_FILE:-/etc/sbm/firewall-mode}"
+readonly PORTS_FILE="${SBM_FIREWALL_PORTS_FILE:-/etc/sbm/firewall-ports}"
 
 valid_rule() {
   [[ "${1:-}" == tcp || "${1:-}" == udp ]] && [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 65535 ))
@@ -427,11 +435,39 @@ apply_rule() {
     *) printf '未知的 SBM 防火墙模式：%s\n' "$mode" >&2; exit 1 ;;
   esac
 }
+revoke_rule() {
+  local network="$1" port="$2" mode
+  if [[ -r "$MODE_FILE" ]]; then mode="$(<"$MODE_FILE")"; else mode="none"; fi
+  case "$mode" in
+    ufw)
+      ufw delete allow "${port}/${network}" >/dev/null 2>&1 || true
+      ;;
+    firewalld)
+      firewall-cmd --quiet --permanent --remove-port="${port}/${network}" >/dev/null 2>&1 || true
+      firewall-cmd --quiet --remove-port="${port}/${network}" >/dev/null 2>&1 || true
+      ;;
+    iptables)
+      # The same rule can have been inserted more than once over time.
+      while iptables -w -C INPUT -p "$network" --dport "$port" -j ACCEPT 2>/dev/null; do
+        iptables -w -D INPUT -p "$network" --dport "$port" -j ACCEPT 2>/dev/null || break
+      done
+      ;;
+    none) ;;
+    *) printf '未知的 SBM 防火墙模式：%s\n' "$mode" >&2; exit 1 ;;
+  esac
+}
 record_rule() {
   local rule="$1 $2"
-  install -d -m 0700 /etc/sbm
+  install -d -m 0700 "$(dirname "$PORTS_FILE")"
   touch "$PORTS_FILE"; chmod 0600 "$PORTS_FILE"
   grep -Fqx "$rule" "$PORTS_FILE" 2>/dev/null || printf '%s\n' "$rule" >> "$PORTS_FILE"
+}
+forget_rule() {
+  local rule="$1 $2" kept
+  [[ -r "$PORTS_FILE" ]] || return 0
+  kept="$(grep -Fxv "$rule" "$PORTS_FILE" || true)"
+  if [[ -n "$kept" ]]; then printf '%s\n' "$kept" > "$PORTS_FILE"; else : > "$PORTS_FILE"; fi
+  chmod 0600 "$PORTS_FILE"
 }
 
 if [[ "${1:-}" == --restore ]]; then
@@ -444,7 +480,29 @@ if [[ "${1:-}" == --restore ]]; then
   exit 0
 fi
 
-valid_rule "${1:-}" "${2:-}" || { printf '用法：open-port.sh <tcp|udp> <1-65535>\n' >&2; exit 2; }
+if [[ "${1:-}" == --revoke-all ]]; then
+  [[ -r "$PORTS_FILE" ]] || exit 0
+  while read -r network port; do
+    valid_rule "$network" "$port" || continue
+    revoke_rule "$network" "$port"
+  done < "$PORTS_FILE"
+  : > "$PORTS_FILE"
+  exit 0
+fi
+
+if [[ "${1:-}" == --close ]]; then
+  shift
+  valid_rule "${1:-}" "${2:-}" || { printf '用法：open-port.sh --close <tcp|udp> <1-65535>\n' >&2; exit 2; }
+  # Renewal needs TCP/80 whatever the panel thinks it no longer uses.
+  if [[ "$1 $2" == "tcp 80" ]]; then
+    exit 0
+  fi
+  forget_rule "$1" "$2"
+  revoke_rule "$1" "$2"
+  exit 0
+fi
+
+valid_rule "${1:-}" "${2:-}" || { printf '用法：open-port.sh [--close|--restore|--revoke-all] <tcp|udp> <1-65535>\n' >&2; exit 2; }
 record_rule "$1" "$2"
 apply_rule "$1" "$2"
 HELPER
@@ -605,8 +663,11 @@ verify_boot_services() {
   info "开机恢复检查通过：防火墙、sing-box 和面板均已启用，服务异常退出会持续重试。"
 }
 install_sbm_command() {
-  if [[ -f "${BASH_SOURCE[0]}" && "${BASH_SOURCE[0]}" != /dev/fd/* ]]; then
-    install -m 0755 "${BASH_SOURCE[0]}" "$SBM_CMD"
+  # BASH_SOURCE is empty when the script is run as `bash -c "$(curl ...)"`, and
+  # a /dev/fd path when run via process substitution; neither can be copied.
+  local source_path="${BASH_SOURCE[0]:-}"
+  if [[ -n "$source_path" && -f "$source_path" && "$source_path" != /dev/fd/* ]]; then
+    install -m 0755 "$source_path" "$SBM_CMD"
   elif [[ -x "$SBM_CMD" ]]; then
     return
   else
@@ -616,7 +677,6 @@ install_sbm_command() {
 }
 do_install() {
   need_root; check_os; check_systemd; arch_tag >/dev/null
-  [[ ! -f "$CONFIG_FILE" ]] || { menu; return; }
   printf '%s===== SBM 极简 sing-box 面板安装 =====%s\n' "$CYAN" "$RESET"
   local domain panel_port node_name default_node_name flag location cloud_provider admin_password password_file encoded_node_name
   read -r -p "Domain: " domain
@@ -752,7 +812,11 @@ update_core() {
 backup_config() {
   local target
   target="/root/sbm-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-  tar -czf "$target" -C / etc/sbm var/lib/sbm etc/sing-box/config.json etc/systemd/system/sbm-firewall.service etc/systemd/system/sbm-panel.service etc/systemd/system/sing-box.service usr/local/lib/sbm
+  if ! tar -czf "$target" -C / etc/sbm var/lib/sbm etc/sing-box/config.json etc/systemd/system/sbm-firewall.service etc/systemd/system/sbm-panel.service etc/systemd/system/sing-box.service usr/local/lib/sbm; then
+    rm -f "$target"
+    warn "备份失败，未生成任何文件。"
+    return 1
+  fi
   chmod 0600 "$target"; info "备份已保存：${target}"
 }
 restore_config() {
@@ -766,9 +830,23 @@ restore_config() {
   read -r -p "恢复会覆盖当前配置，继续？[y/N]: " answer
   case "$answer" in y|Y) ;; *) return ;; esac
   systemctl stop sbm-panel.service sing-box.service || true
-  tar -xzf "$archive" -C /
-  chmod 0600 "$CONFIG_FILE" "$STATE_FILE" "$CORE_CONFIG"
-  systemctl daemon-reload; systemctl enable sbm-firewall.service sbm-panel.service sing-box.service >/dev/null 2>&1 || true; systemctl start sbm-firewall.service sbm-panel.service; quota_exceeded || systemctl start sing-box.service
+  # Do not carry on past a failed extraction: the system would be half restored
+  # and the services below would come up on a mix of old and new files.
+  if ! tar -xzf "$archive" -C /; then
+    warn "解包备份失败，配置可能只恢复了一部分；请修复备份文件后重试。"
+    return 1
+  fi
+  chmod 0600 "$CONFIG_FILE" "$STATE_FILE" "$CORE_CONFIG" || true
+  systemctl daemon-reload
+  systemctl enable sbm-firewall.service sbm-panel.service sing-box.service >/dev/null 2>&1 || true
+  if ! systemctl start sbm-firewall.service sbm-panel.service; then
+    warn "恢复后面板未能启动，请执行 journalctl -u sbm-panel -e。"
+    return 1
+  fi
+  if ! quota_exceeded && ! systemctl start sing-box.service; then
+    warn "恢复后 sing-box 未能启动，请执行 journalctl -u sing-box -e。"
+    return 1
+  fi
   info "备份已恢复。"
 }
 uninstall() {
@@ -777,6 +855,9 @@ uninstall() {
   case "$answer" in y|Y) ;; *) return ;; esac
   domain="$(json_string domain "$CONFIG_FILE")"
   systemctl disable --now sbm-panel.service sing-box.service sbm-firewall.service >/dev/null 2>&1 || true
+  if [[ -x "$FIREWALL_HELPER" ]]; then
+    "$FIREWALL_HELPER" --revoke-all >/dev/null 2>&1 || warn "未能撤销 SBM 添加的防火墙放行规则，请手动检查 ufw/firewalld/iptables。"
+  fi
   if [[ -x "$ACME_BIN" && -n "$domain" ]]; then
     "$ACME_BIN" --remove -d "$domain" >/dev/null 2>&1 || true
   fi
@@ -786,6 +867,23 @@ uninstall() {
   systemctl daemon-reload
   info "已删除面板、sing-box、配置、状态与证书；/root 下的手动备份和 acme.sh 本体仍保留。"
 }
+restart_panel() { systemctl restart sbm-panel.service && info "面板已重启。"; }
+show_logs() { journalctl -u sbm-panel.service -u sing-box.service -n 80 --no-pager; }
+
+# Runs one menu action and always returns success, so a failed action reports
+# itself and drops back to the menu instead of ending the session. Relying on
+# errexit here is not portable: bash ignores it inside a function called from a
+# condition, and menu used to be reached exactly that way.
+#
+# The action runs in a subshell because die exits, and an action that dies would
+# otherwise take the whole menu session with it.
+run_action() {
+  local label="$1"; shift
+  if ! ( "$@" ); then
+    warn "「${label}」未成功完成，请查看上面的输出。"
+  fi
+  return 0
+}
 menu() {
   need_root
   while true; do
@@ -793,23 +891,31 @@ menu() {
     printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 更新 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '0. 退出'
     read -r -p "选择: " choice
     case "$choice" in
-      1) show_status ;;
-      2) systemctl restart sbm-panel.service; info "面板已重启。" ;;
-      3) restart_core ;;
-      4) reset_admin_password ;;
-      5) journalctl -u sbm-panel.service -u sing-box.service -n 80 --no-pager ;;
-      6) update_panel ;;
-      7) update_core ;;
-      8) backup_config ;;
-      9) restore_config ;;
-      10) uninstall; return ;;
-      11) repair_runtime ;;
+      1) run_action '查看运行状态' show_status ;;
+      2) run_action '重启面板' restart_panel ;;
+      3) run_action '重启 sing-box' restart_core ;;
+      4) run_action '重置管理员密码' reset_admin_password ;;
+      5) run_action '查看日志' show_logs ;;
+      6) run_action '更新面板' update_panel ;;
+      7) run_action '更新 sing-box' update_core ;;
+      8) run_action '备份配置' backup_config ;;
+      9) run_action '恢复配置' restore_config ;;
+      10) run_action '卸载' uninstall; return ;;
+      11) run_action '修复开机启动与防火墙' repair_runtime ;;
       0) return ;;
       *) warn "无效选择。" ;;
     esac
   done
 }
-main() { do_install; }
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+main() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    menu
+    return
+  fi
+  do_install
+}
+# Runs when executed directly, via process substitution, or as bash -c "$(curl …)".
+# The fallback matters: with bash -c the array is empty and set -u would abort.
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
   main "$@"
 fi
