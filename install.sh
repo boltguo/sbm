@@ -225,13 +225,32 @@ check_ports() {
   port_free "$panel_port" tcp || die "TCP/${panel_port} 已被占用。"
   info "本机端口预检通过：TCP/80、TCP/443、UDP/443、TCP/${panel_port} 均可用。"
 }
+# systemd calls a Type=simple unit active as soon as it forks, so probing right
+# after systemctl start races the listener's bind. sing-box wins that race only
+# because it is started first; the panel, started last and probed immediately,
+# loses it on a slower VPS. Poll to a deadline instead of sampling once.
+wait_for_listener() {
+  local port="$1" network="$2" deadline=$((SECONDS + 20))
+  while true; do
+    port_free "$port" "$network" || return 0
+    (( SECONDS < deadline )) || return 1
+    sleep 0.5
+  done
+}
+# Reports failures instead of dying: the caller has already generated the admin
+# password by this point, and exiting here would take it to the grave.
 post_install_check() {
-  local domain="$1" panel_port="$2" status
-  port_free 443 tcp && die "安装后检查失败：sing-box 未监听 TCP/443。"
-  port_free 443 udp && die "安装后检查失败：sing-box 未监听 UDP/443。"
-  port_free "$panel_port" tcp && die "安装后检查失败：面板未监听 TCP/${panel_port}。"
-  status="$(curl -sS --max-time 8 --resolve "${domain}:${panel_port}:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${domain}:${panel_port}/api/me" 2>/dev/null || true)"
-  [[ "$status" == 401 ]] || die "安装后检查失败：面板 HTTPS 健康检查未通过（HTTP ${status:-无响应}）。"
+  local domain="$1" panel_port="$2" status="" deadline
+  wait_for_listener 443 tcp || { warn "安装后检查失败：sing-box 未监听 TCP/443。"; return 1; }
+  wait_for_listener 443 udp || { warn "安装后检查失败：sing-box 未监听 UDP/443。"; return 1; }
+  wait_for_listener "$panel_port" tcp || { warn "安装后检查失败：面板未监听 TCP/${panel_port}。"; return 1; }
+  deadline=$((SECONDS + 20))
+  while true; do
+    status="$(curl -sS --max-time 8 --resolve "${domain}:${panel_port}:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${domain}:${panel_port}/api/me" 2>/dev/null || true)"
+    if [[ "$status" == 401 ]]; then break; fi
+    (( SECONDS < deadline )) || { warn "安装后检查失败：面板 HTTPS 健康检查未通过（HTTP ${status:-无响应}）。"; return 1; }
+    sleep 0.5
+  done
   info "安装后检查通过：TCP/443、UDP/443 和 TCP/${panel_port} 正在监听，面板 HTTPS 响应正常。"
 }
 install_deps() {
@@ -349,6 +368,14 @@ install_panel() {
   rm -rf "$temp_dir"
   info "已安装 sbm-panel $($SBM_BIN version)。"
 }
+# acme.sh refuses to run when it believes sudo was used to launch acme.sh itself,
+# and it decides that by looking for its own name inside SUDO_COMMAND. README asks
+# for sudo -i first, which keeps SUDO_COMMAND down to the shell, but running this
+# script as sudo bash -c "$(curl ...)" puts the whole script — every mention of
+# acme.sh included — into SUDO_COMMAND and trips the check on an otherwise normal
+# install. It only fires when stdout is a terminal, so it hides from redirected
+# calls. We already require root here, so the sudo breadcrumbs carry no meaning.
+acme() { env -u SUDO_COMMAND -u SUDO_USER -u SUDO_UID -u SUDO_GID "$ACME_BIN" "$@"; }
 issue_certificate() {
   local domain="$1"
   if [[ ! -x "$ACME_BIN" ]]; then
@@ -358,16 +385,16 @@ issue_certificate() {
     fi
     [[ -x "$ACME_BIN" ]] || die "acme.sh 安装未生成 ${ACME_BIN}，已停止后续证书操作。"
   fi
-  "$ACME_BIN" --version >/dev/null 2>&1 || die "acme.sh 客户端不可用，请删除 /root/.acme.sh 后重试。"
+  acme --version >/dev/null 2>&1 || die "acme.sh 客户端不可用，请删除 /root/.acme.sh 后重试。"
   ensure_acme_cron
-  "$ACME_BIN" --set-default-ca --server letsencrypt >/dev/null || die "无法设置 Let's Encrypt 为默认证书机构。"
-  "$ACME_BIN" --register-account >/dev/null 2>&1 || true
+  acme --set-default-ca --server letsencrypt >/dev/null || die "无法设置 Let's Encrypt 为默认证书机构。"
+  acme --register-account >/dev/null 2>&1 || true
   info "通过 Let's Encrypt HTTP-01 申请证书…"
-  "$ACME_BIN" --issue --standalone -d "$domain" --keylength 2048 \
+  acme --issue --standalone -d "$domain" --keylength 2048 \
     || die "Let's Encrypt 证书申请失败，请检查域名 A 记录、Cloudflare 灰云、云平台外层防火墙与系统防火墙的 TCP/80，以及系统时间。"
   install -d -m 0700 "$CERT_DIR" /usr/local/lib/sbm
   write_cert_reload_hook
-  "$ACME_BIN" --install-cert -d "$domain" \
+  acme --install-cert -d "$domain" \
     --key-file "${CERT_DIR}/key.pem" \
     --fullchain-file "${CERT_DIR}/fullchain.pem" \
     --reloadcmd "$CERT_RELOAD" \
@@ -715,15 +742,21 @@ do_install() {
   systemctl start sbm-panel.service >/dev/null || die "面板启动失败，请执行 journalctl -u sbm-panel -e。"
   systemctl is-active --quiet sing-box.service || die "sing-box 启动失败，请执行 journalctl -u sing-box -e。"
   systemctl is-active --quiet sbm-panel.service || die "面板启动失败，请执行 journalctl -u sbm-panel -e。"
-  post_install_check "$domain" "$panel_port"
+  local checked=1
+  post_install_check "$domain" "$panel_port" || checked=0
   local token; token="$(json_string subscriptionToken "$CONFIG_FILE")"
   encoded_node_name="$(urlencode_fragment "$node_name")"
-  printf '\n%s安装完成%s\n' "$GREEN" "$RESET"
+  if (( checked )); then
+    printf '\n%s安装完成%s\n' "$GREEN" "$RESET"
+  else
+    printf '\n%s安装已完成，但检查未通过%s\n' "$YELLOW" "$RESET"
+  fi
   printf '面板地址：%shttps://%s:%s/%s\n' "$CYAN" "$domain" "$panel_port" "$RESET"
   printf '用户名：  admin\n密码：    %s%s%s\n' "$YELLOW" "$admin_password" "$RESET"
   printf '总订阅：  %shttps://%s:%s/sub/%s#%s%s\n' "$CYAN" "$domain" "$panel_port" "$token" "$encoded_node_name" "$RESET"
   warn "密码只显示这一次；请立即保存。本机检查无法判断云厂商安全组，请手动确认已放行 TCP/80、TCP/443、UDP/443、TCP/${panel_port}。"
   printf '以后可运行 sudo sbm：选择 1 重新查看地址，选择 4 重置管理员密码。\n'
+  (( checked )) || die "请按上面的检查结果排查：journalctl -u sbm-panel -e、journalctl -u sing-box -e。凭据已在上方打印。"
 }
 json_string() {
   local key="$1" file="$2"
@@ -859,7 +892,7 @@ uninstall() {
     "$FIREWALL_HELPER" --revoke-all >/dev/null 2>&1 || warn "未能撤销 SBM 添加的防火墙放行规则，请手动检查 ufw/firewalld/iptables。"
   fi
   if [[ -x "$ACME_BIN" && -n "$domain" ]]; then
-    "$ACME_BIN" --remove -d "$domain" >/dev/null 2>&1 || true
+    acme --remove -d "$domain" >/dev/null 2>&1 || true
   fi
   rm -f "$FIREWALL_SERVICE" /etc/systemd/system/sbm-panel.service /etc/systemd/system/sing-box.service "$SBM_BIN" "$SING_BOX_BIN" "$SBM_CMD" "$CERT_RELOAD" "$FIREWALL_HELPER" "$CORE_GUARD"
   rmdir /usr/local/lib/sbm 2>/dev/null || true

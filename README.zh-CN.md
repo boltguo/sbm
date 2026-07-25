@@ -28,11 +28,17 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 TCP/2096 只是默认值。安装时如果换了端口，安全组也要放行你实际填写的端口。
 
+分两步执行。先切换到 root：
+
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)"
+sudo -i
 ```
 
-已经在 root shell 里就去掉开头的 `sudo`。
+已经在 root shell 里就跳过这一步。然后运行安装脚本：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+```
 
 安装脚本会询问：
 

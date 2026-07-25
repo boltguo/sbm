@@ -28,11 +28,17 @@ You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
 TCP/2096 is only the default panel port. If you choose another one during installation, open that port instead.
 
+Run this in two steps. First switch to root:
+
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)"
+sudo -i
 ```
 
-Drop the leading `sudo` if you are already in a root shell.
+Skip this step if you are already in a root shell. Then run the installer:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+```
 
 The installer asks for:
 
