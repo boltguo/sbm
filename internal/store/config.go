@@ -47,6 +47,10 @@ func (s *ConfigStore) Replace(cfg model.Config) error {
 
 func cloneConfig(cfg model.Config) model.Config {
 	copyCfg := cfg
+	if cfg.WireGuardExit != nil {
+		wireGuardExit := *cfg.WireGuardExit
+		copyCfg.WireGuardExit = &wireGuardExit
+	}
 	copyCfg.Inbounds = append([]model.Inbound(nil), cfg.Inbounds...)
 	for i := range copyCfg.Inbounds {
 		if cfg.Inbounds[i].VLESS != nil {

@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-VERSION ?= dev
+VERSION ?= $(shell tr -d '[:space:]' < VERSION)
 DIST := dist
 
 .PHONY: all frontend frontend-install frontend-dev frontend-typecheck backend dev-backend test vet check release clean

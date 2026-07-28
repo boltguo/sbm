@@ -82,6 +82,7 @@ https://node.example.com:2096/
 - 自动生成 UUID、Reality 密钥、short ID 和 Hysteria2 密码
 - 手动重置流量，或设置每月 1～28 日自动重置
 - 可选自动、优先 IPv4、优先 IPv6、仅 IPv4 或仅 IPv6 的代理出口策略
+- 可为每个协议增加同端口的 WireGuard IPv4 出口节点，A 端无需安装 WireGuard
 - 协议变更前自动校验 sing-box，失败时恢复原配置
 
 ### IPv4 / IPv6 出口
@@ -89,6 +90,14 @@ https://node.example.com:2096/
 在 `设置 → 代理出口网络` 中可选择地址族策略。IPv6 地区归属更准确时建议使用“优先 IPv6”：目标有 AAAA 记录时优先走 IPv6，没有时仍回退 IPv4；“仅 IPv6”会让 IPv4-only 目标无法访问。
 
 该策略要求 sing-box 1.12 或更高版本，并且只影响 sing-box 收到的域名目标。客户端已经把域名解析成 IP 时，服务端无法再切换地址族。客户端通过 IPv6 接入还需要域名有正确的 AAAA 记录，并在云防火墙和主机防火墙中放行对应端口。
+
+### WireGuard 出口节点
+
+从 v1.2.0 开始，可以在 `设置 → WireGuard 附加节点` 中配置 B。开关关闭时，订阅只包含原来的直连节点；打开后，每个已启用协议都会在相同域名和端口下增加一组独立凭据，例如 `DMIT VLESS · via GCP` 和 `DMIT HY2 · via GCP`。原直连节点始终保留。
+
+附加节点通过认证用户单独路由到用户态 WireGuard endpoint，目标域名按 IPv4 解析；其他节点继续使用 `代理出口网络` 中的地址族策略并从 A 直连。关闭开关只会从 sing-box 和订阅中隐藏附加凭据，重新打开后 UUID 和密码保持不变。
+
+面板可以生成 A 的 WireGuard 密钥；A 的隧道地址（`10.66.0.2/32`）、MTU（`1408`）和保活（`25s`）已经内置。B 仍需单独安装 WireGuard、开启 IPv4 转发和 NAT，并在云防火墙中只允许 A 访问 WireGuard UDP 端口。B 或隧道故障时，只有 `via GCP` 节点不可用，客户端可直接切回原节点。
 
 ## 用 `sbm` 管理服务
 

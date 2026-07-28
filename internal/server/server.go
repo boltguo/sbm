@@ -188,6 +188,14 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.getSettings(w, r)
 	case r.Method == "PUT" && r.URL.Path == "/api/settings":
 		s.updateSettings(w, r)
+	case r.Method == "PUT" && r.URL.Path == "/api/settings/traffic":
+		s.updateTrafficSettings(w, r)
+	case r.Method == "PUT" && r.URL.Path == "/api/settings/outbound":
+		s.updateOutboundSettings(w, r)
+	case r.Method == "PUT" && r.URL.Path == "/api/settings/wireguard":
+		s.updateWireGuardSettings(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/settings/wireguard/keypair":
+		s.generateWireGuardKeypair(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/settings/token":
 		s.regenerateToken(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/settings/password":
@@ -347,6 +355,12 @@ func (s *Server) createInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if cfg := s.Config.Get(); cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
+		if err := protocol.EnsureWireGuardExitCredential(&inbound); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
 	if err := s.mutate(r.Context(), func(cfg *model.Config) { cfg.Inbounds = append(cfg.Inbounds, inbound) }); err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -480,22 +494,102 @@ func (s *Server) saveConfig(change func(*model.Config)) error {
 	return nil
 }
 
+func cloneWireGuardExit(exit *model.WireGuardExitConfig) *model.WireGuardExitConfig {
+	if exit == nil {
+		return nil
+	}
+	copyExit := *exit
+	return &copyExit
+}
+
+func normalizeWireGuardExit(exit *model.WireGuardExitConfig) *model.WireGuardExitConfig {
+	if exit == nil {
+		return nil
+	}
+	normalized := *exit
+	normalized.Label = protocol.WireGuardExitLabel(normalized.Label)
+	normalized.Server = strings.TrimSpace(normalized.Server)
+	normalized.PrivateKey = strings.TrimSpace(normalized.PrivateKey)
+	normalized.PeerPublicKey = strings.TrimSpace(normalized.PeerPublicKey)
+	if normalized.ServerPort == 0 {
+		normalized.ServerPort = model.DefaultWireGuardExitConfig().ServerPort
+	}
+	return &normalized
+}
+
+func ensureWireGuardExitCredentials(inbounds []model.Inbound) ([]model.Inbound, error) {
+	result := append([]model.Inbound(nil), inbounds...)
+	for i := range result {
+		if result[i].VLESS != nil {
+			options := *result[i].VLESS
+			result[i].VLESS = &options
+		}
+		if result[i].Hysteria2 != nil {
+			options := *result[i].Hysteria2
+			result[i].Hysteria2 = &options
+		}
+		if err := protocol.EnsureWireGuardExitCredential(&result[i]); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func wireGuardExitCredentialsChanged(current, next []model.Inbound) bool {
+	if len(current) != len(next) {
+		return true
+	}
+	for i := range current {
+		if current[i].VLESS != nil && next[i].VLESS != nil &&
+			current[i].VLESS.WireGuardExitUUID != next[i].VLESS.WireGuardExitUUID {
+			return true
+		}
+		if current[i].Hysteria2 != nil && next[i].Hysteria2 != nil &&
+			current[i].Hysteria2.WireGuardExitPassword != next[i].Hysteria2.WireGuardExitPassword {
+			return true
+		}
+	}
+	return false
+}
+
+func wireGuardExitChangesCore(current, next *model.WireGuardExitConfig) bool {
+	currentEnabled := current != nil && current.Enabled
+	nextEnabled := next != nil && next.Enabled
+	if !currentEnabled && !nextEnabled {
+		return false
+	}
+	if currentEnabled != nextEnabled || current == nil || next == nil {
+		return true
+	}
+	currentCore, nextCore := *current, *next
+	currentCore.Label, nextCore.Label = "", ""
+	return currentCore != nextCore
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.Config.Get()
 	outboundStrategy := cfg.OutboundStrategy
 	if outboundStrategy == "" {
 		outboundStrategy = model.OutboundStrategyAuto
 	}
+	wireGuardExit := model.DefaultWireGuardExitConfig()
+	if cfg.WireGuardExit != nil {
+		wireGuardExit = *cfg.WireGuardExit
+	}
+	wireGuardExit = *normalizeWireGuardExit(&wireGuardExit)
+	wireGuardLocalPublicKey, _ := protocol.WireGuardPublicKey(wireGuardExit.PrivateKey)
 	writeJSON(w, 200, map[string]any{
 		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "totalBytes": cfg.TotalBytes, "reset": cfg.Reset,
-		"outboundStrategy": outboundStrategy, "subscriptionURL": subscriptionURL(cfg),
+		"outboundStrategy": outboundStrategy, "wireGuardExit": wireGuardExit, "wireGuardLocalPublicKey": wireGuardLocalPublicKey,
+		"subscriptionURL": subscriptionURL(cfg),
 	})
 }
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		TotalBytes       int64             `json:"totalBytes"`
-		Reset            model.ResetConfig `json:"reset"`
-		OutboundStrategy string            `json:"outboundStrategy"`
+		TotalBytes       int64                      `json:"totalBytes"`
+		Reset            model.ResetConfig          `json:"reset"`
+		OutboundStrategy string                     `json:"outboundStrategy"`
+		WireGuardExit    *model.WireGuardExitConfig `json:"wireGuardExit"`
 	}
 	if decodeJSON(r, &input) != nil {
 		writeError(w, 400, "请求格式无效")
@@ -504,17 +598,33 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	if input.OutboundStrategy == "" {
 		input.OutboundStrategy = model.OutboundStrategyAuto
 	}
+	current := s.Config.Get()
+	if input.WireGuardExit == nil {
+		input.WireGuardExit = cloneWireGuardExit(current.WireGuardExit)
+	}
+	input.WireGuardExit = normalizeWireGuardExit(input.WireGuardExit)
+	nextInbounds := current.Inbounds
+	if input.WireGuardExit != nil && input.WireGuardExit.Enabled {
+		var err error
+		nextInbounds, err = ensureWireGuardExitCredentials(nextInbounds)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
 	change := func(cfg *model.Config) {
 		cfg.TotalBytes = input.TotalBytes
 		cfg.Reset = input.Reset
 		cfg.OutboundStrategy = input.OutboundStrategy
+		cfg.WireGuardExit = cloneWireGuardExit(input.WireGuardExit)
+		cfg.Inbounds = nextInbounds
 	}
-	currentStrategy := s.Config.Get().OutboundStrategy
+	currentStrategy := current.OutboundStrategy
 	if currentStrategy == "" {
 		currentStrategy = model.OutboundStrategyAuto
 	}
 	var err error
-	if currentStrategy != input.OutboundStrategy {
+	if currentStrategy != input.OutboundStrategy || wireGuardExitChangesCore(current.WireGuardExit, input.WireGuardExit) || wireGuardExitCredentialsChanged(current.Inbounds, nextInbounds) {
 		err = s.mutate(r.Context(), change)
 	} else {
 		err = s.saveConfig(change)
@@ -532,6 +642,117 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		TotalBytes int64             `json:"totalBytes"`
+		Reset      model.ResetConfig `json:"reset"`
+	}
+	if decodeJSON(r, &input) != nil {
+		writeError(w, 400, "请求格式无效")
+		return
+	}
+	if err := s.saveConfig(func(cfg *model.Config) {
+		cfg.TotalBytes = input.TotalBytes
+		cfg.Reset = input.Reset
+	}); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if err := s.Traffic.UpdateSchedule(); err != nil {
+		writeError(w, 500, "更新重置周期失败")
+		return
+	}
+	if err := s.Traffic.ReconcileQuota(r.Context()); err != nil {
+		writeError(w, 500, "应用流量限额失败")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) updateOutboundSettings(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		OutboundStrategy string `json:"outboundStrategy"`
+	}
+	if decodeJSON(r, &input) != nil {
+		writeError(w, 400, "请求格式无效")
+		return
+	}
+	if input.OutboundStrategy == "" {
+		input.OutboundStrategy = model.OutboundStrategyAuto
+	}
+	current := s.Config.Get()
+	currentStrategy := current.OutboundStrategy
+	if currentStrategy == "" {
+		currentStrategy = model.OutboundStrategyAuto
+	}
+	if currentStrategy == input.OutboundStrategy {
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	if err := s.mutate(r.Context(), func(cfg *model.Config) {
+		cfg.OutboundStrategy = input.OutboundStrategy
+	}); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) updateWireGuardSettings(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		WireGuardExit *model.WireGuardExitConfig `json:"wireGuardExit"`
+	}
+	if decodeJSON(r, &input) != nil || input.WireGuardExit == nil {
+		writeError(w, 400, "请求格式无效")
+		return
+	}
+	input.WireGuardExit = normalizeWireGuardExit(input.WireGuardExit)
+	current := s.Config.Get()
+	nextInbounds := current.Inbounds
+	if input.WireGuardExit.Enabled {
+		var err error
+		nextInbounds, err = ensureWireGuardExitCredentials(nextInbounds)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
+	change := func(cfg *model.Config) {
+		cfg.WireGuardExit = cloneWireGuardExit(input.WireGuardExit)
+		cfg.Inbounds = nextInbounds
+	}
+	var err error
+	if wireGuardExitChangesCore(current.WireGuardExit, input.WireGuardExit) || wireGuardExitCredentialsChanged(current.Inbounds, nextInbounds) {
+		err = s.mutate(r.Context(), change)
+	} else {
+		err = s.saveConfig(change)
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	stored := s.Config.Get()
+	storedStrategy := stored.OutboundStrategy
+	if storedStrategy == "" {
+		storedStrategy = model.OutboundStrategyAuto
+	}
+	publicKey, _ := protocol.WireGuardPublicKey(input.WireGuardExit.PrivateKey)
+	writeJSON(w, 200, map[string]any{
+		"ok":                      true,
+		"outboundStrategy":        storedStrategy,
+		"wireGuardLocalPublicKey": publicKey,
+	})
+}
+
+func (s *Server) generateWireGuardKeypair(w http.ResponseWriter, _ *http.Request) {
+	keys, err := protocol.GenerateWireGuardKeys()
+	if err != nil {
+		writeError(w, 500, "无法生成 WireGuard 密钥")
+		return
+	}
+	writeJSON(w, 200, keys)
 }
 func (s *Server) regenerateToken(w http.ResponseWriter, r *http.Request) {
 	token, err := protocol.RandomToken(32)
@@ -596,6 +817,13 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		link, err := d.ShareLink(inbound, protocol.ShareContext{Domain: cfg.Domain})
 		if err == nil {
 			links = append(links, link)
+		}
+		if cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
+			if variant, ok := protocol.WireGuardExitVariant(inbound, cfg.WireGuardExit.Label); ok {
+				if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+					links = append(links, link)
+				}
+			}
 		}
 	}
 	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
@@ -796,6 +1024,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"请求方法不支持":               "Method not allowed.",
 		"更新重置周期失败":              "Could not update the reset schedule.",
 		"应用流量限额失败":              "Could not apply the traffic quota.",
+		"无法生成 WireGuard 密钥":     "Could not generate WireGuard keys.",
 		"生成 Token 失败":           "Could not generate a token.",
 		"新密码长度必须为 12 到 128 个字符": "The new password must be 12 to 128 characters long.",
 		"当前密码错误":                "The current password is incorrect.",

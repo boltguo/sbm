@@ -82,6 +82,7 @@ If you forget the password, run `sudo sbm` and choose `Reset administrator passw
 - Automatic UUID, Reality key pair, short ID, and Hysteria2 password generation
 - Manual traffic reset or monthly reset on days 1–28
 - Automatic, prefer IPv4, prefer IPv6, IPv4-only, or IPv6-only proxy egress strategy
+- Same-port WireGuard IPv4 companion nodes for each protocol, with no WireGuard package on A
 - Automatic sing-box validation and rollback when a protocol change fails
 
 ### IPv4 / IPv6 egress
@@ -89,6 +90,14 @@ If you forget the password, run `sudo sbm` and choose `Reset administrator passw
 Choose an address-family strategy under `Settings → Proxy egress network`. If IPv6 has more accurate geolocation, use **Prefer IPv6**: sing-box prefers IPv6 for destinations with AAAA records and falls back to IPv4 when needed. IPv6-only makes IPv4-only destinations unreachable.
 
 This setting requires sing-box 1.12 or newer and only affects domain destinations received by sing-box. The server cannot switch address family after a client has already resolved a domain to an IP. IPv6 client access also requires a correct AAAA record and matching rules in both the cloud and host firewalls.
+
+### WireGuard exit node
+
+Starting with v1.2.0, configure B under `Settings → WireGuard companion nodes`. With the switch off, the subscription contains only the original direct nodes. Turning it on adds a separate credential on the same domain and port for every enabled protocol, such as `DMIT VLESS · via GCP` and `DMIT HY2 · via GCP`. Original direct nodes always remain.
+
+Companion credentials are routed by authenticated user to the userspace WireGuard endpoint and resolve domain targets as IPv4. Other nodes continue to use the address-family strategy under `Proxy egress network` and leave directly through A. Turning the switch off hides the companion credentials from sing-box and the subscription without discarding their UUIDs or passwords.
+
+The panel can generate A's WireGuard keypair. A's internal tunnel address (`10.66.0.2/32`), MTU (`1408`), and keepalive (`25s`) are built in. B still needs WireGuard, IPv4 forwarding, NAT, and a cloud firewall rule allowing the UDP port from A. If B or the tunnel fails, only the `via GCP` nodes stop working; clients can switch directly to the original nodes.
 
 ## Manage SBM from the terminal
 

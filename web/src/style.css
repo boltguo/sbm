@@ -1185,14 +1185,114 @@ label small {
   font-size: 10px;
 }
 
+.wireguard-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.wireguard-section::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--line-strong);
+  content: "";
+  transition: background .18s ease;
+}
+
+.wireguard-section.active::before {
+  background: var(--signal-dark);
+}
+
+.wireguard-fields {
+  align-items: start;
+}
+
+.wireguard-switch-row {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+}
+
+.wireguard-section.active .wireguard-switch-row {
+  border-color: var(--ink);
+  background: #eaf7c7;
+}
+
+.wireguard-switch-row strong,
+.wireguard-switch-row small {
+  display: block;
+}
+
+.wireguard-switch-row strong {
+  font: 800 13px/1.2 var(--mono);
+  letter-spacing: .04em;
+}
+
+.wireguard-switch-row small {
+  margin-top: 6px;
+  color: var(--muted);
+  font: 10px/1.45 var(--mono);
+}
+
+.wireguard-key-field {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.wireguard-key-field > label {
+  font: 700 10px var(--mono);
+  letter-spacing: .055em;
+}
+
+.wireguard-key-control {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.wireguard-key-control .password-input input {
+  border-right: 0;
+}
+
+.wireguard-key-control > button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.wireguard-public-key {
+  min-height: 44px;
+  margin: 0;
+}
+
+.wireguard-public-key code {
+  font-size: 10px;
+}
+
+.wireguard-public-key button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
 .self-end {
   align-self: end;
 }
 
-.save-row {
+.section-save-row {
   display: flex;
+  grid-column: 1 / -1;
   justify-content: flex-end;
-  padding: 16px 0 34px;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.section-save-row .primary {
+  margin-top: 14px;
 }
 
 .danger-outline {
@@ -1818,15 +1918,24 @@ label small {
     grid-template-columns: 1fr;
   }
 
+  .wireguard-key-control {
+    grid-template-columns: 1fr;
+  }
+
+  .wireguard-key-control .password-input input {
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .wireguard-key-control > button {
+    width: 100%;
+  }
+
   .settings-fields.full-fields .danger-outline {
     width: 100%;
   }
 
-  .save-row {
-    padding: 14px 0 28px;
-  }
-
-  .save-row .primary {
+  .section-save-row .primary {
     width: 100%;
   }
 

@@ -201,10 +201,13 @@ func TestChangePassword(t *testing.T) {
 
 func TestSettingsUpdatesOutboundStrategyAndCoreConfig(t *testing.T) {
 	s, cfg := testServer(t)
+	cfg.TotalBytes = 123456789
+	cfg.WireGuardExit = &model.WireGuardExitConfig{Server: "wireguard-draft"}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
-	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
-		"totalBytes":       cfg.TotalBytes,
-		"reset":            cfg.Reset,
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/outbound", map[string]any{
 		"outboundStrategy": model.OutboundStrategyPreferIPv6,
 	})
 	s.Handler().ServeHTTP(response, req)
@@ -214,12 +217,88 @@ func TestSettingsUpdatesOutboundStrategyAndCoreConfig(t *testing.T) {
 	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyPreferIPv6 {
 		t.Fatalf("outbound strategy=%q", got)
 	}
+	if got := s.Config.Get(); got.TotalBytes != cfg.TotalBytes || got.WireGuardExit == nil || got.WireGuardExit.Server != "wireguard-draft" {
+		t.Fatalf("outbound save overwrote unrelated settings: %#v", got)
+	}
 	coreConfig, err := os.ReadFile(s.Core.ConfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(coreConfig), `"strategy": "prefer_ipv6"`) || !strings.Contains(string(coreConfig), `"type": "local"`) {
 		t.Fatalf("core config missing IPv6 preference: %s", coreConfig)
+	}
+}
+
+func TestTrafficSettingsOnlyUpdateTrafficFields(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.OutboundStrategy = model.OutboundStrategyPreferIPv6
+	cfg.WireGuardExit = &model.WireGuardExitConfig{Server: "draft.example.invalid"}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	nextReset := model.ResetConfig{Mode: "monthly", Day: 8, Timezone: "Asia/Tokyo"}
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/traffic", map[string]any{
+		"totalBytes": int64(42 * 1024 * 1024),
+		"reset":      nextReset,
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored := s.Config.Get()
+	if stored.TotalBytes != 42*1024*1024 || stored.Reset != nextReset {
+		t.Fatalf("traffic settings not stored: total=%d reset=%#v", stored.TotalBytes, stored.Reset)
+	}
+	if stored.OutboundStrategy != model.OutboundStrategyPreferIPv6 {
+		t.Fatalf("traffic save overwrote outbound strategy: %q", stored.OutboundStrategy)
+	}
+	if stored.WireGuardExit == nil || stored.WireGuardExit.Server != "draft.example.invalid" {
+		t.Fatalf("traffic save overwrote WireGuard draft: %#v", stored.WireGuardExit)
+	}
+}
+
+func TestWireGuardDraftPreservesOutboundStrategy(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.OutboundStrategy = model.OutboundStrategyPreferIPv6
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	draft := model.DefaultWireGuardExitConfig()
+	draft.Server = "203.0.113.15"
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/wireguard", map[string]any{
+		"wireGuardExit": draft,
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored := s.Config.Get()
+	if stored.OutboundStrategy != model.OutboundStrategyPreferIPv6 {
+		t.Fatalf("disabled WireGuard draft changed outbound strategy: %q", stored.OutboundStrategy)
+	}
+	if stored.WireGuardExit == nil || stored.WireGuardExit.Server != draft.Server || stored.WireGuardExit.Enabled {
+		t.Fatalf("WireGuard draft was not stored: %#v", stored.WireGuardExit)
+	}
+}
+
+func TestWireGuardDraftAppliesBuiltInDefaults(t *testing.T) {
+	s, _ := testServer(t)
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/wireguard", map[string]any{
+		"wireGuardExit": map[string]any{
+			"enabled": false,
+			"server":  " 203.0.113.15 ",
+		},
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored := s.Config.Get().WireGuardExit
+	if stored == nil || stored.Label != "GCP" || stored.Server != "203.0.113.15" || stored.ServerPort != 51820 {
+		t.Fatalf("WireGuard defaults were not applied: %#v", stored)
 	}
 }
 
@@ -237,15 +316,93 @@ func TestSettingsReturnsAutomaticStrategyForLegacyConfig(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"outboundStrategy":"auto"`) {
 		t.Fatalf("legacy config was not normalized: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"wireGuardExit":{"enabled":false`) || !strings.Contains(response.Body.String(), `"serverPort":51820`) {
+		t.Fatalf("legacy WireGuard defaults missing: %s", response.Body.String())
+	}
+}
+
+func TestGenerateWireGuardKeypair(t *testing.T) {
+	s, _ := testServer(t)
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodPost, "/api/settings/wireguard/keypair", map[string]any{}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var keys protocol.WireGuardKeys
+	if err := json.Unmarshal(response.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
+	derived, err := protocol.WireGuardPublicKey(keys.Private)
+	if err != nil || derived != keys.Public {
+		t.Fatalf("invalid generated keypair: %#v, %v", keys, err)
+	}
+}
+
+func TestSettingsEnablesWireGuardExitAndCoreConfig(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.TotalBytes = 987654321
+	cfg.Reset = model.ResetConfig{Mode: "monthly", Day: 12, Timezone: "UTC"}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	exit := testWireGuardExit(t)
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/wireguard", map[string]any{
+		"wireGuardExit": exit,
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stored := s.Config.Get().WireGuardExit
+	if stored == nil || !stored.Enabled || stored.Server != exit.Server {
+		t.Fatalf("WireGuard exit was not stored: %#v", stored)
+	}
+	if got := s.Config.Get(); got.OutboundStrategy != cfg.OutboundStrategy || got.TotalBytes != cfg.TotalBytes || got.Reset != cfg.Reset {
+		t.Fatalf("WireGuard save did not preserve unrelated settings: %#v", got)
+	}
+	if got := s.Config.Get().Inbounds[0].Hysteria2.WireGuardExitPassword; got == "" {
+		t.Fatal("WireGuard companion credential was not generated")
+	}
+	coreConfig, err := os.ReadFile(s.Core.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(coreConfig)
+	for _, expected := range []string{`"type": "wireguard"`, `"tag": "exit-wireguard"`, `"final": "direct"`, `"allowed_ips"`, `"auth_user"`, `"action": "resolve"`, `"outbound": "exit-wireguard"`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("core config missing %s: %s", expected, text)
+		}
+	}
+	if strings.Contains(text, `"default_domain_resolver"`) {
+		t.Fatalf("WireGuard companion nodes changed the global resolver: %s", text)
+	}
+}
+
+func TestSettingsRollsBackWireGuardExitWhenCoreCheckFails(t *testing.T) {
+	s, _ := testServer(t)
+	s.Core.Commands = checkFailureCommander{}
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/wireguard", map[string]any{
+		"wireGuardExit": testWireGuardExit(t),
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := s.Config.Get().WireGuardExit; got != nil {
+		t.Fatalf("failed WireGuard exit was not rolled back: %#v", got)
+	}
+	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyAuto {
+		t.Fatalf("forced outbound strategy was not rolled back: %q", got)
+	}
 }
 
 func TestSettingsRollsBackOutboundStrategyWhenCoreCheckFails(t *testing.T) {
-	s, cfg := testServer(t)
+	s, _ := testServer(t)
 	s.Core.Commands = checkFailureCommander{}
 	response := httptest.NewRecorder()
-	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
-		"totalBytes":       cfg.TotalBytes,
-		"reset":            cfg.Reset,
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/outbound", map[string]any{
 		"outboundStrategy": model.OutboundStrategyPreferIPv6,
 	})
 	s.Handler().ServeHTTP(response, req)
@@ -257,12 +414,26 @@ func TestSettingsRollsBackOutboundStrategyWhenCoreCheckFails(t *testing.T) {
 	}
 }
 
+func testWireGuardExit(t *testing.T) *model.WireGuardExitConfig {
+	t.Helper()
+	localKeys, err := protocol.GenerateWireGuardKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerKeys, err := protocol.GenerateWireGuardKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &model.WireGuardExitConfig{
+		Enabled: true, Label: "GCP", Server: "203.0.113.10", ServerPort: 51820,
+		PrivateKey: localKeys.Private, PeerPublicKey: peerKeys.Public,
+	}
+}
+
 func TestSettingsRejectsUnknownOutboundStrategy(t *testing.T) {
-	s, cfg := testServer(t)
+	s, _ := testServer(t)
 	response := httptest.NewRecorder()
-	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
-		"totalBytes":       cfg.TotalBytes,
-		"reset":            cfg.Reset,
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/outbound", map[string]any{
 		"outboundStrategy": "fastest_magic",
 	})
 	s.Handler().ServeHTTP(response, req)
@@ -292,6 +463,50 @@ func TestSubscriptionContentAndHeaders(t *testing.T) {
 	}
 	if response.Header().Get("Subscription-Userinfo") == "" || response.Header().Get("Profile-Title") == "" {
 		t.Fatal("subscription headers missing")
+	}
+}
+
+func TestSubscriptionShowsWireGuardCompanionOnlyWhileEnabled(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.WireGuardExit = testWireGuardExit(t)
+	if err := protocol.EnsureWireGuardExitCredential(&cfg.Inbounds[0]); err != nil {
+		t.Fatal(err)
+	}
+	exitPassword := cfg.Inbounds[0].Hysteria2.WireGuardExitPassword
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	readLinks := func() []string {
+		t.Helper()
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/sub/"+cfg.SubscriptionToken, nil)
+		req.Header.Set("Accept", "text/plain")
+		s.Handler().ServeHTTP(response, req)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		decoded, err := base64.StdEncoding.DecodeString(response.Body.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(string(decoded), "\n")
+	}
+
+	links := readLinks()
+	if len(links) != 2 || !strings.Contains(links[1], exitPassword) || !strings.Contains(links[1], "via%20GCP") {
+		t.Fatalf("unexpected enabled subscription: %#v", links)
+	}
+	cfg.WireGuardExit.Enabled = false
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	links = readLinks()
+	if len(links) != 1 || strings.Contains(links[0], exitPassword) {
+		t.Fatalf("disabled companion remained in subscription: %#v", links)
+	}
+	if got := s.Config.Get().Inbounds[0].Hysteria2.WireGuardExitPassword; got != exitPassword {
+		t.Fatalf("disabled companion credential was discarded: %q", got)
 	}
 }
 

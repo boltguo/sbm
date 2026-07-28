@@ -6,6 +6,10 @@ const (
 	ConfigVersion = 1
 	StateVersion  = 1
 
+	WireGuardExitLocalAddress        = "10.66.0.2/32"
+	WireGuardExitMTU                 = 1408
+	WireGuardExitPersistentKeepalive = 25
+
 	OutboundStrategyAuto       = "auto"
 	OutboundStrategyPreferIPv4 = "prefer_ipv4"
 	OutboundStrategyPreferIPv6 = "prefer_ipv6"
@@ -14,24 +18,34 @@ const (
 )
 
 type Config struct {
-	Version           int         `json:"version"`
-	Domain            string      `json:"domain"`
-	PanelPort         int         `json:"panelPort"`
-	AdminUsername     string      `json:"adminUsername"`
-	AdminPasswordHash string      `json:"adminPasswordHash"`
-	SessionSecret     string      `json:"sessionSecret"`
-	ClashAPISecret    string      `json:"clashAPISecret"`
-	SubscriptionToken string      `json:"subscriptionToken"`
-	TotalBytes        int64       `json:"totalBytes"`
-	Reset             ResetConfig `json:"reset"`
-	OutboundStrategy  string      `json:"outboundStrategy,omitempty"`
-	Inbounds          []Inbound   `json:"inbounds"`
+	Version           int                  `json:"version"`
+	Domain            string               `json:"domain"`
+	PanelPort         int                  `json:"panelPort"`
+	AdminUsername     string               `json:"adminUsername"`
+	AdminPasswordHash string               `json:"adminPasswordHash"`
+	SessionSecret     string               `json:"sessionSecret"`
+	ClashAPISecret    string               `json:"clashAPISecret"`
+	SubscriptionToken string               `json:"subscriptionToken"`
+	TotalBytes        int64                `json:"totalBytes"`
+	Reset             ResetConfig          `json:"reset"`
+	OutboundStrategy  string               `json:"outboundStrategy,omitempty"`
+	WireGuardExit     *WireGuardExitConfig `json:"wireGuardExit,omitempty"`
+	Inbounds          []Inbound            `json:"inbounds"`
 }
 
 type ResetConfig struct {
 	Mode     string `json:"mode"`
 	Day      int    `json:"day"`
 	Timezone string `json:"timezone"`
+}
+
+type WireGuardExitConfig struct {
+	Enabled       bool   `json:"enabled"`
+	Label         string `json:"label"`
+	Server        string `json:"server"`
+	ServerPort    int    `json:"serverPort"`
+	PrivateKey    string `json:"privateKey"`
+	PeerPublicKey string `json:"peerPublicKey"`
 }
 
 type Inbound struct {
@@ -45,17 +59,19 @@ type Inbound struct {
 }
 
 type VLESSOptions struct {
-	UUID       string `json:"uuid"`
-	SNI        string `json:"sni"`
-	PrivateKey string `json:"privateKey"`
-	PublicKey  string `json:"publicKey"`
-	ShortID    string `json:"shortId"`
+	UUID              string `json:"uuid"`
+	WireGuardExitUUID string `json:"wireGuardExitUuid,omitempty"`
+	SNI               string `json:"sni"`
+	PrivateKey        string `json:"privateKey"`
+	PublicKey         string `json:"publicKey"`
+	ShortID           string `json:"shortId"`
 }
 
 type Hysteria2Options struct {
-	Password     string `json:"password"`
-	Obfs         string `json:"obfs,omitempty"`
-	ObfsPassword string `json:"obfsPassword,omitempty"`
+	Password              string `json:"password"`
+	WireGuardExitPassword string `json:"wireGuardExitPassword,omitempty"`
+	Obfs                  string `json:"obfs,omitempty"`
+	ObfsPassword          string `json:"obfsPassword,omitempty"`
 }
 
 type State struct {
@@ -77,6 +93,13 @@ func DefaultConfig() Config {
 		Version: ConfigVersion, PanelPort: 2096, AdminUsername: "admin",
 		Reset:            ResetConfig{Mode: "none", Day: 1, Timezone: "Local"},
 		OutboundStrategy: OutboundStrategyAuto,
+	}
+}
+
+func DefaultWireGuardExitConfig() WireGuardExitConfig {
+	return WireGuardExitConfig{
+		Label:      "GCP",
+		ServerPort: 51820,
 	}
 }
 

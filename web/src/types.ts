@@ -34,8 +34,8 @@ export interface UpdateStatus {
   checkedAt: string
 }
 
-export interface VLESSOptions { uuid: string; sni: string; privateKey: string; publicKey: string; shortId: string }
-export interface Hysteria2Options { password: string; obfs?: string; obfsPassword?: string }
+export interface VLESSOptions { uuid: string; wireGuardExitUuid?: string; sni: string; privateKey: string; publicKey: string; shortId: string }
+export interface Hysteria2Options { password: string; wireGuardExitPassword?: string; obfs?: string; obfsPassword?: string }
 export interface Inbound {
   id: string
   type: 'vless-reality' | 'hysteria2'
@@ -50,7 +50,24 @@ export interface Inbound {
 
 export interface ResetConfig { mode: 'none' | 'monthly'; day: number; timezone: string }
 export type OutboundStrategy = 'auto' | 'prefer_ipv4' | 'prefer_ipv6' | 'ipv4_only' | 'ipv6_only'
-export interface Settings { domain: string; panelPort: number; totalBytes: number; reset: ResetConfig; outboundStrategy: OutboundStrategy; subscriptionURL: string }
+export interface WireGuardExitConfig {
+  enabled: boolean
+  label: string
+  server: string
+  serverPort: number
+  privateKey: string
+  peerPublicKey: string
+}
+export interface Settings {
+  domain: string
+  panelPort: number
+  totalBytes: number
+  reset: ResetConfig
+  outboundStrategy: OutboundStrategy
+  wireGuardExit: WireGuardExitConfig
+  wireGuardLocalPublicKey: string
+  subscriptionURL: string
+}
 
 export interface ServerStatus {
   hostname: string
