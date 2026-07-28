@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -31,8 +32,20 @@ import (
 
 type successCommander struct{}
 
-func (successCommander) Run(context.Context, string, ...string) ([]byte, error) {
+func (successCommander) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && len(args) > 0 && args[0] == "is-active" {
+		return []byte("active"), nil
+	}
 	return []byte("sing-box version 1.12.0"), nil
+}
+
+type checkFailureCommander struct{ successCommander }
+
+func (c checkFailureCommander) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "check" {
+		return []byte("invalid configuration"), errors.New("exit status 1")
+	}
+	return c.successCommander.Run(ctx, name, args...)
 }
 
 type fakeReleases struct {
@@ -183,6 +196,81 @@ func TestChangePassword(t *testing.T) {
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte("old-password-123")) == nil {
 		t.Fatal("old password still accepted")
+	}
+}
+
+func TestSettingsUpdatesOutboundStrategyAndCoreConfig(t *testing.T) {
+	s, cfg := testServer(t)
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
+		"totalBytes":       cfg.TotalBytes,
+		"reset":            cfg.Reset,
+		"outboundStrategy": model.OutboundStrategyPreferIPv6,
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyPreferIPv6 {
+		t.Fatalf("outbound strategy=%q", got)
+	}
+	coreConfig, err := os.ReadFile(s.Core.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(coreConfig), `"strategy": "prefer_ipv6"`) || !strings.Contains(string(coreConfig), `"type": "local"`) {
+		t.Fatalf("core config missing IPv6 preference: %s", coreConfig)
+	}
+}
+
+func TestSettingsReturnsAutomaticStrategyForLegacyConfig(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.OutboundStrategy = ""
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/settings", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"outboundStrategy":"auto"`) {
+		t.Fatalf("legacy config was not normalized: %s", response.Body.String())
+	}
+}
+
+func TestSettingsRollsBackOutboundStrategyWhenCoreCheckFails(t *testing.T) {
+	s, cfg := testServer(t)
+	s.Core.Commands = checkFailureCommander{}
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
+		"totalBytes":       cfg.TotalBytes,
+		"reset":            cfg.Reset,
+		"outboundStrategy": model.OutboundStrategyPreferIPv6,
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyAuto {
+		t.Fatalf("failed strategy change was not rolled back: %q", got)
+	}
+}
+
+func TestSettingsRejectsUnknownOutboundStrategy(t *testing.T) {
+	s, cfg := testServer(t)
+	response := httptest.NewRecorder()
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{
+		"totalBytes":       cfg.TotalBytes,
+		"reset":            cfg.Reset,
+		"outboundStrategy": "fastest_magic",
+	})
+	s.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyAuto {
+		t.Fatalf("invalid outbound strategy was stored: %q", got)
 	}
 }
 

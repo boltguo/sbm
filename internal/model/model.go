@@ -5,6 +5,12 @@ import "time"
 const (
 	ConfigVersion = 1
 	StateVersion  = 1
+
+	OutboundStrategyAuto       = "auto"
+	OutboundStrategyPreferIPv4 = "prefer_ipv4"
+	OutboundStrategyPreferIPv6 = "prefer_ipv6"
+	OutboundStrategyIPv4Only   = "ipv4_only"
+	OutboundStrategyIPv6Only   = "ipv6_only"
 )
 
 type Config struct {
@@ -18,6 +24,7 @@ type Config struct {
 	SubscriptionToken string      `json:"subscriptionToken"`
 	TotalBytes        int64       `json:"totalBytes"`
 	Reset             ResetConfig `json:"reset"`
+	OutboundStrategy  string      `json:"outboundStrategy,omitempty"`
 	Inbounds          []Inbound   `json:"inbounds"`
 }
 
@@ -68,7 +75,8 @@ func (s State) Total() int64 { return s.Upload + s.Download }
 func DefaultConfig() Config {
 	return Config{
 		Version: ConfigVersion, PanelPort: 2096, AdminUsername: "admin",
-		Reset: ResetConfig{Mode: "none", Day: 1, Timezone: "Local"},
+		Reset:            ResetConfig{Mode: "none", Day: 1, Timezone: "Local"},
+		OutboundStrategy: OutboundStrategyAuto,
 	}
 }
 

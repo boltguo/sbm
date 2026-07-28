@@ -482,18 +482,44 @@ func (s *Server) saveConfig(change func(*model.Config)) error {
 
 func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.Config.Get()
-	writeJSON(w, 200, map[string]any{"domain": cfg.Domain, "panelPort": cfg.PanelPort, "totalBytes": cfg.TotalBytes, "reset": cfg.Reset, "subscriptionURL": subscriptionURL(cfg)})
+	outboundStrategy := cfg.OutboundStrategy
+	if outboundStrategy == "" {
+		outboundStrategy = model.OutboundStrategyAuto
+	}
+	writeJSON(w, 200, map[string]any{
+		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "totalBytes": cfg.TotalBytes, "reset": cfg.Reset,
+		"outboundStrategy": outboundStrategy, "subscriptionURL": subscriptionURL(cfg),
+	})
 }
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		TotalBytes int64             `json:"totalBytes"`
-		Reset      model.ResetConfig `json:"reset"`
+		TotalBytes       int64             `json:"totalBytes"`
+		Reset            model.ResetConfig `json:"reset"`
+		OutboundStrategy string            `json:"outboundStrategy"`
 	}
 	if decodeJSON(r, &input) != nil {
 		writeError(w, 400, "请求格式无效")
 		return
 	}
-	if err := s.saveConfig(func(cfg *model.Config) { cfg.TotalBytes = input.TotalBytes; cfg.Reset = input.Reset }); err != nil {
+	if input.OutboundStrategy == "" {
+		input.OutboundStrategy = model.OutboundStrategyAuto
+	}
+	change := func(cfg *model.Config) {
+		cfg.TotalBytes = input.TotalBytes
+		cfg.Reset = input.Reset
+		cfg.OutboundStrategy = input.OutboundStrategy
+	}
+	currentStrategy := s.Config.Get().OutboundStrategy
+	if currentStrategy == "" {
+		currentStrategy = model.OutboundStrategyAuto
+	}
+	var err error
+	if currentStrategy != input.OutboundStrategy {
+		err = s.mutate(r.Context(), change)
+	} else {
+		err = s.saveConfig(change)
+	}
+	if err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}

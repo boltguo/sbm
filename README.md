@@ -81,7 +81,14 @@ If you forget the password, run `sudo sbm` and choose `Reset administrator passw
 - Copy a single-node URL or display its QR code
 - Automatic UUID, Reality key pair, short ID, and Hysteria2 password generation
 - Manual traffic reset or monthly reset on days 1–28
+- Automatic, prefer IPv4, prefer IPv6, IPv4-only, or IPv6-only proxy egress strategy
 - Automatic sing-box validation and rollback when a protocol change fails
+
+### IPv4 / IPv6 egress
+
+Choose an address-family strategy under `Settings → Proxy egress network`. If IPv6 has more accurate geolocation, use **Prefer IPv6**: sing-box prefers IPv6 for destinations with AAAA records and falls back to IPv4 when needed. IPv6-only makes IPv4-only destinations unreachable.
+
+This setting requires sing-box 1.12 or newer and only affects domain destinations received by sing-box. The server cannot switch address family after a client has already resolved a domain to an IP. IPv6 client access also requires a correct AAAA record and matching rules in both the cloud and host firewalls.
 
 ## Manage SBM from the terminal
 
