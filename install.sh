@@ -21,6 +21,10 @@ readonly FIREWALL_PORTS="/etc/sbm/firewall-ports"
 readonly FIREWALL_SERVICE="/etc/systemd/system/sbm-firewall.service"
 readonly CORE_GUARD="/usr/local/lib/sbm/core-start-allowed.sh"
 readonly SELF_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
+readonly -a RUNTIME_PACKAGES=(
+  bash ca-certificates coreutils cron curl gawk grep gzip iproute2 iptables
+  libc-bin openssl procps sed socat tar
+)
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'; RESET=$'\e[0m'
 info() { printf '%s[*]%s %s\n' "$GREEN" "$RESET" "$*"; }
@@ -254,12 +258,19 @@ post_install_check() {
   info "安装后检查通过：TCP/443、UDP/443 和 TCP/${panel_port} 正在监听，面板 HTTPS 响应正常。"
 }
 install_deps() {
-  info "安装最少运行依赖…"
+  local package status missing=()
+  info "检查最少运行依赖…"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y >/dev/null || die "apt 软件源更新失败，请检查 /etc/apt/sources.list 和服务器网络。"
-  apt-get install -y --no-install-recommends \
-    bash ca-certificates coreutils cron curl gawk grep gzip iproute2 iptables libc-bin openssl procps sed socat tar >/dev/null \
-    || die "运行依赖安装失败，请修复 apt 报错后重新运行安装命令。"
+  for package in "${RUNTIME_PACKAGES[@]}"; do
+    status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+    [[ "$status" == "install ok installed" ]] || missing+=("$package")
+  done
+  if ((${#missing[@]} > 0)); then
+    info "安装缺少的运行依赖：${missing[*]}"
+    apt-get update -y >/dev/null || die "apt 软件源更新失败，请检查 /etc/apt/sources.list 和服务器网络。"
+    apt-get install -y --no-install-recommends "${missing[@]}" >/dev/null \
+      || die "运行依赖安装失败，请修复 apt 报错后重新运行安装命令。"
+  fi
   check_required_commands
   command -v crontab >/dev/null || die "cron 已安装，但未找到 crontab，无法配置证书自动续期。"
   systemctl enable --now cron.service >/dev/null 2>&1 || die "无法启动 cron 服务，证书将不能自动续期。"

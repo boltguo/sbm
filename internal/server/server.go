@@ -326,8 +326,14 @@ func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request) {
 
 type inboundView struct {
 	model.Inbound
-	Link    string `json:"link"`
-	Network string `json:"network"`
+	Link          string             `json:"link"`
+	Network       string             `json:"network"`
+	WireGuardNode *companionNodeView `json:"wireGuardNode,omitempty"`
+}
+
+type companionNodeView struct {
+	Name string `json:"name"`
+	Link string `json:"link"`
 }
 
 func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
@@ -336,7 +342,15 @@ func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
 	for _, in := range cfg.Inbounds {
 		d, _ := s.Registry.Get(in.Type)
 		link, _ := d.ShareLink(in, protocol.ShareContext{Domain: cfg.Domain})
-		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network()})
+		var wireGuardNode *companionNodeView
+		if in.Enabled && cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
+			if variant, ok := protocol.WireGuardExitVariant(in, cfg.WireGuardExit.Label); ok {
+				if companionLink, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+					wireGuardNode = &companionNodeView{Name: variant.Name, Link: companionLink}
+				}
+			}
+		}
+		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network(), WireGuardNode: wireGuardNode})
 	}
 	writeJSON(w, 200, result)
 }
@@ -459,7 +473,13 @@ func (s *Server) mutate(ctx context.Context, change func(*model.Config)) error {
 		_ = s.Config.Replace(old)
 		return errors.New("保存流量状态失败")
 	}
-	if err := s.Core.Apply(ctx, next, s.Traffic.State().QuotaExceeded); err != nil {
+	// Applying a core configuration intentionally restarts sing-box. When the
+	// administrator reaches the panel through that same proxy, the restart
+	// cancels the HTTP request. Finish the already-persisted transaction with
+	// its own deadline so a dropped client connection cannot cause a rollback.
+	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := s.Core.Apply(applyCtx, next, s.Traffic.State().QuotaExceeded); err != nil {
 		_ = s.Config.Replace(old)
 		return err
 	}

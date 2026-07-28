@@ -44,19 +44,51 @@ const saveOutbound = safe(async () => {
 const saveWireGuard = safe(async () => {
   if (!settings.value) return
   const exit = settings.value.wireGuardExit
-  const result = await put<{ outboundStrategy: Settings['outboundStrategy']; wireGuardLocalPublicKey: string }>('/api/settings/wireguard', {
-    wireGuardExit: {
-      ...exit,
-      label: exit.label.trim(),
-      server: exit.server.trim(),
-      privateKey: exit.privateKey.trim(),
-      peerPublicKey: exit.peerPublicKey.trim(),
-    },
-  })
+  const expected = {
+    ...exit,
+    label: exit.label.trim(),
+    server: exit.server.trim(),
+    privateKey: exit.privateKey.trim(),
+    peerPublicKey: exit.peerPublicKey.trim(),
+  }
+  let result: { outboundStrategy: Settings['outboundStrategy']; wireGuardLocalPublicKey: string }
+  try {
+    result = await put('/api/settings/wireguard', { wireGuardExit: expected })
+  } catch (error) {
+    if ((error as Error & { status?: number }).status !== undefined) throw error
+    const recovered = await waitForWireGuardSettings(expected)
+    if (!recovered) throw error
+    emit('toast', t('settings.wireGuardSaved'))
+    return
+  }
   settings.value.outboundStrategy = result.outboundStrategy
   settings.value.wireGuardLocalPublicKey = result.wireGuardLocalPublicKey
   emit('toast', t('settings.wireGuardSaved'))
 })
+async function waitForWireGuardSettings(expected: Settings['wireGuardExit']): Promise<boolean> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise(resolve => window.setTimeout(resolve, 500))
+    try {
+      const current = await api<Settings>('/api/settings')
+      const actual = current.wireGuardExit
+      if (
+        actual.enabled === expected.enabled &&
+        actual.label === expected.label &&
+        actual.server === expected.server &&
+        actual.serverPort === expected.serverPort &&
+        actual.privateKey === expected.privateKey &&
+        actual.peerPublicKey === expected.peerPublicKey
+      ) {
+        settings.value = current
+        quotaGB.value = Math.round(current.totalBytes / 1024 ** 3 * 100) / 100
+        return true
+      }
+    } catch {
+      // The proxy is restarting; retry until the direct node reconnects.
+    }
+  }
+  return false
+}
 const generateWireGuardKeypair = safe(async () => {
   if (!settings.value) return
   const keys = await post<{ privateKey: string; publicKey: string }>('/api/settings/wireguard/keypair')

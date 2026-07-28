@@ -108,8 +108,14 @@ unset -f curl
 
 installed_cron=false
 installed_iptables=false
+apt_update_count=0
+apt_install_count=0
 apt-get() {
+  if [[ "$1" == update ]]; then
+    ((apt_update_count += 1))
+  fi
   if [[ "$1" == install ]]; then
+    ((apt_install_count += 1))
     [[ " $* " == *" cron "* ]]
     [[ " $* " == *" iptables "* ]]
     installed_cron=true
@@ -123,6 +129,16 @@ check_required_commands() { return 0; }
 install_deps >/dev/null
 [[ "$installed_cron" == true ]]
 [[ "$installed_iptables" == true ]]
+[[ "$apt_update_count" -eq 1 ]]
+[[ "$apt_install_count" -eq 1 ]]
+
+dpkg-query() { printf 'install ok installed'; }
+apt_update_count=0
+apt_install_count=0
+install_deps >/dev/null
+[[ "$apt_update_count" -eq 0 ]]
+[[ "$apt_install_count" -eq 0 ]]
+unset -f dpkg-query
 
 cron_contents=""
 crontab() {

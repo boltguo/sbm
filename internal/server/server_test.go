@@ -48,6 +48,26 @@ func (c checkFailureCommander) Run(ctx context.Context, name string, args ...str
 	return c.successCommander.Run(ctx, name, args...)
 }
 
+type disconnectOnRestartCommander struct {
+	cancel context.CancelFunc
+}
+
+func (c disconnectOnRestartCommander) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if name == "systemctl" && len(args) > 0 {
+		switch args[0] {
+		case "restart":
+			c.cancel()
+			return nil, nil
+		case "is-active":
+			return []byte("active"), nil
+		}
+	}
+	return []byte("sing-box version 1.12.0"), nil
+}
+
 type fakeReleases struct {
 	calls int
 	info  releasecheck.Info
@@ -118,6 +138,45 @@ func TestDashboardSeparatesPanelAndCoreVersions(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"trafficAudit":{"status":"unavailable"`) {
 		t.Fatalf("traffic audit status missing: %s", response.Body.String())
+	}
+}
+
+func TestListInboundsIncludesEnabledWireGuardCompanion(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.WireGuardExit = testWireGuardExit(t)
+	if err := protocol.EnsureWireGuardExitCredential(&cfg.Inbounds[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/inbounds", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inbounds []struct {
+		WireGuardNode *companionNodeView `json:"wireGuardNode"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &inbounds); err != nil {
+		t.Fatal(err)
+	}
+	if len(inbounds) != 1 || inbounds[0].WireGuardNode == nil {
+		t.Fatalf("WireGuard companion missing: %s", response.Body.String())
+	}
+	if got := inbounds[0].WireGuardNode; got.Name != "香港 / HY2 · via GCP" || !strings.HasPrefix(got.Link, "hysteria2://") {
+		t.Fatalf("unexpected WireGuard companion: %#v", got)
+	}
+
+	cfg.Inbounds[0].Enabled = false
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/inbounds", nil))
+	if strings.Contains(response.Body.String(), `"wireGuardNode"`) {
+		t.Fatalf("disabled inbound exposed a WireGuard companion: %s", response.Body.String())
 	}
 }
 
@@ -376,6 +435,24 @@ func TestSettingsEnablesWireGuardExitAndCoreConfig(t *testing.T) {
 	}
 	if strings.Contains(text, `"default_domain_resolver"`) {
 		t.Fatalf("WireGuard companion nodes changed the global resolver: %s", text)
+	}
+}
+
+func TestWireGuardApplySurvivesProxyDisconnect(t *testing.T) {
+	s, _ := testServer(t)
+	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/wireguard", map[string]any{
+		"wireGuardExit": testWireGuardExit(t),
+	})
+	requestCtx, cancel := context.WithCancel(req.Context())
+	s.Core.Commands = disconnectOnRestartCommander{cancel: cancel}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, req.WithContext(requestCtx))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if stored := s.Config.Get().WireGuardExit; stored == nil || !stored.Enabled {
+		t.Fatalf("client disconnect rolled back WireGuard settings: %#v", stored)
 	}
 }
 

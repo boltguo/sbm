@@ -36,6 +36,7 @@ export interface UpdateStatus {
 
 export interface VLESSOptions { uuid: string; wireGuardExitUuid?: string; sni: string; privateKey: string; publicKey: string; shortId: string }
 export interface Hysteria2Options { password: string; wireGuardExitPassword?: string; obfs?: string; obfsPassword?: string }
+export interface CompanionNode { name: string; link: string }
 export interface Inbound {
   id: string
   type: 'vless-reality' | 'hysteria2'
@@ -44,6 +45,7 @@ export interface Inbound {
   port: number
   network: 'tcp' | 'udp'
   link: string
+  wireGuardNode?: CompanionNode
   vless?: VLESSOptions
   hysteria2?: Hysteria2Options
 }

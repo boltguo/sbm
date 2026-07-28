@@ -11,12 +11,14 @@ import ConfirmAction from '../components/ConfirmAction.vue'
 import PasswordInput from '../components/PasswordInput.vue'
 import { t } from '../i18n'
 
+type LinkNode = Pick<Inbound, 'name' | 'link'>
+
 const emit = defineEmits<{ toast: [message: string] }>()
 const items = ref<Inbound[]>([])
 const editing = ref<Inbound | null>(null)
 const creating = ref(false)
 const qr = ref('')
-const qrItem = ref<Inbound | null>(null)
+const qrItem = ref<LinkNode | null>(null)
 const createForm = ref({ type: 'vless-reality' as Inbound['type'], name: t('protocol.defaultName'), port: 8443 })
 const duplicate = computed(() => items.value.some(i => i.type === createForm.value.type))
 const protocolOptions = [{ value: 'vless-reality', label: 'VLESS + Vision + REALITY' }, { value: 'hysteria2', label: 'Hysteria2' }]
@@ -29,7 +31,7 @@ const save = safe(async () => { if (!editing.value) return; await put(`/api/inbo
 const toggle = safe(async (item: Inbound) => { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() })
 const remove = safe(async (item: Inbound) => { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('protocol.linkCopied')) })
-const showQR = safe(async (item: Inbound) => { qrItem.value = item; qr.value = await QRCode.toDataURL(item.link, { width: 320, margin: 2, color: { dark: '#111712', light: '#f4f1e8' } }) })
+const showQR = safe(async (item: LinkNode) => { qrItem.value = item; qr.value = await QRCode.toDataURL(item.link, { width: 320, margin: 2, color: { dark: '#111712', light: '#f4f1e8' } }) })
 function edit(item: Inbound) { editing.value = JSON.parse(JSON.stringify(item)); delete (editing.value as any).link; delete (editing.value as any).network }
 function openCreate() { createForm.value = { type: 'vless-reality', name: t('protocol.defaultName'), port: 8443 }; creating.value = true }
 onMounted(load)
@@ -39,13 +41,21 @@ onMounted(load)
   <div class="page">
     <header class="page-head"><div><span class="eyebrow">INBOUND ROUTES</span><h1>{{ t('protocol.title') }}</h1><p>{{ t('protocol.help') }}</p></div><button class="primary" @click="openCreate"><Icon name="plus"/>{{ t('protocol.add') }}</button></header>
     <div class="protocol-grid">
-      <article v-for="item in items" :key="item.id" class="protocol-card" :class="{ disabled: !item.enabled }">
-        <div class="protocol-top"><div class="protocol-glyph">{{ item.type === 'vless-reality' ? 'VL' : 'H2' }}</div><div><span class="pill">{{ item.type === 'vless-reality' ? 'VLESS · REALITY' : 'HYSTERIA2' }}</span><h2>{{ item.name }}</h2></div><SwitchRoot :model-value="item.enabled" class="relative h-6 w-11 rounded-full border border-[var(--ink)] bg-transparent p-[3px] data-[state=checked]:bg-[var(--signal)]" :aria-label="item.enabled ? t('protocol.disable') : t('protocol.enable')" @update:model-value="toggle(item)"><SwitchThumb class="block size-4 rounded-full bg-[var(--muted)] transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-[var(--ink)]" /></SwitchRoot></div>
-        <div class="endpoint"><span>{{ item.network.toUpperCase() }}</span><code>{{ item.port }}</code><b>{{ item.enabled ? 'ACTIVE' : 'STOPPED' }}</b></div>
-        <dl v-if="item.vless"><div><dt>SNI</dt><dd>{{ item.vless.sni }}</dd></div><div><dt>FLOW</dt><dd>XTLS Vision</dd></div><div><dt>SHORT ID</dt><dd>{{ item.vless.shortId }}</dd></div></dl>
-        <dl v-else><div><dt>TLS</dt><dd>Server certificate</dd></div><div><dt>ALPN</dt><dd>h3</dd></div><div><dt>OBFS</dt><dd>{{ item.hysteria2?.obfs || t('protocol.off') }}</dd></div></dl>
-        <div class="card-actions"><button @click="copy(item.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item)">QR</button><button :aria-label="t('protocol.edit')" @click="edit(item)"><Icon name="edit"/></button><ConfirmAction :title="item.name" :message="t('protocol.deleteConfirm', { name: item.name })" destructive @confirm="remove(item)"><button class="destructive" :aria-label="t('protocol.delete')"><Icon name="trash"/></button></ConfirmAction></div>
-      </article>
+      <template v-for="item in items" :key="item.id">
+        <article class="protocol-card" :class="{ disabled: !item.enabled }">
+          <div class="protocol-top"><div class="protocol-glyph">{{ item.type === 'vless-reality' ? 'VL' : 'H2' }}</div><div><span class="pill">{{ item.type === 'vless-reality' ? 'VLESS · REALITY' : 'HYSTERIA2' }}</span><h2>{{ item.name }}</h2></div><SwitchRoot :model-value="item.enabled" class="relative h-6 w-11 rounded-full border border-[var(--ink)] bg-transparent p-[3px] data-[state=checked]:bg-[var(--signal)]" :aria-label="item.enabled ? t('protocol.disable') : t('protocol.enable')" @update:model-value="toggle(item)"><SwitchThumb class="block size-4 rounded-full bg-[var(--muted)] transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-[var(--ink)]" /></SwitchRoot></div>
+          <div class="endpoint"><span>{{ item.network.toUpperCase() }}</span><code>{{ item.port }}</code><b>{{ item.enabled ? 'ACTIVE' : 'STOPPED' }}</b></div>
+          <dl v-if="item.vless"><div><dt>SNI</dt><dd>{{ item.vless.sni }}</dd></div><div><dt>FLOW</dt><dd>XTLS Vision</dd></div><div><dt>SHORT ID</dt><dd>{{ item.vless.shortId }}</dd></div></dl>
+          <dl v-else><div><dt>TLS</dt><dd>Server certificate</dd></div><div><dt>ALPN</dt><dd>h3</dd></div><div><dt>OBFS</dt><dd>{{ item.hysteria2?.obfs || t('protocol.off') }}</dd></div></dl>
+          <div class="card-actions"><button @click="copy(item.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item)">QR</button><button :aria-label="t('protocol.edit')" @click="edit(item)"><Icon name="edit"/></button><ConfirmAction :title="item.name" :message="t('protocol.deleteConfirm', { name: item.name })" destructive @confirm="remove(item)"><button class="destructive" :aria-label="t('protocol.delete')"><Icon name="trash"/></button></ConfirmAction></div>
+        </article>
+        <article v-if="item.wireGuardNode" class="protocol-card companion-card">
+          <div class="protocol-top"><div class="protocol-glyph">WG</div><div><span class="pill">WIREGUARD · IPv4</span><h2>{{ item.wireGuardNode.name }}</h2></div><span class="companion-managed"><Icon name="route"/>{{ t('protocol.companionManaged') }}</span></div>
+          <div class="endpoint"><span>{{ item.network.toUpperCase() }}</span><code>{{ item.port }}</code><b>ACTIVE</b></div>
+          <dl><div><dt>{{ t('protocol.companionEntry') }}</dt><dd>{{ item.name }}</dd></div><div><dt>{{ t('protocol.companionEgress') }}</dt><dd>WireGuard IPv4</dd></div><div><dt>{{ t('protocol.companionControl') }}</dt><dd>{{ t('protocol.companionSettings') }}</dd></div></dl>
+          <div class="card-actions"><button @click="copy(item.wireGuardNode.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item.wireGuardNode)">QR</button></div>
+        </article>
+      </template>
       <button class="add-card" @click="openCreate"><Icon name="plus"/><strong>{{ t('protocol.addAnother') }}</strong><span>{{ t('protocol.addAnotherHelp') }}</span></button>
     </div>
 

@@ -809,6 +809,32 @@ input:focus-visible,
   opacity: .58;
 }
 
+.companion-card .protocol-glyph {
+  background: var(--signal);
+  color: var(--ink);
+}
+
+.companion-card .pill {
+  border-color: #a9c76a;
+  background: #eaf7c7;
+}
+
+.companion-managed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+  color: #61971d;
+  font: 700 9px/1 var(--mono);
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.companion-managed .icon {
+  width: 14px;
+  height: 14px;
+}
+
 .protocol-top {
   display: grid;
   min-width: 0;
@@ -1871,6 +1897,21 @@ label small {
 
   .protocol-top h2 {
     font-size: 22px;
+  }
+
+  .companion-card .protocol-top {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .companion-card .protocol-top h2 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  .companion-managed {
+    display: none;
   }
 
   .card-actions > button:first-child {
