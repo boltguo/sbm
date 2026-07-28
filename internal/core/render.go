@@ -29,14 +29,19 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		}
 		inbounds = append(inbounds, built)
 	}
+	direct := map[string]any{"type": "direct", "tag": "direct"}
 	doc := map[string]any{
 		"log":       map[string]any{"level": "warn", "timestamp": true},
 		"inbounds":  inbounds,
-		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+		"outbounds": []any{direct},
 		"route":     map[string]any{"rules": []any{}, "final": "direct"},
 		"experimental": map[string]any{"clash_api": map[string]any{
 			"external_controller": "127.0.0.1:9090", "secret": cfg.ClashAPISecret,
 		}},
+	}
+	if cfg.OutboundStrategy != "" && cfg.OutboundStrategy != model.OutboundStrategyAuto {
+		doc["dns"] = map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}}
+		direct["domain_resolver"] = map[string]any{"server": "local", "strategy": cfg.OutboundStrategy}
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

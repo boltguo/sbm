@@ -14,10 +14,17 @@ const quotaGB = ref(0)
 const password = ref({ currentPassword: '', newPassword: '', confirm: '' })
 const timezones = ['Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'UTC', 'Local']
 const resetOptions = computed(() => [{ value: 'none', label: t('settings.noReset') }, { value: 'monthly', label: t('settings.monthly') }])
+const outboundOptions = computed(() => [
+  { value: 'auto', label: t('settings.outboundAuto') },
+  { value: 'prefer_ipv4', label: t('settings.outboundPreferIPv4') },
+  { value: 'prefer_ipv6', label: t('settings.outboundPreferIPv6') },
+  { value: 'ipv4_only', label: t('settings.outboundIPv4Only') },
+  { value: 'ipv6_only', label: t('settings.outboundIPv6Only') },
+])
 const timezoneOptions = timezones.map(value => ({ value, label: value }))
 const safe = guard(message => emit('toast', message))
 const load = safe(async () => { settings.value = await api<Settings>('/api/settings'); quotaGB.value = Math.round(settings.value.totalBytes / 1024 ** 3 * 100) / 100 })
-const save = safe(async () => { if (!settings.value) return; settings.value.totalBytes = Math.round(quotaGB.value * 1024 ** 3); await put('/api/settings', { totalBytes: settings.value.totalBytes, reset: settings.value.reset }); emit('toast', t('settings.saved')) })
+const save = safe(async () => { if (!settings.value) return; settings.value.totalBytes = Math.round(quotaGB.value * 1024 ** 3); await put('/api/settings', { totalBytes: settings.value.totalBytes, reset: settings.value.reset, outboundStrategy: settings.value.outboundStrategy }); emit('toast', t('settings.saved')) })
 const token = safe(async () => { const result = await post<{ subscriptionURL: string }>('/api/settings/token'); if (settings.value) settings.value.subscriptionURL = result.subscriptionURL; emit('toast', t('settings.tokenDone')) })
 const changePassword = safe(async () => { if (password.value.newPassword !== password.value.confirm) { emit('toast', t('settings.passwordMismatch')); return }; await post('/api/settings/password', { currentPassword: password.value.currentPassword, newPassword: password.value.newPassword }); emit('toast', t('settings.passwordDone')); emit('loggedOut') })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('copied')) })
@@ -29,6 +36,7 @@ onMounted(load)
     <header class="page-head"><div><span class="eyebrow">SYSTEM PARAMETERS</span><h1>{{ t('settings.title') }}</h1><p>{{ t('settings.help') }}</p></div></header>
     <form class="settings-stack" @submit.prevent="save">
       <section class="settings-section"><div class="section-intro"><h2>{{ t('settings.traffic') }}</h2><p>{{ t('settings.trafficHelp') }}</p></div><div class="settings-fields"><label>{{ t('settings.total') }}<input v-model.number="quotaGB" type="number" min="0" step="0.1"></label><label>{{ t('settings.autoReset') }}<SelectControl v-model="settings.reset.mode" :options="resetOptions" /></label><label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="28"></label><label v-if="settings.reset.mode === 'monthly'">{{ t('settings.timezone') }}<SelectControl v-model="settings.reset.timezone" :options="timezoneOptions" /></label><aside class="quota-guide"><strong>{{ t('settings.quotaGuideTitle') }}</strong><p>{{ t('settings.quotaGuideBidirectional') }}</p><p>{{ t('settings.quotaGuideEgress') }}</p><small>{{ t('settings.quotaGuideNote') }}</small></aside></div></section>
+      <section class="settings-section"><div class="section-intro"><h2>{{ t('settings.outbound') }}</h2><p>{{ t('settings.outboundHelp') }}</p></div><div class="settings-fields"><label class="span-two">{{ t('settings.outboundStrategy') }}<SelectControl v-model="settings.outboundStrategy" :options="outboundOptions" /></label><aside class="quota-guide"><strong>{{ t('settings.outboundGuideTitle') }}</strong><p>{{ t('settings.outboundGuidePrefer') }}</p><small>{{ t('settings.outboundGuideOnly') }}</small></aside></div></section>
       <div class="save-row"><button class="primary">{{ t('settings.save') }}</button></div>
     </form>
     <section class="settings-section"><div class="section-intro"><h2>{{ t('settings.subscription') }}</h2><p>{{ t('settings.subscriptionHelp') }}</p></div><div class="settings-fields full-fields"><div class="copy-field"><code>{{ settings.subscriptionURL }}</code><button @click="copy(settings.subscriptionURL)"><Icon name="copy"/>{{ t('settings.copy') }}</button></div><ConfirmAction :title="t('settings.regenerate')" :message="t('settings.tokenConfirm')" destructive @confirm="token"><button class="secondary danger-outline">{{ t('settings.regenerate') }}</button></ConfirmAction></div></section>

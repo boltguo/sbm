@@ -70,6 +70,9 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 	if err := ValidateReset(cfg.Reset); err != nil {
 		return err
 	}
+	if err := ValidateOutboundStrategy(cfg.OutboundStrategy); err != nil {
+		return err
+	}
 	type endpoint struct {
 		id      string
 		port    int
@@ -105,6 +108,15 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 		}
 	}
 	return nil
+}
+
+func ValidateOutboundStrategy(strategy string) error {
+	switch strategy {
+	case "", model.OutboundStrategyAuto, model.OutboundStrategyPreferIPv4, model.OutboundStrategyPreferIPv6, model.OutboundStrategyIPv4Only, model.OutboundStrategyIPv6Only:
+		return nil
+	default:
+		return errors.New("出站地址策略无效")
+	}
 }
 
 func ValidateReset(reset model.ResetConfig) error {
