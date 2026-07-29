@@ -28,6 +28,61 @@ source "$root_dir/install.sh"
 
 [[ "$(normalize_tag 1.2.3)" == v1.2.3 ]]
 [[ "$(normalize_tag v1.2.3)" == v1.2.3 ]]
+
+repo_version="$(tr -d '[:space:]' < "$root_dir/VERSION")"
+declare -p SBM_RELEASE_VERSION >/dev/null
+release_version="$(normalize_tag "$SBM_RELEASE_VERSION")"
+[[ "$release_version" == "v${repo_version}" ]]
+compatible_version="$(compatible_sing_box_version v1.2.0)"
+[[ "$compatible_version" == v1.13.14 ]]
+compatible_version="$(compatible_sing_box_version v1.2.1)"
+[[ "$compatible_version" == v1.13.14 ]]
+compatible_version="$(compatible_sing_box_version v1.2.2)"
+[[ "$compatible_version" == v1.13.14 ]]
+
+unset SBM_VERSION SBM_PANEL_VERSION SING_BOX_VERSION
+selected_version="$(requested_sbm_version)"
+[[ "$selected_version" == "v${repo_version}" ]]
+SBM_VERSION=1.2.0
+selected_version="$(requested_sbm_version)"
+[[ "$selected_version" == v1.2.0 ]]
+selected_core_version="$(requested_sing_box_version "$selected_version")"
+[[ "$selected_core_version" == v1.13.14 ]]
+unset SBM_VERSION
+SBM_PANEL_VERSION=v1.2.0
+selected_version="$(requested_sbm_version)"
+[[ "$selected_version" == v1.2.0 ]]
+unset SBM_PANEL_VERSION
+SING_BOX_VERSION=1.13.12
+selected_core_version="$(requested_sing_box_version v1.2.0)"
+[[ "$selected_core_version" == v1.13.12 ]]
+unset SING_BOX_VERSION
+
+if (compatible_sing_box_version v9.9.9 >/dev/null 2>&1); then
+  echo "unknown SBM release received an untested sing-box version" >&2
+  exit 1
+fi
+
+(
+  github_latest_tag() { printf 'v1.2.2\n'; }
+  unset SBM_VERSION SBM_PANEL_VERSION
+  update_target="$(panel_update_target_version)"
+  [[ "$update_target" == v1.2.2 ]]
+  SBM_VERSION=1.2.0
+  update_target="$(panel_update_target_version)"
+  [[ "$update_target" == v1.2.0 ]]
+)
+
+(
+  installed_panel_version() { printf '1.2.0\n'; }
+  unset SING_BOX_VERSION
+  update_target="$(core_update_target_version)"
+  [[ "$update_target" == v1.13.14 ]]
+  SING_BOX_VERSION=1.13.12
+  update_target="$(core_update_target_version)"
+  [[ "$update_target" == v1.13.12 ]]
+)
+
 [[ "$(cleanup_domain ' HTTPS://Node.Example.COM:2096/path ')" == node.example.com ]]
 validate_domain node.example.com
 custom_panel_port=24443

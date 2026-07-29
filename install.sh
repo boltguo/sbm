@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
+readonly SBM_RELEASE_VERSION="1.2.2"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -317,9 +318,44 @@ github_latest_tag() {
   local repository="$1"
   curl -fsSL "https://api.github.com/repos/${repository}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p'
 }
+panel_update_target_version() {
+  local latest
+  if [[ -n "${SBM_VERSION:-${SBM_PANEL_VERSION:-}}" ]]; then
+    requested_sbm_version
+    return
+  fi
+  latest="$(github_latest_tag "$REPO")"
+  [[ -n "$latest" ]] || die "无法查询 SBM 最新版本。"
+  normalize_tag "$latest"
+}
+installed_panel_version() {
+  "$SBM_BIN" version
+}
+core_update_target_version() {
+  requested_sing_box_version "$(installed_panel_version)"
+}
 normalize_tag() {
   local tag="$1"
   [[ "$tag" == v* ]] && printf '%s\n' "$tag" || printf 'v%s\n' "$tag"
+}
+requested_sbm_version() {
+  normalize_tag "${SBM_VERSION:-${SBM_PANEL_VERSION:-$SBM_RELEASE_VERSION}}"
+}
+compatible_sing_box_version() {
+  local sbm_version
+  sbm_version="$(normalize_tag "$1")"
+  case "$sbm_version" in
+    v1.2.0|v1.2.1|v1.2.2) printf 'v1.13.14\n' ;;
+    *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
+  esac
+}
+requested_sing_box_version() {
+  local sbm_version="$1"
+  if [[ -n "${SING_BOX_VERSION:-}" ]]; then
+    normalize_tag "$SING_BOX_VERSION"
+    return
+  fi
+  compatible_sing_box_version "$sbm_version"
 }
 github_asset_sha256() {
   local repository="$1" tag="$2" asset="$3"
@@ -338,7 +374,7 @@ github_asset_sha256() {
 }
 install_sing_box() {
   local arch tag release_version asset url temp_dir expected actual candidate
-  arch="$(arch_tag)"; tag="${SING_BOX_VERSION:-$(github_latest_tag SagerNet/sing-box)}"; [[ -n "$tag" ]] || die "无法查询 sing-box 最新版本。"
+  arch="$(arch_tag)"; tag="${1:-$(requested_sing_box_version "$(requested_sbm_version)")}"
   tag="$(normalize_tag "$tag")"; release_version="${tag#v}"; asset="sing-box-${release_version}-linux-${arch}.tar.gz"
   url="https://github.com/SagerNet/sing-box/releases/download/${tag}/${asset}"
   expected="$(github_asset_sha256 SagerNet/sing-box "$tag" "$asset")"
@@ -358,7 +394,7 @@ install_sing_box() {
 }
 install_panel() {
   local arch tag release_version asset base_url temp_dir expected actual
-  arch="$(arch_tag)"; tag="${SBM_PANEL_VERSION:-$(github_latest_tag "$REPO")}"; [[ -n "$tag" ]] || die "无法查询 sbm-panel 最新版本。"
+  arch="$(arch_tag)"; tag="${1:-$(requested_sbm_version)}"
   tag="$(normalize_tag "$tag")"; release_version="${tag#v}"; asset="sbm-panel_${release_version}_linux_${arch}.tar.gz"
   base_url="https://github.com/${REPO}/releases/download/${tag}"
   temp_dir="$(mktemp -d /tmp/sbm-panel.XXXXXX)"
@@ -716,7 +752,10 @@ install_sbm_command() {
 do_install() {
   need_root; check_os; check_systemd; arch_tag >/dev/null
   printf '%s===== SBM 极简 sing-box 面板安装 =====%s\n' "$CYAN" "$RESET"
-  local domain panel_port node_name default_node_name flag location cloud_provider admin_password password_file encoded_node_name
+  local domain panel_port node_name default_node_name flag location cloud_provider admin_password password_file encoded_node_name target_sbm_version target_sing_box_version
+  target_sbm_version="$(requested_sbm_version)"
+  target_sing_box_version="$(requested_sing_box_version "$target_sbm_version")"
+  info "安装版本：SBM ${target_sbm_version#v} + sing-box ${target_sing_box_version#v}"
   read -r -p "Domain: " domain
   domain="$(cleanup_domain "$domain")"; validate_domain "$domain"
   read -r -p "面板端口 [2096]: " panel_port
@@ -740,7 +779,12 @@ do_install() {
   read -r -p "节点名称 [${default_node_name}]: " node_name
   node_name="${node_name:-$default_node_name}"; node_name="${node_name//$'\r'/}"; validate_node_name "$node_name"
   check_disk_space; check_network; check_dns "$domain"
-  enable_bbr; install_sing_box; install_panel; write_services; open_firewall "$cloud_provider" "$panel_port"; issue_certificate "$domain"
+  enable_bbr
+  install_sing_box "$target_sing_box_version"
+  install_panel "$target_sbm_version"
+  write_services
+  open_firewall "$cloud_provider" "$panel_port"
+  issue_certificate "$domain"
   admin_password="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-24)"
   password_file="$(mktemp /tmp/sbm-password.XXXXXX)"; chmod 0600 "$password_file"; printf '%s' "$admin_password" > "$password_file"
   if ! "$SBM_BIN" init --domain "$domain" --panel-port "$panel_port" --node-name "$node_name" --admin-password-file "$password_file"; then rm -f "$password_file"; die "初始化面板配置失败。"; fi
@@ -819,7 +863,7 @@ restore_binary() {
   install -m 0755 "${target}.bak" "$target"
 }
 update_panel() {
-  install_panel
+  install_panel "$(panel_update_target_version)"
   if repair_runtime; then
     info "面板已更新并通过运行检查。"
     return
@@ -832,7 +876,7 @@ update_panel() {
   return 1
 }
 update_core() {
-  install_sing_box
+  install_sing_box "$(core_update_target_version)"
   if ! "$SBM_BIN" config apply --no-start; then
     warn "新 sing-box 无法验证当前配置，正在恢复上一版本。"
     restore_binary "$SING_BOX_BIN" || { warn "没有可恢复的 sing-box 版本。"; return 1; }
@@ -932,7 +976,7 @@ menu() {
   need_root
   while true; do
     printf '\n%s========= SBM 管理 =========%s\n' "$CYAN" "$RESET"
-    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 更新 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '0. 退出'
+    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 安装/恢复兼容版 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '0. 退出'
     read -r -p "选择: " choice
     case "$choice" in
       1) run_action '查看运行状态' show_status ;;
@@ -941,7 +985,7 @@ menu() {
       4) run_action '重置管理员密码' reset_admin_password ;;
       5) run_action '查看日志' show_logs ;;
       6) run_action '更新面板' update_panel ;;
-      7) run_action '更新 sing-box' update_core ;;
+      7) run_action '安装/恢复兼容版 sing-box' update_core ;;
       8) run_action '备份配置' backup_config ;;
       9) run_action '恢复配置' restore_config ;;
       10) run_action '卸载' uninstall; return ;;

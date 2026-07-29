@@ -40,6 +40,14 @@ Skip this step if you are already in a root shell. Then run the installer:
 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
+The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
+
+```bash
+SBM_VERSION=1.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+```
+
+The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. Historical tag scripts released before version pinning still contain their original latest-release behavior; use the current installer and `SBM_VERSION` when installing those releases.
+
 The installer asks for:
 
 ```text
@@ -93,11 +101,13 @@ This setting requires sing-box 1.12 or newer and only affects domain destination
 
 ### WireGuard exit node
 
-Starting with v1.2.0, configure B under `Settings → WireGuard companion nodes`. With the switch off, the subscription contains only the original direct nodes. Turning it on adds a separate credential on the same domain and port for every enabled protocol, such as `DMIT VLESS · via GCP` and `DMIT HY2 · via GCP`. Original direct nodes always remain.
+Starting with v1.2.0, configure B under `Settings → WireGuard companion nodes`. With the switch off, the subscription contains only the original direct nodes. Turning it on adds a separate credential on the same domain and port for every enabled protocol, such as `DMIT VLESS · via AWS` and `DMIT HY2 · via AWS`. The suffix is configurable, and original direct nodes always remain.
 
 Companion credentials are routed by authenticated user to the userspace WireGuard endpoint and resolve domain targets as IPv4. Other nodes continue to use the address-family strategy under `Proxy egress network` and leave directly through A. Turning the switch off hides the companion credentials from sing-box and the subscription without discarding their UUIDs or passwords.
 
-The panel can generate A's WireGuard keypair. A's internal tunnel address (`10.66.0.2/32`), MTU (`1408`), and keepalive (`25s`) are built in. B still needs WireGuard, IPv4 forwarding, NAT, and a cloud firewall rule allowing the UDP port from A. If B or the tunnel fails, only the `via GCP` nodes stop working; clients can switch directly to the original nodes.
+The panel can generate A's WireGuard keypair. A's internal tunnel address (`10.66.0.2/32`), MTU (`1408`), and keepalive (`25s`) are built in. B still needs WireGuard, IPv4 forwarding, NAT, and a firewall rule allowing the UDP port from A. If B or the tunnel fails, only the companion nodes stop working; clients can switch directly to the original nodes.
+
+B can be a GCP or AWS instance or a regular VPS. See the [WireGuard B relay guide](docs/WIREGUARD-EXIT.en.md) for the architecture, complete B setup, provider notes, and troubleshooting.
 
 ## Manage SBM from the terminal
 
@@ -113,13 +123,13 @@ The menu includes:
 4. Reset the administrator password
 5. View logs
 6. Update the panel
-7. Update sing-box
+7. Install or restore the compatible sing-box version
 8. Back up configuration
 9. Restore configuration
 10. Uninstall
 11. Repair boot services and host firewall
 
-Backups are saved in `/root`. Updates verify the SHA-256 digest from GitHub Releases. If the new binary fails its health check, the old one is restored.
+Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Releases. Panel updates select the latest SBM Release, while option 7 installs the sing-box version pinned to the currently installed SBM release. If a replacement binary fails configuration validation or its health check, the old one is restored.
 
 The version card on the Overview page checks the latest GitHub Release and shows a red dot when an update is available. To install it, connect over SSH, run `sudo sbm`, and choose option 6.
 

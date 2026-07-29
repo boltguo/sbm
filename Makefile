@@ -2,7 +2,7 @@ SHELL := /bin/bash
 VERSION ?= $(shell tr -d '[:space:]' < VERSION)
 DIST := dist
 
-.PHONY: all frontend frontend-install frontend-dev frontend-typecheck backend dev-backend test vet check release clean
+.PHONY: all frontend frontend-install frontend-dev frontend-typecheck frontend-stylecheck backend dev-backend test vet check release clean
 
 all: backend
 
@@ -18,6 +18,9 @@ frontend-dev:
 frontend-typecheck:
 	cd web && npm run typecheck
 
+frontend-stylecheck:
+	bash scripts/frontend-style-unit.sh
+
 backend: frontend
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o sbm-panel ./cmd/sbm-panel
 
@@ -30,7 +33,7 @@ test:
 vet:
 	go vet ./...
 
-check: test vet frontend-typecheck
+check: test vet frontend-typecheck frontend-stylecheck
 
 release: frontend
 	rm -rf $(DIST)

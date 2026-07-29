@@ -1211,24 +1211,6 @@ label small {
   font-size: 10px;
 }
 
-.wireguard-section {
-  position: relative;
-  overflow: hidden;
-}
-
-.wireguard-section::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: var(--line-strong);
-  content: "";
-  transition: background .18s ease;
-}
-
-.wireguard-section.active::before {
-  background: var(--signal-dark);
-}
-
 .wireguard-fields {
   align-items: start;
 }

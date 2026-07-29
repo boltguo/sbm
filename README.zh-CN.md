@@ -40,6 +40,14 @@ sudo -i
 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
+安装器会同时锁定经过验证的 SBM 与 sing-box 版本组合，不会在上游发布新版后静默换成未经测试的 sing-box。需要安装指定的已发布 SBM 版本时，使用当前安装器并设置 `SBM_VERSION`：
+
+```bash
+SBM_VERSION=1.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+```
+
+安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。版本锁定功能发布前的历史标签脚本仍保留当时“查询最新版”的旧逻辑；安装这些旧版本时应使用当前安装器加 `SBM_VERSION`。
+
 安装脚本会询问：
 
 ```text
@@ -93,11 +101,13 @@ https://node.example.com:2096/
 
 ### WireGuard 出口节点
 
-从 v1.2.0 开始，可以在 `设置 → WireGuard 附加节点` 中配置 B。开关关闭时，订阅只包含原来的直连节点；打开后，每个已启用协议都会在相同域名和端口下增加一组独立凭据，例如 `DMIT VLESS · via GCP` 和 `DMIT HY2 · via GCP`。原直连节点始终保留。
+从 v1.2.0 开始，可以在 `设置 → WireGuard 附加节点` 中配置 B。开关关闭时，订阅只包含原来的直连节点；打开后，每个已启用协议都会在相同域名和端口下增加一组独立凭据，例如 `DMIT VLESS · via AWS` 和 `DMIT HY2 · via AWS`。名称后缀可以自定义，原直连节点始终保留。
 
 附加节点通过认证用户单独路由到用户态 WireGuard endpoint，目标域名按 IPv4 解析；其他节点继续使用 `代理出口网络` 中的地址族策略并从 A 直连。关闭开关只会从 sing-box 和订阅中隐藏附加凭据，重新打开后 UUID 和密码保持不变。
 
-面板可以生成 A 的 WireGuard 密钥；A 的隧道地址（`10.66.0.2/32`）、MTU（`1408`）和保活（`25s`）已经内置。B 仍需单独安装 WireGuard、开启 IPv4 转发和 NAT，并在云防火墙中只允许 A 访问 WireGuard UDP 端口。B 或隧道故障时，只有 `via GCP` 节点不可用，客户端可直接切回原节点。
+面板可以生成 A 的 WireGuard 密钥；A 的隧道地址（`10.66.0.2/32`）、MTU（`1408`）和保活（`25s`）已经内置。B 仍需单独安装 WireGuard、开启 IPv4 转发和 NAT，并在防火墙中只允许 A 访问 WireGuard UDP 端口。B 或隧道故障时，只有附加节点不可用，客户端可直接切回原节点。
+
+B 可以是 GCP、AWS 或普通 VPS。工作原理、完整 B 端配置、各平台注意事项和排错方法见 [WireGuard B 端跳板教程](docs/WIREGUARD-EXIT.md)。
 
 ## 用 `sbm` 管理服务
 
@@ -113,13 +123,13 @@ sudo sbm
 4. 重置管理员密码
 5. 查看日志
 6. 更新面板
-7. 更新 sing-box
+7. 安装或恢复兼容版 sing-box
 8. 备份配置
 9. 恢复配置
 10. 卸载
 11. 修复开机启动与防火墙
 
-备份文件放在 `/root`。更新面板或 sing-box 时会校验 GitHub Release 的 SHA-256 摘要；新版本没有通过健康检查就恢复旧版本。
+备份文件放在 `/root`。下载面板或 sing-box 时会校验 GitHub Release 的 SHA-256 摘要。面板更新会选择最新 SBM Release，第 7 项则安装当前 SBM 绑定的 sing-box 兼容版本；替换后的二进制未通过配置校验或健康检查时会恢复旧版本。
 
 概览页的版本卡片会检查最新 GitHub Release，有新版本时显示红点。需要安装时通过 SSH 运行 `sudo sbm`，选择第 6 项即可。
 
