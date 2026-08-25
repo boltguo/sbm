@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import QRCode from 'qrcode'
 import { SwitchRoot, SwitchThumb } from 'reka-ui'
 import { api, del, guard, post, put } from '../api'
 import type { Inbound } from '../types'
@@ -10,6 +9,7 @@ import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import PasswordInput from '../components/PasswordInput.vue'
 import { t } from '../i18n'
+import { createQrCard, downloadQrCard } from '../qr'
 
 type LinkNode = Pick<Inbound, 'name' | 'link'>
 
@@ -31,7 +31,8 @@ const save = safe(async () => { if (!editing.value) return; await put(`/api/inbo
 const toggle = safe(async (item: Inbound) => { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() })
 const remove = safe(async (item: Inbound) => { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('protocol.linkCopied')) })
-const showQR = safe(async (item: LinkNode) => { qrItem.value = item; qr.value = await QRCode.toDataURL(item.link, { width: 320, margin: 2, color: { dark: '#111712', light: '#f4f1e8' } }) })
+const showQR = safe(async (item: LinkNode) => { qr.value = await createQrCard(item.link, item.name); qrItem.value = item })
+const saveQR = () => { if (!qrItem.value || !qr.value) return; downloadQrCard(qr.value, qrItem.value.name); emit('toast', t('protocol.qrSaved')) }
 function edit(item: Inbound) { editing.value = JSON.parse(JSON.stringify(item)); delete (editing.value as any).link; delete (editing.value as any).network }
 function openCreate() { createForm.value = { type: 'vless-reality', name: t('protocol.defaultName'), port: 8443 }; creating.value = true }
 onMounted(load)
@@ -78,6 +79,6 @@ onMounted(load)
         <div class="modal-actions span-two"><button type="button" class="secondary" @click="editing = null">{{ t('protocol.cancel') }}</button><button class="primary">{{ t('protocol.apply') }}</button></div>
       </form>
     </Modal>
-    <Modal v-if="qrItem" :title="qrItem.name" :description="t('protocol.qrHelp')" @close="qrItem = null"><div class="large-qr"><img :src="qr" :alt="t('protocol.qrAlt')"><p>{{ t('protocol.qrHelp') }}</p></div></Modal>
+    <Modal v-if="qrItem" :title="qrItem.name" :description="t('protocol.qrHelp')" @close="qrItem = null"><div class="large-qr"><img :src="qr" :alt="t('protocol.qrAlt', { name: qrItem.name })"><button class="qr-download" type="button" @click="saveQR"><Icon name="download"/>{{ t('protocol.qrDownload') }}</button></div></Modal>
   </div>
 </template>

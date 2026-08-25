@@ -779,11 +779,22 @@ input:focus-visible,
   image-rendering: pixelated;
 }
 
-.qr-frame span {
-  margin-top: 9px;
-  font: 9px var(--mono);
-  letter-spacing: .12em;
-  text-align: center;
+.qr-download {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  background: rgba(244, 241, 232, .78);
+  font: 700 11px var(--mono);
+  letter-spacing: .04em;
+}
+
+.qr-download:hover {
+  background: var(--signal);
 }
 
 /* Protocols */
@@ -1117,10 +1128,9 @@ label small {
   margin: 0 auto;
 }
 
-.large-qr p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.5;
+.large-qr .qr-download {
+  min-width: min(220px, 100%);
+  margin-top: 0;
 }
 
 /* Settings */

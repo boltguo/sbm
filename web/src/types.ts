@@ -12,6 +12,7 @@ export interface Dashboard {
   nextResetAt?: string
   quotaExceeded: boolean
   subscriptionURL: string
+  subscriptionName: string
   trafficAudit: TrafficAudit
 }
 

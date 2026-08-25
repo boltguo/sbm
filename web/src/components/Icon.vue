@@ -2,6 +2,7 @@
 import {
   Check,
   Copy,
+  Download,
   Eye,
   EyeOff,
   Grid2X2,
@@ -18,7 +19,7 @@ import {
 } from '@lucide/vue'
 import GithubMark from './GithubMark.vue'
 
-type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check' | 'eye' | 'eye-off' | 'github'
+type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'download' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check' | 'eye' | 'eye-off' | 'github'
 
 defineProps<{ name: IconName }>()
 
@@ -28,6 +29,7 @@ const icons = {
   server: Server,
   sliders: SlidersHorizontal,
   copy: Copy,
+  download: Download,
   refresh: RotateCcw,
   power: Power,
   logout: LogOut,

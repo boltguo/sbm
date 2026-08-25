@@ -139,6 +139,9 @@ func TestDashboardSeparatesPanelAndCoreVersions(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"trafficAudit":{"status":"unavailable"`) {
 		t.Fatalf("traffic audit status missing: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"subscriptionName":"香港 / HY2"`) {
+		t.Fatalf("subscription name missing: %s", response.Body.String())
+	}
 }
 
 func TestListInboundsIncludesEnabledWireGuardCompanion(t *testing.T) {

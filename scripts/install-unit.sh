@@ -39,6 +39,8 @@ compatible_version="$(compatible_sing_box_version v1.2.1)"
 [[ "$compatible_version" == v1.13.14 ]]
 compatible_version="$(compatible_sing_box_version v1.2.2)"
 [[ "$compatible_version" == v1.13.14 ]]
+compatible_version="$(compatible_sing_box_version v1.2.3)"
+[[ "$compatible_version" == v1.13.14 ]]
 
 unset SBM_VERSION SBM_PANEL_VERSION SING_BOX_VERSION
 selected_version="$(requested_sbm_version)"
@@ -64,10 +66,10 @@ if (compatible_sing_box_version v9.9.9 >/dev/null 2>&1); then
 fi
 
 (
-  github_latest_tag() { printf 'v1.2.2\n'; }
+  github_latest_tag() { printf 'v1.2.3\n'; }
   unset SBM_VERSION SBM_PANEL_VERSION
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v1.2.2 ]]
+  [[ "$update_target" == v1.2.3 ]]
   SBM_VERSION=1.2.0
   update_target="$(panel_update_target_version)"
   [[ "$update_target" == v1.2.0 ]]
@@ -90,12 +92,13 @@ validate_panel_port "$custom_panel_port"
 [[ "$(country_flag US)" == "🇺🇸" ]]
 # Node names use the uppercase country code, not the full country name.
 [[ "$(location_node_name Japan JP Tokyo)" == "JP-Tokyo" ]]
-[[ "$(location_node_name Singapore SG Singapore)" == "SG" ]]
+[[ "$(location_node_name Singapore SG Singapore)" == "SG-Singapore" ]]
 [[ "$(location_node_name 'United States' US Seattle)" == "US-Seattle" ]]
 [[ "$(location_node_name '' jp Tokyo)" == "JP-Tokyo" ]]
 [[ "$(location_node_name JP JP '')" == "JP" ]]
 # Without a country code the full name is the only thing left to use.
 [[ "$(location_node_name Japan '' Tokyo)" == "Japan-Tokyo" ]]
+[[ "$(location_node_name Singapore '' Singapore)" == "Singapore" ]]
 validate_node_name "JP-Tokyo"
 [[ "$(urlencode_fragment 'Japan Tokyo#1')" == "Japan%20Tokyo%231" ]]
 [[ "$(cloud_provider_name oracle)" == "Oracle Cloud (OCI)" ]]

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import QRCode from 'qrcode'
 import { api, guard, post } from '../api'
 import type { Dashboard, UpdateStatus } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import { dateLocale, t } from '../i18n'
+import { createQrCard, downloadQrCard } from '../qr'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
@@ -38,8 +38,8 @@ const safe = guard(message => emit('toast', message))
 
 async function load() {
   const next = await api<Dashboard>('/api/dashboard')
-  if (!data.value || data.value.subscriptionURL !== next.subscriptionURL) {
-    qr.value = await QRCode.toDataURL(next.subscriptionURL, { width: 256, margin: 1, color: { dark: '#111712', light: '#f4f1e8' } })
+  if (!data.value || data.value.subscriptionURL !== next.subscriptionURL || data.value.subscriptionName !== next.subscriptionName) {
+    qr.value = await createQrCard(next.subscriptionURL, next.subscriptionName)
   }
   data.value = next
 }
@@ -57,6 +57,7 @@ const refreshTraffic = safe(async () => {
   }
 })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) })
+const saveQR = () => { if (!data.value || !qr.value) return; downloadQrCard(qr.value, data.value.subscriptionName); emit('toast', t('dashboard.qrSaved')) }
 const restart = safe(async () => { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() })
 const reset = safe(async () => { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() })
 async function checkUpdate(notify = true) {
@@ -105,7 +106,7 @@ onBeforeUnmount(() => clearInterval(timer))
     </section>
     <section class="subscription-card">
       <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>
-      <div class="qr-frame"><img :src="qr" :alt="t('dashboard.qrAlt')"><span>SCAN TO IMPORT</span></div>
+      <div class="qr-frame"><img :src="qr" :alt="t('dashboard.qrAlt', { name: data.subscriptionName })"><button class="qr-download" type="button" @click="saveQR"><Icon name="download"/>{{ t('dashboard.qrDownload') }}</button></div>
     </section>
   </div>
   <div v-else class="loading">{{ t('dashboard.loading') }}</div>

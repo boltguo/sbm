@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
-readonly SBM_RELEASE_VERSION="1.2.2"
+readonly SBM_RELEASE_VERSION="1.2.3"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -149,8 +149,13 @@ location_node_name() {
   else
     location="$country"
   fi
-  if [[ -n "$city" && "$city" != "$country" && "$city" != "$location" ]]; then
-    location="${location}-${city}"
+  if [[ -n "$city" && "$city" != "$location" ]]; then
+    # When a country code is available, keep the city even if the country and
+    # city share a name (Singapore -> SG-Singapore). Without a country code,
+    # still avoid duplicated names such as Singapore-Singapore.
+    if [[ -n "$country_code" || "$city" != "$country" ]]; then
+      location="${location}-${city}"
+    fi
   fi
   location="${location//[[:space:]]/}"
   printf '%s\n' "$location"
@@ -345,7 +350,7 @@ compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v1.2.0|v1.2.1|v1.2.2) printf 'v1.13.14\n' ;;
+    v1.2.0|v1.2.1|v1.2.2|v1.2.3) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }

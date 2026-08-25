@@ -43,7 +43,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器会同时锁定经过验证的 SBM 与 sing-box 版本组合，不会在上游发布新版后静默换成未经测试的 sing-box。需要安装指定的已发布 SBM 版本时，使用当前安装器并设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=1.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=1.2.3 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。版本锁定功能发布前的历史标签脚本仍保留当时“查询最新版”的旧逻辑；安装这些旧版本时应使用当前安装器加 `SBM_VERSION`。
@@ -56,7 +56,7 @@ Domain: node.example.com
 节点名称 [JP-Tokyo]:
 ```
 
-端口直接回车就是 2096。节点名称按服务器公网 IP 生成，国家用两位大写代码，据此生成 `JP-Tokyo-VLESS` 和 `JP-Tokyo-HY2`。安装结束后终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
+端口直接回车就是 2096。节点名称按服务器公网 IP 生成，格式为两位大写国家代码加城市，例如 `JP-Tokyo`、`SG-Singapore` 或 `US-Boardman`，随后生成带 `-VLESS` 和 `-HY2` 后缀的节点。安装结束后终端会打印面板地址、`admin` 用户名、随机密码和总订阅地址。
 
 TCP/80、TCP/443、UDP/443 或面板端口被占用时安装会中止。服务起来后脚本会检查监听端口，并从本机请求一次面板 HTTPS。
 

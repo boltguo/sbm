@@ -43,7 +43,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=1.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=1.2.3 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. Historical tag scripts released before version pinning still contain their original latest-release behavior; use the current installer and `SBM_VERSION` when installing those releases.
@@ -56,7 +56,7 @@ Domain: node.example.com
 节点名称 [JP-Tokyo]:
 ```
 
-The prompts are in Chinese and ask for the domain, the panel port, and the node name. Press Enter to keep port 2096. The suggested node name comes from the server's public IP and uses the two-letter country code, producing `JP-Tokyo-VLESS` and `JP-Tokyo-HY2`. At the end the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
+The prompts are in Chinese and ask for the domain, the panel port, and the node name. Press Enter to keep port 2096. The suggested node name comes from the server's public IP and uses the two-letter country code plus city, such as `JP-Tokyo`, `SG-Singapore`, or `US-Boardman`; the generated nodes add the `-VLESS` and `-HY2` suffixes. At the end the installer prints the panel address, the `admin` username, a random password, and the subscription URL.
 
 Installation aborts if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, the script checks the listeners and makes a local HTTPS request to the panel.
 
