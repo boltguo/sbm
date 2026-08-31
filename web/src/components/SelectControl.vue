@@ -10,7 +10,7 @@ function update(value: unknown) { emit('update:modelValue', String(value ?? ''))
 
 <template>
   <SelectRoot :model-value="modelValue" @update:model-value="update">
-    <SelectTrigger class="flex min-h-11 w-full items-center justify-between border border-[var(--line)] bg-white/70 px-3 text-left outline-none focus:border-[var(--ink)] focus:shadow-[inset_3px_0_var(--signal)]">
+    <SelectTrigger class="flex min-h-11 w-full items-center justify-between border border-[var(--line)] bg-white/70 px-3 text-left outline-none transition-[border-color,box-shadow,background-color] duration-150 focus:border-[var(--signal-dark)] focus:bg-[var(--paper-strong)] focus:shadow-[0_0_0_3px_rgba(117,173,22,.16)]">
       <SelectValue>{{ selectedLabel }}</SelectValue>
       <SelectIcon class="text-[var(--muted)]" aria-hidden="true">⌄</SelectIcon>
     </SelectTrigger>

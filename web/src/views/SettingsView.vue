@@ -28,9 +28,9 @@ const billingOptions = computed(() => [
 const quotaPreview = computed(() => {
   const quota = settings.value?.trafficQuota
   if (!quota) return { providerStopGB: 0, proxyStopGB: 0 }
-  const allowanceGB = Math.max(0, quota.amountGB)
+  const amount = Number.isFinite(quota.amountGB) ? Math.max(0, quota.amountGB) : 0
   const headroom = Math.min(50, Math.max(0, quota.headroomPercent || 0))
-  const providerStopGB = allowanceGB * (100 - headroom) / 100
+  const providerStopGB = amount * (100 - headroom) / 100
   const proxyStopGB = providerStopGB / (quota.billingMode === 'bidirectional' ? 2 : 1)
   return { providerStopGB, proxyStopGB }
 })
@@ -72,12 +72,10 @@ onMounted(load)
             <div><small>{{ t('settings.planAllowance') }}</small><strong>{{ gb(settings.trafficQuota.amountGB) }}</strong></div>
             <div><small>{{ t('settings.estimatedProviderStop') }}</small><strong>{{ gb(quotaPreview.providerStopGB) }}</strong></div>
             <div><small>{{ t('settings.proxyStop') }}</small><strong>{{ settings.trafficQuota.amountGB ? gb(quotaPreview.proxyStopGB) : t('settings.unlimited') }}</strong></div>
-            <p>{{ t('settings.quotaPreviewHelp') }}</p>
           </aside>
           <label>{{ t('settings.autoReset') }}<SelectControl v-model="settings.reset.mode" :options="resetOptions" /></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="28"></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.timezone') }}<SelectControl v-model="settings.reset.timezone" :options="timezoneOptions" /></label>
-          <aside class="quota-guide"><strong>{{ t('settings.quotaGuideTitle') }}</strong><p>{{ t('settings.quotaGuideBody') }}</p><small>{{ t('settings.quotaGuideNote') }}</small></aside>
           <div class="section-save-row"><button class="primary">{{ t('settings.saveTraffic') }}</button></div>
         </div>
       </form>

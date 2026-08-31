@@ -55,12 +55,17 @@ button {
   cursor: pointer;
 }
 
-button:focus-visible,
-input:focus-visible,
+button:not([role="combobox"]):focus-visible,
 [href]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--signal-dark);
+  outline-offset: 3px;
+}
+
+input:focus-visible,
+select:focus-visible,
 [role="combobox"]:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .icon {
@@ -1030,12 +1035,14 @@ select {
   border-radius: 0;
   outline: none;
   background: rgba(255, 255, 255, .72);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
 
 input:focus,
 select:focus {
-  border-color: var(--ink);
-  box-shadow: inset 3px 0 var(--signal);
+  border-color: var(--signal-dark);
+  background: var(--paper-strong);
+  box-shadow: 0 0 0 3px rgba(117, 173, 22, .16);
 }
 
 .password-input {
@@ -1219,18 +1226,41 @@ label small {
 .input-suffix {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .72);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
 
 .input-suffix input {
-  border-right: 0;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+}
+
+.input-suffix input:focus {
+  background: transparent;
+  box-shadow: none;
 }
 
 .input-suffix b {
   display: grid;
   place-items: center;
-  border: 1px solid var(--line);
+  border: 0;
+  border-left: 1px solid var(--line);
   background: var(--paper-2);
   font: 700 12px var(--mono);
+  transition: border-color .15s ease, background-color .15s ease;
+}
+
+.input-suffix:focus-within {
+  border-color: var(--signal-dark);
+  background: var(--paper-strong);
+  box-shadow: 0 0 0 3px rgba(117, 173, 22, .16);
+}
+
+.input-suffix:focus-within b {
+  border-color: var(--signal-dark);
+  background: #f1f5e7;
 }
 
 .quota-preview {
@@ -1421,7 +1451,7 @@ label small {
 
 .health-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--line);
 }
 
@@ -1433,11 +1463,7 @@ label small {
   border-bottom: 1px solid var(--line);
 }
 
-.health-check:nth-child(3n) {
-  border-right: 0;
-}
-
-.health-check:last-child {
+.health-check:nth-child(4n) {
   border-right: 0;
 }
 
@@ -1762,6 +1788,21 @@ label small {
   to { opacity: 0; transform: translateY(8px); }
 }
 
+@media (max-width: 1400px) {
+  .health-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .health-check,
+  .health-check:nth-child(4n) {
+    border-right: 1px solid var(--line);
+  }
+
+  .health-check:nth-child(3n) {
+    border-right: 0;
+  }
+}
+
 @media (max-width: 1050px) {
   .status-strip {
     grid-template-columns: 1fr 1.35fr;
@@ -1806,7 +1847,8 @@ label small {
   }
 
   .health-check,
-  .health-check:nth-child(3n) {
+  .health-check:nth-child(3n),
+  .health-check:nth-child(4n) {
     border-right: 1px solid var(--line);
   }
 
@@ -2133,7 +2175,8 @@ label small {
 
   .health-check,
   .health-check:nth-child(2n),
-  .health-check:nth-child(3n) {
+  .health-check:nth-child(3n),
+  .health-check:nth-child(4n) {
     border-right: 0;
   }
 

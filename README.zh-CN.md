@@ -13,7 +13,7 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 ## 安装
 
-SBM 2.x 使用全新的 v3 配置，只支持全新安装。它不会迁移或部分读取 1.x 配置；请先备份旧实例，再使用新配置部署 2.x。
+当前 SBM 2.x 使用全新的 v3 配置，只支持全新安装。它不会迁移或部分读取旧配置；请先备份旧实例，再使用新配置部署。
 
 系统需要是 Debian 或 Ubuntu，架构支持 amd64 和 arm64。安装前先处理域名和安全组：
 
@@ -45,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器会同时锁定经过验证的 SBM 与 sing-box 版本组合，不会在上游发布新版后静默换成未经测试的 sing-box。需要安装指定的已发布 SBM 版本时，使用当前安装器并设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=2.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.0.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。2.x 只支持全新安装，不提供旧版配置迁移或旧版 SBM 安装映射。
@@ -115,11 +115,11 @@ https://node.example.com:2096/
 
 ### 套餐流量与限额
 
-在 `设置 → 套餐流量与周期` 中统一按十进制 GB 填写额度：厂商标 `1 TB` 就填 `1000 GB`，标 `500 GB` 就填 `500`。然后选择单向计费还是入站与出站双向合计，并设置安全预留。SBM 会计算 sing-box 代理流量的停机阈值，不需要用户自己把双向套餐除以 2。
+`设置 → 套餐流量与周期` 统一使用 GB。1 TB 填 `1000 GB`，500 GB 填 `500 GB`。
 
-概览页中的套餐额度与云厂商预计用量统一显示为 GB。最终账单仍以云厂商控制台为准：SBM 无法统计系统更新、SSH、面板访问、全部协议开销以及 VPS 上其他进程的流量。sing-box 实际字节计数使用 IEC 单位（`KiB`、`MiB`、`GiB`、`TiB`），便于明确区分数据来源。
+厂商明确使用 GiB 时，可按 `GiB × 1.073741824` 换算为 GB；也可直接按原数填写，并适当调低安全预留。
 
-SBM 规定 `1 GB = 10^9` 字节。双向套餐的代理停机阈值是扣除安全预留后额度的一半，因为上传、下载都会消耗套餐；单向套餐则使用扣除预留后的完整额度。`1000 GB / 双向 / 10%` 会得到 450,000,000,000 字节，也就是 450 GB、约 419.10 GiB 的代理阈值。
+双向套餐直接选择“双向”，无需手动除以 2。
 
 套餐额度填 `0` 表示不限量。有限额度达到安全阈值后，sing-box 会停止；手动或定时重置流量、或者提高套餐额度后会恢复。
 

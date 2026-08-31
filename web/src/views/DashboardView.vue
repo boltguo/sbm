@@ -119,7 +119,7 @@ onBeforeUnmount(() => clearInterval(timer))
           <button class="traffic-refresh" :class="{ refreshing: refreshingTraffic }" :disabled="refreshingTraffic" :title="t('dashboard.refreshHelp')" @click="refreshTraffic"><Icon name="refresh"/>{{ t('dashboard.refresh') }}</button>
         </div>
         <h2>{{ providerBytes(data.estimatedProviderUsedBytes) }}</h2>
-        <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: `${data.trafficQuota.amountGB} GB`, remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
+        <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: providerBytes(data.providerAllowanceBytes), remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
         <p class="proxy-actual">{{ t('dashboard.proxyActual', { amount: bytes(data.proxyUsedBytes) }) }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>

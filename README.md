@@ -13,7 +13,7 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 ## Install
 
-SBM 2.x uses a new v3 configuration and supports fresh installations only. It deliberately does not migrate or partially read 1.x configuration files; back up the old installation and deploy 2.x with a new configuration.
+The current SBM 2.x build uses a new v3 configuration and supports fresh installations only. It deliberately does not migrate or partially read older configuration files; back up the old installation and deploy with a new configuration.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -45,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.0.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x is fresh-install only and does not provide old-config migration or old SBM release mappings.
@@ -115,11 +115,11 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 ### Traffic plans and quota
 
-Under `Settings → Plan traffic and period`, enter every allowance in decimal GB. If the provider advertises `1 TB`, enter `1000 GB`; for `500 GB`, enter `500`. Then select whether the provider bills one direction or ingress plus egress, and set a safety reserve. SBM calculates the sing-box proxy-traffic stop threshold, so you do not divide a two-way plan yourself.
+`Settings → Plan traffic and period` always uses GB. Enter `1000 GB` for 1 TB or `500 GB` for 500 GB.
 
-The Overview shows provider-plan allowance and estimated provider usage in GB. Provider billing remains authoritative: SBM does not see operating-system updates, SSH, panel access, every protocol overhead byte, or other processes on the VPS. Actual sing-box byte counters use IEC units (`KiB`, `MiB`, `GiB`, `TiB`) so their source remains explicit.
+If the provider explicitly uses GiB, convert it with `GiB × 1.073741824`, or enter the same number and lower the safety reserve if needed.
 
-SBM defines `1 GB` as `10^9` bytes. For a two-way plan, the proxy stop threshold is half the allowance after the safety reserve because both upload and download consume the plan. For a one-way plan, it is the full allowance after the reserve. A `1000 GB / two-way / 10%` plan therefore produces a 450,000,000,000-byte proxy threshold (450 GB, about 419.10 GiB).
+Select two-way for a two-way plan; do not divide the allowance yourself.
 
 Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box stops when the configured safety threshold is reached and resumes after a manual or scheduled traffic reset, or after the plan is increased.
 

@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
-readonly SBM_RELEASE_VERSION="2.0.0"
+readonly SBM_RELEASE_VERSION="2.0.1"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -354,7 +354,7 @@ compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v2.0.0) printf 'v1.13.14\n' ;;
+    v2.0.1) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }
