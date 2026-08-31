@@ -223,7 +223,7 @@ func TestDashboardCoreStatusIsThreeState(t *testing.T) {
 
 func TestDashboardEstimatesProviderUsage(t *testing.T) {
 	s, cfg := testServer(t)
-	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 1000, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
+	cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 1000, Unit: model.TrafficUnitGB, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
 	if err := s.Config.Replace(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestServerHealthKeepsPartialResultsWithoutSecrets(t *testing.T) {
 
 func TestServerHealthTreatsQuotaPauseAsPlannedState(t *testing.T) {
 	s, cfg := testServer(t)
-	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 0.000000001, BillingMode: model.TrafficBillingSingle}
+	cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 0.000000001, Unit: model.TrafficUnitGB, BillingMode: model.TrafficBillingSingle}
 	if err := s.Config.Replace(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestServerHealthTreatsQuotaPauseAsPlannedState(t *testing.T) {
 
 func TestServerHealthFlagsRunningCoreAfterQuotaExceeded(t *testing.T) {
 	s, cfg := testServer(t)
-	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 0.000000001, BillingMode: model.TrafficBillingSingle}
+	cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 0.000000001, Unit: model.TrafficUnitGB, BillingMode: model.TrafficBillingSingle}
 	if err := s.Config.Replace(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestChangePassword(t *testing.T) {
 
 func TestSettingsUpdatesOutboundStrategyAndCoreConfig(t *testing.T) {
 	s, cfg := testServer(t)
-	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 123, BillingMode: model.TrafficBillingSingle, HeadroomPercent: 7}
+	cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 123, Unit: model.TrafficUnitGB, BillingMode: model.TrafficBillingSingle, HeadroomPercent: 7}
 	if err := s.Config.Replace(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestTrafficSettingsOnlyUpdateTrafficFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	nextReset := model.ResetConfig{Mode: "monthly", Day: 8, Timezone: "Asia/Tokyo"}
-	nextQuota := model.TrafficQuotaConfig{AmountGB: 1000, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
+	nextQuota := model.TrafficQuotaConfig{Amount: 1000, Unit: model.TrafficUnitGiB, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
 	response := httptest.NewRecorder()
 	req := authenticatedRequest(t, s, http.MethodPut, "/api/settings/traffic", map[string]any{
 		"trafficQuota": nextQuota,
@@ -477,7 +477,7 @@ func TestTrafficSettingsOnlyUpdateTrafficFields(t *testing.T) {
 	if stored.TrafficQuota != nextQuota || stored.Reset != nextReset {
 		t.Fatalf("traffic settings not stored: quota=%#v reset=%#v", stored.TrafficQuota, stored.Reset)
 	}
-	if !strings.Contains(response.Body.String(), `"effectiveLimitBytes":450000000000`) {
+	if !strings.Contains(response.Body.String(), `"effectiveLimitBytes":483183820800`) {
 		t.Fatalf("calculated limit missing: %s", response.Body.String())
 	}
 	if stored.OutboundStrategy != model.OutboundStrategyPreferIPv6 {
@@ -489,7 +489,7 @@ func TestTrafficSettingsRejectInvalidQuotaAndRemovedLegacyEndpoint(t *testing.T)
 	s, original := testServer(t)
 	response := httptest.NewRecorder()
 	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodPut, "/api/settings/traffic", map[string]any{
-		"trafficQuota": map[string]any{"amountGB": 1, "unit": "TB", "billingMode": "both", "headroomPercent": 75},
+		"trafficQuota": map[string]any{"amount": 1, "unit": "TB", "billingMode": model.TrafficBillingSingle, "headroomPercent": 10},
 		"reset":        original.Reset,
 	}))
 	if response.Code != http.StatusBadRequest {
@@ -497,6 +497,17 @@ func TestTrafficSettingsRejectInvalidQuotaAndRemovedLegacyEndpoint(t *testing.T)
 	}
 	if got := s.Config.Get().TrafficQuota; got != original.TrafficQuota {
 		t.Fatalf("invalid quota was stored: %#v", got)
+	}
+	oldQuota := httptest.NewRecorder()
+	s.Handler().ServeHTTP(oldQuota, authenticatedRequest(t, s, http.MethodPut, "/api/settings/traffic", map[string]any{
+		"trafficQuota": map[string]any{"amountGB": 1000, "billingMode": model.TrafficBillingSingle, "headroomPercent": 10},
+		"reset":        original.Reset,
+	}))
+	if oldQuota.Code != http.StatusBadRequest {
+		t.Fatalf("old traffic quota schema status=%d body=%s", oldQuota.Code, oldQuota.Body.String())
+	}
+	if got := s.Config.Get().TrafficQuota; got != original.TrafficQuota {
+		t.Fatalf("old traffic quota schema was stored: %#v", got)
 	}
 	legacy := httptest.NewRecorder()
 	s.Handler().ServeHTTP(legacy, authenticatedRequest(t, s, http.MethodPut, "/api/settings", map[string]any{"totalBytes": 1}))
@@ -597,7 +608,7 @@ func TestStoppedCoreCanApplyProtocolChangeWhenTrafficAPIIsUnavailable(t *testing
 
 func TestSubscriptionContentAndHeaders(t *testing.T) {
 	s, cfg := testServer(t)
-	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 1000, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
+	cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 1000, Unit: model.TrafficUnitGiB, BillingMode: model.TrafficBillingBidirectional, HeadroomPercent: 10}
 	if err := s.Config.Replace(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +626,7 @@ func TestSubscriptionContentAndHeaders(t *testing.T) {
 	if !strings.HasPrefix(string(decoded), "hysteria2://") || !strings.Contains(string(decoded), "#%E9%A6%99%E6%B8%AF%20%2F%20HY2") {
 		t.Fatalf("unexpected subscription %q", decoded)
 	}
-	if userinfo := response.Header().Get("Subscription-Userinfo"); !strings.Contains(userinfo, "total=450000000000") || response.Header().Get("Profile-Title") == "" {
+	if userinfo := response.Header().Get("Subscription-Userinfo"); !strings.Contains(userinfo, "total=483183820800") || response.Header().Get("Profile-Title") == "" {
 		t.Fatal("subscription headers missing")
 	}
 }

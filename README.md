@@ -13,7 +13,7 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 ## Install
 
-The current SBM 2.x build uses a new v3 configuration and supports fresh installations only. It deliberately does not migrate or partially read older configuration files; back up the old installation and deploy with a new configuration.
+The current SBM build uses a new v4 configuration and supports fresh installations only. It deliberately does not migrate or partially read older configuration files; back up the old installation and deploy with a new configuration.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -45,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.0.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.0.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x is fresh-install only and does not provide old-config migration or old SBM release mappings.
@@ -115,11 +115,11 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 ### Traffic plans and quota
 
-`Settings → Plan traffic and period` always uses GB. Enter `1000 GB` for 1 TB or `500 GB` for 500 GB.
-
-If the provider explicitly uses GiB, convert it with `GiB × 1.073741824`, or enter the same number and lower the safety reserve if needed.
+Under `Settings → Plan traffic and period`, choose GB or GiB exactly as shown by the provider: GB uses 1000³ bytes and GiB uses 1024³ bytes. Enter DMIT `1000 GB` as `1000 GB`, or GCP `200 GiB` as `200 GiB`.
 
 Select two-way for a two-way plan; do not divide the allowance yourself.
+
+A subscription client may display `G` as GiB; this does not change SBM's enforced limit.
 
 Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box stops when the configured safety threshold is reached and resumes after a manual or scheduled traffic reset, or after the plan is increased.
 

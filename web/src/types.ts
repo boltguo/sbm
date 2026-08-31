@@ -21,8 +21,10 @@ export interface Dashboard {
 }
 
 export type TrafficBillingMode = 'bidirectional' | 'single'
+export type TrafficUnit = 'GB' | 'GiB'
 export interface TrafficQuota {
-  amountGB: number
+  amount: number
+  unit: TrafficUnit
   billingMode: TrafficBillingMode
   headroomPercent: number
 }

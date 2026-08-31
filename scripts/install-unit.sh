@@ -26,27 +26,27 @@ done
 # shellcheck disable=SC1091
 source "$root_dir/install.sh"
 
-[[ "$(normalize_tag 2.0.1)" == v2.0.1 ]]
-[[ "$(normalize_tag v2.0.1)" == v2.0.1 ]]
+[[ "$(normalize_tag 2.0.2)" == v2.0.2 ]]
+[[ "$(normalize_tag v2.0.2)" == v2.0.2 ]]
 
 repo_version="$(tr -d '[:space:]' < "$root_dir/VERSION")"
 declare -p SBM_RELEASE_VERSION >/dev/null
 release_version="$(normalize_tag "$SBM_RELEASE_VERSION")"
 [[ "$release_version" == "v${repo_version}" ]]
-compatible_version="$(compatible_sing_box_version v2.0.1)"
+compatible_version="$(compatible_sing_box_version v2.0.2)"
 [[ "$compatible_version" == v1.13.14 ]]
 
 unset SBM_VERSION SING_BOX_VERSION
 selected_version="$(requested_sbm_version)"
 [[ "$selected_version" == "v${repo_version}" ]]
-SBM_VERSION=2.0.1
+SBM_VERSION=2.0.2
 selected_version="$(requested_sbm_version)"
-[[ "$selected_version" == v2.0.1 ]]
+[[ "$selected_version" == v2.0.2 ]]
 selected_core_version="$(requested_sing_box_version "$selected_version")"
 [[ "$selected_core_version" == v1.13.14 ]]
 unset SBM_VERSION
 SING_BOX_VERSION=1.13.12
-selected_core_version="$(requested_sing_box_version v2.0.1)"
+selected_core_version="$(requested_sing_box_version v2.0.2)"
 [[ "$selected_core_version" == v1.13.12 ]]
 unset SING_BOX_VERSION
 
@@ -60,28 +60,28 @@ if (SBM_VERSION=1.2.3 requested_sbm_version >/dev/null 2>&1); then
 fi
 
 (
-  github_latest_tag() { printf 'v2.0.1\n'; }
+  github_latest_tag() { printf 'v2.0.2\n'; }
   unset SBM_VERSION
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v2.0.1 ]]
-  SBM_VERSION=2.0.1
+  [[ "$update_target" == v2.0.2 ]]
+  SBM_VERSION=2.0.2
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v2.0.1 ]]
+  [[ "$update_target" == v2.0.2 ]]
 )
 
-fresh_config="$(mktemp /tmp/sbm-v3-config.XXXXXX)"
+fresh_config="$(mktemp /tmp/sbm-v4-config.XXXXXX)"
 old_config="$(mktemp /tmp/sbm-v2-config.XXXXXX)"
-printf '{"version":3}\n' > "$fresh_config"
+printf '{"version":4}\n' > "$fresh_config"
 printf '{"version":2}\n' > "$old_config"
-assert_panel_config_supported v2.0.1 "$fresh_config"
-if (assert_panel_config_supported v2.0.1 "$old_config" >/dev/null 2>&1); then
+assert_panel_config_supported v2.0.2 "$fresh_config"
+if (assert_panel_config_supported v2.0.2 "$old_config" >/dev/null 2>&1); then
   echo "SBM 2.x accepted an old configuration" >&2
   exit 1
 fi
 rm -f "$fresh_config" "$old_config"
 
 (
-  installed_panel_version() { printf '2.0.1\n'; }
+  installed_panel_version() { printf '2.0.2\n'; }
   unset SING_BOX_VERSION
   update_target="$(core_update_target_version)"
   [[ "$update_target" == v1.13.14 ]]

@@ -17,12 +17,16 @@ let timer = 0
 
 const bytes = (value: number) => {
   if (!value) return '0 B'
-  const units = ['B','KiB','MiB','GiB','TiB']; const i = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4)
-  return `${(value / 1024 ** i).toFixed(i > 2 ? 2 : 1)} ${units[i]}`
+  const binary = data.value?.trafficQuota.unit === 'GiB'
+  const base = binary ? 1024 : 1000
+  const units = binary ? ['B','KiB','MiB','GiB','TiB'] : ['B','KB','MB','GB','TB']
+  const i = Math.min(Math.floor(Math.log(value) / Math.log(base)), 4)
+  return `${(value / base ** i).toFixed(i > 2 ? 2 : 1)} ${units[i]}`
 }
 const providerBytes = (value: number) => {
-  const amount = value / 1e9
-  return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: amount < 10 ? 2 : 1 }).format(amount)} GB`
+  const unit = data.value?.trafficQuota.unit || 'GB'
+  const amount = value / (unit === 'GiB' ? 1024 ** 3 : 1000 ** 3)
+  return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: amount < 10 ? 2 : 1 }).format(amount)} ${unit}`
 }
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
@@ -121,7 +125,6 @@ onBeforeUnmount(() => clearInterval(timer))
         <h2>{{ providerBytes(data.estimatedProviderUsedBytes) }}</h2>
         <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: providerBytes(data.providerAllowanceBytes), remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
-        <p class="proxy-actual">{{ t('dashboard.proxyActual', { amount: bytes(data.proxyUsedBytes) }) }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
       </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>

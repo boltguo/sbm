@@ -29,7 +29,8 @@ func (s *configSource) Get() model.Config {
 
 func configWithLimit(limit int64) model.Config {
 	cfg := model.DefaultConfig()
-	cfg.TrafficQuota.AmountGB = float64(limit) / 1_000_000_000
+	cfg.TrafficQuota.Amount = float64(limit) / model.TrafficGiBBytes
+	cfg.TrafficQuota.Unit = model.TrafficUnitGiB
 	cfg.TrafficQuota.HeadroomPercent = 0
 	return cfg
 }
@@ -349,7 +350,7 @@ func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 	if !exceeded || !tracker.State().QuotaExceeded || core.stops != 1 {
 		t.Fatalf("quota not enforced: state=%+v core=%+v", tracker.State(), core)
 	}
-	source.cfg.TrafficQuota.AmountGB = 0
+	source.cfg.TrafficQuota.Amount = 0
 	if err := tracker.ReconcileQuota(context.Background()); err != nil {
 		t.Fatal(err)
 	}

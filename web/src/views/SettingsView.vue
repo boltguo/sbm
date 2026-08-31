@@ -25,16 +25,20 @@ const billingOptions = computed(() => [
   { value: 'bidirectional', label: t('settings.billingBidirectional') },
   { value: 'single', label: t('settings.billingSingle') },
 ])
+const unitOptions = [
+  { value: 'GB', label: 'GB' },
+  { value: 'GiB', label: 'GiB' },
+]
 const quotaPreview = computed(() => {
   const quota = settings.value?.trafficQuota
-  if (!quota) return { providerStopGB: 0, proxyStopGB: 0 }
-  const amount = Number.isFinite(quota.amountGB) ? Math.max(0, quota.amountGB) : 0
+  if (!quota) return { providerStop: 0, proxyStop: 0 }
+  const amount = Number.isFinite(quota.amount) ? Math.max(0, quota.amount) : 0
   const headroom = Math.min(50, Math.max(0, quota.headroomPercent || 0))
-  const providerStopGB = amount * (100 - headroom) / 100
-  const proxyStopGB = providerStopGB / (quota.billingMode === 'bidirectional' ? 2 : 1)
-  return { providerStopGB, proxyStopGB }
+  const providerStop = amount * (100 - headroom) / 100
+  const proxyStop = providerStop / (quota.billingMode === 'bidirectional' ? 2 : 1)
+  return { providerStop, proxyStop }
 })
-const gb = (value: number) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(value)} GB`
+const quotaAmount = (value: number) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(value)} ${settings.value?.trafficQuota.unit || 'GB'}`
 const safe = guard(message => emit('toast', message))
 const load = safe(async () => { settings.value = await api<Settings>('/api/settings') })
 const saveTraffic = safe(async () => {
@@ -65,13 +69,14 @@ onMounted(load)
       <form class="settings-section traffic-settings" @submit.prevent="saveTraffic">
         <div class="section-intro"><span class="eyebrow">PROVIDER PLAN</span><h2>{{ t('settings.traffic') }}</h2><p>{{ t('settings.trafficHelp') }}</p></div>
         <div class="settings-fields">
-          <label>{{ t('settings.quotaAmount') }}<span class="input-suffix"><input v-model.number="settings.trafficQuota.amountGB" type="number" min="0" step="0.01" required><b>GB</b></span></label>
+          <label>{{ t('settings.quotaAmount') }}<input v-model.number="settings.trafficQuota.amount" type="number" min="0" step="0.01" required></label>
+          <label>{{ t('settings.quotaUnit') }}<SelectControl v-model="settings.trafficQuota.unit" :options="unitOptions" /></label>
           <label>{{ t('settings.billingMode') }}<SelectControl v-model="settings.trafficQuota.billingMode" :options="billingOptions" /></label>
           <label>{{ t('settings.headroom') }}<span class="input-suffix"><input v-model.number="settings.trafficQuota.headroomPercent" type="number" min="0" max="50" step="1" required><b>%</b></span></label>
           <aside class="quota-preview">
-            <div><small>{{ t('settings.planAllowance') }}</small><strong>{{ gb(settings.trafficQuota.amountGB) }}</strong></div>
-            <div><small>{{ t('settings.estimatedProviderStop') }}</small><strong>{{ gb(quotaPreview.providerStopGB) }}</strong></div>
-            <div><small>{{ t('settings.proxyStop') }}</small><strong>{{ settings.trafficQuota.amountGB ? gb(quotaPreview.proxyStopGB) : t('settings.unlimited') }}</strong></div>
+            <div><small>{{ t('settings.planAllowance') }}</small><strong>{{ quotaAmount(settings.trafficQuota.amount) }}</strong></div>
+            <div><small>{{ t('settings.estimatedProviderStop') }}</small><strong>{{ quotaAmount(quotaPreview.providerStop) }}</strong></div>
+            <div><small>{{ t('settings.proxyStop') }}</small><strong>{{ settings.trafficQuota.amount ? quotaAmount(quotaPreview.proxyStop) : t('settings.unlimited') }}</strong></div>
           </aside>
           <label>{{ t('settings.autoReset') }}<SelectControl v-model="settings.reset.mode" :options="resetOptions" /></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="28"></label>

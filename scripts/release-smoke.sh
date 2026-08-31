@@ -46,9 +46,10 @@ FAKE
     --config "$temp_dir/config.json" --state "$temp_dir/state.json" \
     --core-config "$temp_dir/core.json" --sing-box "$fake_sing_box" \
     --domain node.example.com --admin-password-file "$password_file"
-  grep -Eq '"version"[[:space:]]*:[[:space:]]*3' "$temp_dir/config.json"
-  grep -Eq '"amountGB"[[:space:]]*:[[:space:]]*0' "$temp_dir/config.json"
-  if grep -Eiq 'wireguard|companion|"unit"[[:space:]]*:' "$temp_dir/config.json"; then
+  grep -Eq '"version"[[:space:]]*:[[:space:]]*4' "$temp_dir/config.json"
+  grep -Eq '"amount"[[:space:]]*:[[:space:]]*0' "$temp_dir/config.json"
+  grep -Eq '"unit"[[:space:]]*:[[:space:]]*"GB"' "$temp_dir/config.json"
+  if grep -Eiq 'wireguard|companion' "$temp_dir/config.json"; then
     echo "fresh business configuration contains removed fields" >&2
     exit 1
   fi
@@ -60,7 +61,7 @@ FAKE
     exit 1
   fi
 
-  for old_version in 1 2; do
+  for old_version in 1 2 3; do
     printf '{"version":%s}\n' "$old_version" > "$temp_dir/old-config.json"
     if "$temp_dir/sbm-panel" config apply --no-start --config "$temp_dir/old-config.json" --core-config "$temp_dir/old-core.json" --sing-box "$fake_sing_box" >/dev/null 2>&1; then
       echo "old configuration version $old_version was accepted" >&2

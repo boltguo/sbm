@@ -13,25 +13,25 @@ func TestTrafficQuotaConversions(t *testing.T) {
 		effective int64
 	}{
 		{
-			name: "one thousand gigabytes bidirectional with headroom",
+			name: "one thousand decimal gigabytes bidirectional with headroom",
 			quota: TrafficQuotaConfig{
-				AmountGB: 1000, BillingMode: TrafficBillingBidirectional, HeadroomPercent: 10,
+				Amount: 1000, Unit: TrafficUnitGB, BillingMode: TrafficBillingBidirectional, HeadroomPercent: 10,
 			},
 			allowance: 1_000_000_000_000,
 			effective: 450_000_000_000,
 		},
 		{
-			name: "two hundred gigabytes single direction",
+			name: "two hundred gibibytes single direction",
 			quota: TrafficQuotaConfig{
-				AmountGB: 200, BillingMode: TrafficBillingSingle, HeadroomPercent: 10,
+				Amount: 200, Unit: TrafficUnitGiB, BillingMode: TrafficBillingSingle, HeadroomPercent: 10,
 			},
-			allowance: 200_000_000_000,
-			effective: 180_000_000_000,
+			allowance: 214_748_364_800,
+			effective: 193_273_528_320,
 		},
 		{
 			name: "fractional decimal gigabytes",
 			quota: TrafficQuotaConfig{
-				AmountGB: 1.5, BillingMode: TrafficBillingSingle,
+				Amount: 1.5, Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle,
 			},
 			allowance: 1_500_000_000,
 			effective: 1_500_000_000,
@@ -55,13 +55,15 @@ func TestTrafficQuotaConversions(t *testing.T) {
 }
 
 func TestTrafficQuotaValidation(t *testing.T) {
-	valid := TrafficQuotaConfig{AmountGB: 1000, BillingMode: TrafficBillingSingle, HeadroomPercent: 10}
+	valid := TrafficQuotaConfig{Amount: 1000, Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle, HeadroomPercent: 10}
 	tests := []TrafficQuotaConfig{
-		{AmountGB: -1, BillingMode: TrafficBillingSingle},
-		{AmountGB: math.NaN(), BillingMode: TrafficBillingSingle},
-		{AmountGB: 1, BillingMode: "both"},
-		{AmountGB: 1, BillingMode: TrafficBillingSingle, HeadroomPercent: 51},
-		{AmountGB: math.MaxFloat64, BillingMode: TrafficBillingSingle},
+		{Amount: -1, Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle},
+		{Amount: math.NaN(), Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle},
+		{Amount: 1, BillingMode: TrafficBillingSingle},
+		{Amount: 1, Unit: "TB", BillingMode: TrafficBillingSingle},
+		{Amount: 1, Unit: TrafficUnitGB, BillingMode: "both"},
+		{Amount: 1, Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle, HeadroomPercent: 51},
+		{Amount: math.MaxFloat64, Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle},
 	}
 	for _, quota := range tests {
 		if err := quota.Validate(); err == nil {

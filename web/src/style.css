@@ -587,12 +587,6 @@ select:focus-visible,
   color: var(--muted);
 }
 
-.traffic-copy .proxy-actual {
-  margin-top: 8px;
-  color: var(--ink);
-  font: 700 10px/1.4 var(--mono);
-}
-
 .traffic-source {
   display: inline-flex;
   align-items: center;

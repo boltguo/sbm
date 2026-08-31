@@ -8,7 +8,8 @@ if grep -Riq --exclude-dir=dist 'wireguard' "$root_dir/web/src"; then
   exit 1
 fi
 
-if grep -REq --exclude-dir=dist 'quotaUnit|TrafficUnit|trafficQuota\.unit' "$root_dir/web/src"; then
-  echo "Removed traffic-unit selector is still present in frontend sources." >&2
+if ! grep -Fq "value: 'GB'" "$root_dir/web/src/views/SettingsView.vue" ||
+   ! grep -Fq "value: 'GiB'" "$root_dir/web/src/views/SettingsView.vue"; then
+  echo "Traffic-unit selector must offer GB and GiB." >&2
   exit 1
 fi

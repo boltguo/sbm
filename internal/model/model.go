@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	ConfigVersion = 3
+	ConfigVersion = 4
 	StateVersion  = 1
 
 	OutboundStrategyAuto       = "auto"
@@ -20,6 +20,10 @@ const (
 
 	TrafficBillingBidirectional = "bidirectional"
 	TrafficBillingSingle        = "single"
+	TrafficUnitGB               = "GB"
+	TrafficUnitGiB              = "GiB"
+	TrafficGBBytes              = 1_000_000_000
+	TrafficGiBBytes             = 1024 * 1024 * 1024
 )
 
 type Config struct {
@@ -38,17 +42,21 @@ type Config struct {
 	Inbounds             []Inbound          `json:"inbounds"`
 }
 
-// TrafficQuotaConfig stores provider plans in decimal GB. The internal
-// proxy-traffic stop threshold is derived from it whenever it is needed.
+// TrafficQuotaConfig stores the provider's advertised allowance and unit.
+// Enforcement always converts that value to bytes first.
 type TrafficQuotaConfig struct {
-	AmountGB        float64 `json:"amountGB"`
+	Amount          float64 `json:"amount"`
+	Unit            string  `json:"unit"`
 	BillingMode     string  `json:"billingMode"`
 	HeadroomPercent int     `json:"headroomPercent"`
 }
 
 func (q TrafficQuotaConfig) Validate() error {
-	if math.IsNaN(q.AmountGB) || math.IsInf(q.AmountGB, 0) || q.AmountGB < 0 {
+	if math.IsNaN(q.Amount) || math.IsInf(q.Amount, 0) || q.Amount < 0 {
 		return errors.New("套餐流量不能为负数或非有限值")
+	}
+	if _, err := q.unitBytes(); err != nil {
+		return err
 	}
 	if q.BillingMode != TrafficBillingBidirectional && q.BillingMode != TrafficBillingSingle {
 		return errors.New("流量计费方式无效")
@@ -62,7 +70,11 @@ func (q TrafficQuotaConfig) Validate() error {
 
 // AllowanceBytes converts the provider's advertised allowance to bytes.
 func (q TrafficQuotaConfig) AllowanceBytes() (int64, error) {
-	return trafficBytes(q.AmountGB, 1_000_000_000, 1, 1)
+	unitBytes, err := q.unitBytes()
+	if err != nil {
+		return 0, err
+	}
+	return trafficBytes(q.Amount, unitBytes, 1, 1)
 }
 
 // EffectiveBytes returns the proxy traffic at which SBM should stop sing-box.
@@ -78,7 +90,22 @@ func (q TrafficQuotaConfig) EffectiveBytes() (int64, error) {
 	if q.HeadroomPercent < 0 || q.HeadroomPercent > 50 {
 		return 0, errors.New("安全预留比例必须在 0 到 50 之间")
 	}
-	return trafficBytes(q.AmountGB, 1_000_000_000, int64(100-q.HeadroomPercent), 100*factor)
+	unitBytes, err := q.unitBytes()
+	if err != nil {
+		return 0, err
+	}
+	return trafficBytes(q.Amount, unitBytes, int64(100-q.HeadroomPercent), 100*factor)
+}
+
+func (q TrafficQuotaConfig) unitBytes() (int64, error) {
+	switch q.Unit {
+	case TrafficUnitGB:
+		return TrafficGBBytes, nil
+	case TrafficUnitGiB:
+		return TrafficGiBBytes, nil
+	default:
+		return 0, errors.New("流量单位必须为 GB 或 GiB")
+	}
 }
 
 func (q TrafficQuotaConfig) ProviderUsageFactor() int64 {
@@ -160,7 +187,7 @@ func DefaultConfig() Config {
 	return Config{
 		Version: ConfigVersion, PanelPort: 2096, AdminUsername: "admin",
 		WebManagementEnabled: true,
-		TrafficQuota:         TrafficQuotaConfig{BillingMode: TrafficBillingSingle, HeadroomPercent: 10},
+		TrafficQuota:         TrafficQuotaConfig{Unit: TrafficUnitGB, BillingMode: TrafficBillingSingle, HeadroomPercent: 10},
 		Reset:                ResetConfig{Mode: "none", Day: 1, Timezone: "Local"},
 		OutboundStrategy:     OutboundStrategyAuto,
 	}
