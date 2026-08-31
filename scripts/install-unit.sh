@@ -28,6 +28,7 @@ source "$root_dir/install.sh"
 
 [[ "$(normalize_tag 1.2.3)" == v1.2.3 ]]
 [[ "$(normalize_tag v1.2.3)" == v1.2.3 ]]
+[[ "$(normalize_tag 2.0.0)" == v2.0.0 ]]
 
 repo_version="$(tr -d '[:space:]' < "$root_dir/VERSION")"
 declare -p SBM_RELEASE_VERSION >/dev/null
@@ -40,6 +41,8 @@ compatible_version="$(compatible_sing_box_version v1.2.1)"
 compatible_version="$(compatible_sing_box_version v1.2.2)"
 [[ "$compatible_version" == v1.13.14 ]]
 compatible_version="$(compatible_sing_box_version v1.2.3)"
+[[ "$compatible_version" == v1.13.14 ]]
+compatible_version="$(compatible_sing_box_version v2.0.0)"
 [[ "$compatible_version" == v1.13.14 ]]
 
 unset SBM_VERSION SBM_PANEL_VERSION SING_BOX_VERSION
@@ -66,14 +69,25 @@ if (compatible_sing_box_version v9.9.9 >/dev/null 2>&1); then
 fi
 
 (
-  github_latest_tag() { printf 'v1.2.3\n'; }
+  github_latest_tag() { printf 'v2.0.0\n'; }
   unset SBM_VERSION SBM_PANEL_VERSION
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v1.2.3 ]]
+  [[ "$update_target" == v2.0.0 ]]
   SBM_VERSION=1.2.0
   update_target="$(panel_update_target_version)"
   [[ "$update_target" == v1.2.0 ]]
 )
+
+fresh_config="$(mktemp /tmp/sbm-v3-config.XXXXXX)"
+old_config="$(mktemp /tmp/sbm-v2-config.XXXXXX)"
+printf '{"version":3}\n' > "$fresh_config"
+printf '{"version":2}\n' > "$old_config"
+assert_panel_config_supported v2.0.0 "$fresh_config"
+if (assert_panel_config_supported v2.0.0 "$old_config" >/dev/null 2>&1); then
+  echo "SBM 2.x accepted an old configuration" >&2
+  exit 1
+fi
+rm -f "$fresh_config" "$old_config"
 
 (
   installed_panel_version() { printf '1.2.0\n'; }

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/boltguo/sbm/internal/model"
@@ -14,6 +16,13 @@ type ConfigStore struct {
 }
 
 func OpenConfig(path string) (*ConfigStore, error) {
+	version, err := readConfigVersion(path)
+	if err != nil {
+		version, _ = readConfigVersion(path + ".bak")
+	}
+	if version != 0 && version != model.ConfigVersion {
+		return nil, fmt.Errorf("unsupported config version %d", version)
+	}
 	f := NewJSONFile[model.Config](path)
 	cfg, err := f.Load()
 	if err != nil {
@@ -23,6 +32,20 @@ func OpenConfig(path string) (*ConfigStore, error) {
 		return nil, fmt.Errorf("unsupported config version %d", cfg.Version)
 	}
 	return &ConfigStore{file: f, config: cfg}, nil
+}
+
+func readConfigVersion(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return 0, err
+	}
+	return header.Version, nil
 }
 
 func NewConfigStore(path string, cfg model.Config) *ConfigStore {
@@ -47,10 +70,6 @@ func (s *ConfigStore) Replace(cfg model.Config) error {
 
 func cloneConfig(cfg model.Config) model.Config {
 	copyCfg := cfg
-	if cfg.WireGuardExit != nil {
-		wireGuardExit := *cfg.WireGuardExit
-		copyCfg.WireGuardExit = &wireGuardExit
-	}
 	copyCfg.Inbounds = append([]model.Inbound(nil), cfg.Inbounds...)
 	for i := range copyCfg.Inbounds {
 		if cfg.Inbounds[i].VLESS != nil {

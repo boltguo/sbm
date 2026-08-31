@@ -19,7 +19,20 @@ import (
 
 type configSource struct{ cfg model.Config }
 
-func (s *configSource) Get() model.Config { return s.cfg }
+func (s *configSource) Get() model.Config {
+	cfg := s.cfg
+	if cfg.TrafficQuota.BillingMode == "" {
+		cfg.TrafficQuota = model.DefaultConfig().TrafficQuota
+	}
+	return cfg
+}
+
+func configWithLimit(limit int64) model.Config {
+	cfg := model.DefaultConfig()
+	cfg.TrafficQuota.AmountGB = float64(limit) / 1_000_000_000
+	cfg.TrafficQuota.HeadroomPercent = 0
+	return cfg
+}
 
 type fakeCore struct {
 	running                     bool
@@ -76,6 +89,46 @@ func TestCoreRestartCountersReset(t *testing.T) {
 	got := tracker.State()
 	if got.Upload != 1020 || got.Download != 2030 {
 		t.Fatalf("restart delta was wrong: %+v", got)
+	}
+}
+
+func TestCoreRestartUsesBothCountersAsOneGeneration(t *testing.T) {
+	tests := []struct {
+		name                           string
+		currentUpload, currentDownload int64
+	}{
+		{name: "download counter moved backwards", currentUpload: 200, currentDownload: 10},
+		{name: "upload counter moved backwards", currentUpload: 10, currentDownload: 2_000},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := stateAt(time.Now())
+			state.Upload, state.Download = 1_000, 2_000
+			state.LastCoreUpload, state.LastCoreDownload = 100, 1_000
+			tracker := NewForTest(state, &configSource{}, nil, time.Now)
+			if _, err := tracker.ApplySample(context.Background(), test.currentUpload, test.currentDownload); err != nil {
+				t.Fatal(err)
+			}
+			got := tracker.State()
+			if got.Upload != 1_000+test.currentUpload || got.Download != 2_000+test.currentDownload {
+				t.Fatalf("restart generation split across directions: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCoreGenerationDetectsRestartAfterBothCountersExceedBaseline(t *testing.T) {
+	state := stateAt(time.Now())
+	state.Upload, state.Download = 1_000, 2_000
+	state.LastCoreUpload, state.LastCoreDownload = 100, 150
+	state.CoreGeneration = "old-generation"
+	tracker := NewForTest(state, &configSource{}, nil, time.Now)
+	if _, err := tracker.applySample(context.Background(), 200, 300, "new-generation"); err != nil {
+		t.Fatal(err)
+	}
+	got := tracker.State()
+	if got.Upload != 1_200 || got.Download != 2_300 || got.CoreGeneration != "new-generation" {
+		t.Fatalf("generation restart was not counted as a new baseline: %+v", got)
 	}
 }
 
@@ -172,6 +225,79 @@ func TestSampleReportsUnavailableCoreDistinctly(t *testing.T) {
 	}
 }
 
+func TestSampleHealthFailureAndRecovery(t *testing.T) {
+	now := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	tracker := NewForTest(stateAt(now), &configSource{}, nil, func() time.Time { return now })
+	if got := tracker.SampleHealth(); got.Status != SampleStatusWaiting {
+		t.Fatalf("initial health=%+v", got)
+	}
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer failing.Close()
+	_, _ = tracker.Sample(context.Background(), ClashClient{URL: failing.URL, Client: failing.Client()})
+	firstFailure := tracker.SampleHealth()
+	if firstFailure.Status != SampleStatusInterrupted || !firstFailure.FailureSince.Equal(now) {
+		t.Fatalf("failure health=%+v", firstFailure)
+	}
+	now = now.Add(30 * time.Second)
+	_, _ = tracker.Sample(context.Background(), ClashClient{URL: failing.URL, Client: failing.Client()})
+	if got := tracker.SampleHealth(); !got.FailureSince.Equal(firstFailure.FailureSince) {
+		t.Fatalf("repeated failure reset failureSince: %+v", got)
+	}
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]int64{"uploadTotal": 4, "downloadTotal": 5})
+	}))
+	defer healthy.Close()
+	if _, err := tracker.Sample(context.Background(), ClashClient{URL: healthy.URL, Client: healthy.Client()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.SampleHealth(); got.Status != SampleStatusHealthy || !got.LastSuccessAt.Equal(now) || !got.FailureSince.IsZero() {
+		t.Fatalf("recovered health=%+v", got)
+	}
+}
+
+func TestSampleResetsBeforeApplyingBoundaryReading(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 1, 0, time.UTC)
+	cfg := model.DefaultConfig()
+	cfg.Reset = model.ResetConfig{Mode: "monthly", Day: 1, Timezone: "UTC"}
+	state := stateAt(now.Add(-30 * 24 * time.Hour))
+	state.Upload, state.Download = 10_000, 20_000
+	state.LastCoreUpload, state.LastCoreDownload = 100, 200
+	state.NextResetAt = now.Add(-time.Second)
+	tracker := NewForTest(state, &configSource{cfg: cfg}, nil, func() time.Time { return now })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]int64{"uploadTotal": 125, "downloadTotal": 225})
+	}))
+	defer server.Close()
+	if _, err := tracker.Sample(context.Background(), ClashClient{URL: server.URL, Client: server.Client()}); err != nil {
+		t.Fatal(err)
+	}
+	got := tracker.State()
+	if got.Upload != 25 || got.Download != 25 || !got.PeriodStartedAt.Equal(now) {
+		t.Fatalf("boundary sample was not assigned to the new period: %+v", got)
+	}
+}
+
+func TestSampleSkipsReadingWhenScheduledResetFails(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 1, 0, time.UTC)
+	cfg := model.DefaultConfig()
+	cfg.Reset = model.ResetConfig{Mode: "monthly", Day: 1, Timezone: "Invalid/Zone"}
+	state := stateAt(now.Add(-30 * 24 * time.Hour))
+	state.NextResetAt = now.Add(-time.Second)
+	tracker := NewForTest(state, &configSource{cfg: cfg}, nil, func() time.Time { return now })
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]int64{"uploadTotal": 1, "downloadTotal": 1})
+	}))
+	defer server.Close()
+	if _, err := tracker.Sample(context.Background(), ClashClient{URL: server.URL, Client: server.Client()}); err == nil {
+		t.Fatal("expected reset error")
+	}
+	if requests.Load() != 0 || tracker.SampleHealth().Status != SampleStatusInterrupted {
+		t.Fatalf("sample ran despite reset failure: requests=%d health=%+v", requests.Load(), tracker.SampleHealth())
+	}
+}
+
 func TestMonthlyResetAndNextTime(t *testing.T) {
 	location, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Date(2026, 1, 28, 23, 30, 0, 0, location)
@@ -213,7 +339,7 @@ func TestInvalidScheduleDoesNotEraseCurrentResetTime(t *testing.T) {
 
 func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 	now := time.Now()
-	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	source := &configSource{cfg: configWithLimit(100)}
 	core := &fakeCore{running: true}
 	tracker := NewForTest(stateAt(now), source, core, time.Now)
 	exceeded, err := tracker.ApplySample(context.Background(), 60, 40)
@@ -223,14 +349,14 @@ func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 	if !exceeded || !tracker.State().QuotaExceeded || core.stops != 1 {
 		t.Fatalf("quota not enforced: state=%+v core=%+v", tracker.State(), core)
 	}
-	source.cfg.TotalBytes = 0
+	source.cfg.TrafficQuota.AmountGB = 0
 	if err := tracker.ReconcileQuota(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if tracker.State().QuotaExceeded || core.starts != 1 || tracker.State().Total() != 100 {
 		t.Fatalf("quota recovery wrong: state=%+v core=%+v", tracker.State(), core)
 	}
-	unlimited := NewForTest(stateAt(now), &configSource{cfg: model.Config{TotalBytes: 0}}, &fakeCore{}, time.Now)
+	unlimited := NewForTest(stateAt(now), &configSource{cfg: configWithLimit(0)}, &fakeCore{}, time.Now)
 	exceeded, _ = unlimited.ApplySample(context.Background(), 1<<40, 1<<40)
 	if exceeded || unlimited.State().QuotaExceeded {
 		t.Fatal("unlimited quota was exceeded")
@@ -238,7 +364,7 @@ func TestQuotaExceededUnlimitedAndRecovery(t *testing.T) {
 }
 
 func TestQuotaEnforcementRetriesAfterStopFailure(t *testing.T) {
-	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	source := &configSource{cfg: configWithLimit(100)}
 	core := &fakeCore{running: true, stopErr: errors.New("systemctl failed")}
 	tracker := NewForTest(stateAt(time.Now()), source, core, time.Now)
 	if exceeded, err := tracker.ApplySample(context.Background(), 100, 0); !exceeded || err == nil {
@@ -257,7 +383,7 @@ func TestQuotaEnforcementRetriesAfterStopFailure(t *testing.T) {
 }
 
 func TestQuotaEnforcementContinuesWhenPersistenceFails(t *testing.T) {
-	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	source := &configSource{cfg: configWithLimit(100)}
 	core := &fakeCore{running: true}
 	tracker := NewForTest(stateAt(time.Now()), source, core, time.Now)
 	blocked := filepath.Join(t.TempDir(), "blocked")
@@ -274,7 +400,7 @@ func TestQuotaEnforcementContinuesWhenPersistenceFails(t *testing.T) {
 }
 
 func TestReconcileQuotaConvergesWithoutStateTransition(t *testing.T) {
-	source := &configSource{cfg: model.Config{TotalBytes: 100}}
+	source := &configSource{cfg: configWithLimit(100)}
 	state := stateAt(time.Now())
 	state.Upload = 100
 	state.QuotaExceeded = true
@@ -343,7 +469,7 @@ func TestUnreadableCoreStateStillEnforcesQuota(t *testing.T) {
 	state.Upload = 200
 	state.QuotaExceeded = true
 	core := &fakeCore{running: true, stateErr: errors.New("Failed to connect to bus")}
-	tracker := NewForTest(state, &configSource{cfg: model.Config{TotalBytes: 100}}, core, func() time.Time { return now })
+	tracker := NewForTest(state, &configSource{cfg: configWithLimit(100)}, core, func() time.Time { return now })
 	if err := tracker.ReconcileQuota(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +483,7 @@ func TestUnreadableCoreStateStillEnforcesQuota(t *testing.T) {
 func TestUnreadableCoreStateWithoutQuotaLeavesCoreAlone(t *testing.T) {
 	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
 	core := &fakeCore{running: true, stateErr: errors.New("Failed to connect to bus")}
-	tracker := NewForTest(stateAt(now), &configSource{cfg: model.Config{TotalBytes: 100}}, core, func() time.Time { return now })
+	tracker := NewForTest(stateAt(now), &configSource{cfg: configWithLimit(100)}, core, func() time.Time { return now })
 	if err := tracker.ReconcileQuota(context.Background()); err == nil {
 		t.Fatal("an unreadable state should be reported")
 	}

@@ -13,6 +13,8 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 ## Install
 
+SBM 2.x uses a new v3 configuration and supports fresh installations only. It deliberately does not migrate or partially read 1.x configuration files; back up the old installation and deploy 2.x with a new configuration.
+
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
 1. Create an A record pointing your domain to the VPS public IPv4 address.
@@ -43,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=1.2.3 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. Historical tag scripts released before version pinning still contain their original latest-release behavior; use the current installer and `SBM_VERSION` when installing those releases.
@@ -60,7 +62,7 @@ The prompts are in Chinese and ask for the domain, the panel port, and the node 
 
 Installation aborts if TCP/80, TCP/443, UDP/443, or the panel port is already in use. Once the services start, the script checks the listeners and makes a local HTTPS request to the panel.
 
-UFW, firewalld, and iptables inside the VPS are handled automatically, and existing iptables rules are kept. Cloud firewalls sit outside the VPS and the script cannot change them; the [VPS firewall guide](docs/VPS-COMPATIBILITY.en.md) has the console paths for OCI, AWS, GCP, Azure, Alibaba Cloud, Tencent Cloud, and other common providers.
+UFW, firewalld, and iptables inside the VPS are handled automatically, and existing iptables rules are kept. Cloud firewalls sit outside the VPS and must be configured in the provider console.
 
 Open the panel at:
 
@@ -70,28 +72,56 @@ https://node.example.com:2096/
 
 If you forget the password, run `sudo sbm` and choose `Reset administrator password`.
 
+### Cloud firewall and VPS compatibility
+
+Use a fixed public IPv4 address when the provider offers one, then point the domain directly at it. Remove a stale AAAA record unless IPv6 is fully configured. Keep outbound traffic allowed: certificate issuance, updates, DNS, and proxy forwarding all need it.
+
+The four inbound rules in the installation table are separate rules. In particular, an `HTTPS/443` preset normally opens TCP only; Hysteria2 still needs UDP/443. The panel and subscription share the panel port. If you restrict that port by source address, include every phone and computer that needs to refresh the subscription. Clash API remains local on `127.0.0.1:9090` and must not be exposed.
+
+| Provider | Setting commonly missed |
+| --- | --- |
+| Oracle Cloud (OCI) | Check the VNIC's NSG or subnet Security List and the image firewall; ZPR also needs an allow policy when enabled. |
+| AWS EC2 | Apply the Security Group to the actual ENI. A custom Network ACL is stateless and must also allow response traffic. Use an Elastic IP to survive Stop/Start. |
+| AWS Lightsail | IPv4 and IPv6 firewalls are independent. Attach a Static IP before relying on the DNS record. |
+| Google Cloud | The allow rule must target the VM's VPC/tag/service account and outrank deny policies. Promote an ephemeral external IP to static. |
+| Microsoft Azure | Both subnet and NIC NSGs must allow the traffic; lower priority numbers run first. Use a Static Public IP. |
+| Alibaba Cloud / Tencent Cloud | Check all attached security groups, rule order, and outbound policy; predefined HTTPS rules do not add UDP/443. |
+| DigitalOcean / Hetzner / Vultr / Linode | Creating a firewall rule is not enough—confirm that the firewall is enabled and attached to the instance or label. |
+| DMIT and other KVM providers | Some products add a provider-side firewall. Treat it as a separate layer from UFW/firewalld/iptables. |
+
+An operating-system `reboot` normally keeps the public IP. Provider-console Stop/Start or Deallocate can change a dynamic IP on EC2, Lightsail, GCP, or Azure, leaving DNS pointed at the old address. The installer checks DNS during a fresh installation but does not modify third-party DNS.
+
 ## Screenshots
 
 ### Overview
 
-![SBM runtime overview](docs/screenshots/dashboard-en.jpg)
+![SBM runtime overview](screenshots/dashboard-en.jpg)
 
 ### Protocols
 
-![SBM protocol management](docs/screenshots/protocols-en.jpg)
+![SBM protocol management](screenshots/protocols-en.jpg)
 
 ## What the panel does
 
 - Chinese and English UI, with a manual language switch
-- SBM and sing-box versions, panel update checks, traffic usage, quota, reset period, and subscription QR code
-- CPU, load, memory, disk, uptime, OS, kernel, and architecture status
+- SBM and sing-box versions, panel update checks, provider-plan traffic estimates, reset period, and subscription QR code
+- Server Health with CPU, load, memory, disk, uptime, service/configuration checks, TLS expiry, TCP/UDP listeners, sampling state, and reset schedule
 - Add, edit, enable, disable, and delete VLESS Reality or Hysteria2 inbounds
 - Copy a single-node URL or display its QR code
 - Automatic UUID, Reality key pair, short ID, and Hysteria2 password generation
 - Manual traffic reset or monthly reset on days 1–28
 - Automatic, prefer IPv4, prefer IPv6, IPv4-only, or IPv6-only proxy egress strategy
-- Same-port WireGuard IPv4 companion nodes for each protocol, with no WireGuard package on A
 - Automatic sing-box validation and rollback when a protocol change fails
+
+### Traffic plans and quota
+
+Under `Settings → Plan traffic and period`, enter every allowance in decimal GB. If the provider advertises `1 TB`, enter `1000 GB`; for `500 GB`, enter `500`. Then select whether the provider bills one direction or ingress plus egress, and set a safety reserve. SBM calculates the sing-box proxy-traffic stop threshold, so you do not divide a two-way plan yourself.
+
+The Overview shows provider-plan allowance and estimated provider usage in GB. Provider billing remains authoritative: SBM does not see operating-system updates, SSH, panel access, every protocol overhead byte, or other processes on the VPS. Actual sing-box byte counters use IEC units (`KiB`, `MiB`, `GiB`, `TiB`) so their source remains explicit.
+
+SBM defines `1 GB` as `10^9` bytes. For a two-way plan, the proxy stop threshold is half the allowance after the safety reserve because both upload and download consume the plan. For a one-way plan, it is the full allowance after the reserve. A `1000 GB / two-way / 10%` plan therefore produces a 450,000,000,000-byte proxy threshold (450 GB, about 419.10 GiB).
+
+Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box stops when the configured safety threshold is reached and resumes after a manual or scheduled traffic reset, or after the plan is increased.
 
 ### IPv4 / IPv6 egress
 
@@ -99,15 +129,11 @@ Choose an address-family strategy under `Settings → Proxy egress network`. If 
 
 This setting requires sing-box 1.12 or newer and only affects domain destinations received by sing-box. The server cannot switch address family after a client has already resolved a domain to an IP. IPv6 client access also requires a correct AAAA record and matching rules in both the cloud and host firewalls.
 
-### WireGuard exit node
+### Server Health and diagnostics
 
-Starting with v1.2.0, configure B under `Settings → WireGuard companion nodes`. With the switch off, the subscription contains only the original direct nodes. Turning it on adds a separate credential on the same domain and port for every enabled protocol, such as `DMIT VLESS · via AWS` and `DMIT HY2 · via AWS`. The suffix is configurable, and original direct nodes always remain.
+The Server page is read-only. It reports each check as healthy, warning, error, or unknown without letting one failed check hide the rest. It checks the panel, sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. Configuration checks are cached briefly so the five-second page refresh does not repeatedly start external processes.
 
-Companion credentials are routed by authenticated user to the userspace WireGuard endpoint and resolve domain targets as IPv4. Other nodes continue to use the address-family strategy under `Proxy egress network` and leave directly through A. Turning the switch off hides the companion credentials from sing-box and the subscription without discarding their UUIDs or passwords.
-
-The panel can generate A's WireGuard keypair. A's internal tunnel address (`10.66.0.2/32`), MTU (`1408`), and keepalive (`25s`) are built in. B still needs WireGuard, IPv4 forwarding, NAT, and a firewall rule allowing the UDP port from A. If B or the tunnel fails, only the companion nodes stop working; clients can switch directly to the original nodes.
-
-B can be a GCP or AWS instance or a regular VPS. See the [WireGuard B relay guide](docs/WIREGUARD-EXIT.en.md) for the architecture, complete B setup, provider notes, and troubleshooting.
+The page returns only structured health fields and never exposes passwords, session secrets, subscription tokens, UUIDs, private keys, complete configuration, or raw command output. DNS/public-IP matching is intentionally left out because valid multi-record, IPv6, and NAT setups cannot be judged reliably from the host alone.
 
 ## Manage SBM from the terminal
 
@@ -128,8 +154,11 @@ The menu includes:
 9. Restore configuration
 10. Uninstall
 11. Repair boot services and host firewall
+12. Lock or unlock the Web management entry while keeping subscriptions available
 
 Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Releases. Panel updates select the latest SBM Release, while option 7 installs the sing-box version pinned to the currently installed SBM release. If a replacement binary fails configuration validation or its health check, the old one is restored.
+
+Protocol and egress changes are transactional: SBM writes a candidate, runs `sing-box check`, starts the result, and restores the previous business configuration and generated core configuration if validation or startup fails.
 
 The version card on the Overview page checks the latest GitHub Release and shows a red dot when an update is available. To install it, connect over SSH, run `sudo sbm`, and choose option 6.
 
@@ -140,6 +169,8 @@ journalctl -u sbm-panel -g 'audit event=login'
 ```
 
 The panel manages host services, so do not expose its port more widely than needed. Subscriptions share that port, so a source-IP restriction must allow every device that updates the subscription.
+
+If you rarely change settings, choose option 12 in `sudo sbm` to lock the Web UI, login, and management API. Existing `/sub/...` URLs remain available; run the same option over SSH to unlock management.
 
 ## Adding another inbound
 
@@ -165,6 +196,15 @@ journalctl -u sing-box -e --no-pager
 ```
 
 If certificate issuance fails, check the A record, Cloudflare grey-cloud mode, TCP/80, and whether another process is already using port 80.
+
+If a service is unreachable, confirm the rule is attached to this exact cloud instance, then check both TCP and UDP listeners:
+
+```bash
+sudo ss -lntp
+sudo ss -lnup
+```
+
+Run `sudo sbm` and choose option 11 to restore the host-firewall rules and boot services. This cannot change a provider firewall. Test the panel from another network with `curl -vk https://your-domain.example:panel-port/`; if no packet reaches the VPS, investigate DNS, the cloud firewall, Network ACL, or upstream filtering before reinstalling.
 
 The message `debconf: delaying package configuration, since apt-utils is not installed` is normal on minimal Debian images.
 

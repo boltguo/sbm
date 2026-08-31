@@ -17,21 +17,43 @@ let timer = 0
 
 const bytes = (value: number) => {
   if (!value) return '0 B'
-  const units = ['B','KB','MB','GB','TB']; const i = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4)
+  const units = ['B','KiB','MiB','GiB','TiB']; const i = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4)
   return `${(value / 1024 ** i).toFixed(i > 2 ? 2 : 1)} ${units[i]}`
+}
+const providerBytes = (value: number) => {
+  const amount = value / 1e9
+  return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: amount < 10 ? 2 : 1 }).format(amount)} GB`
 }
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
 const updateLabel = () => update.value?.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.checkUpdate')
-const auditLabel = () => {
-  if (!data.value || data.value.trafficAudit.status === 'unavailable') return t('dashboard.trafficSource')
-  return `${t('dashboard.trafficSource')} · ${t(`dashboard.audit.${data.value.trafficAudit.status}`)}`
+const sampleAge = (value?: string) => {
+  if (!value || value.startsWith('0001')) return ''
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
+  if (seconds < 10) return t('dashboard.justNow')
+  if (seconds < 60) return t('dashboard.secondsAgo', { count: seconds })
+  return t('dashboard.minutesAgo', { count: Math.floor(seconds / 60) })
 }
-const auditDetail = () => {
-  if (!data.value || data.value.trafficAudit.status === 'unavailable') return t('dashboard.audit.unavailableHelp')
-  const audit = data.value.trafficAudit
-  if (audit.status === 'collecting') return t('dashboard.audit.collectingHelp', { amount: bytes(audit.proxyBytes) })
-  return t('dashboard.audit.detail', { interface: audit.interface || 'WAN', proxy: bytes(audit.proxyBytes), receive: bytes(audit.receiveBytes), transmit: bytes(audit.transmitBytes) })
+const elapsed = (value?: string) => {
+  if (!value || value.startsWith('0001')) return t('dashboard.durationUnknown')
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
+  if (seconds < 60) return t('dashboard.durationSeconds', { count: seconds })
+  return t('dashboard.durationMinutes', { count: Math.floor(seconds / 60) })
+}
+const sampleLabel = () => {
+  if (!data.value) return t('dashboard.sampleWaiting')
+  const health = data.value.sampleHealth
+  if (health.status === 'paused') return t('dashboard.samplePaused')
+  if (health.status === 'interrupted') return `${t('dashboard.sampleInterrupted')} · ${elapsed(health.failureSince)}`
+  if (health.status === 'waiting') return t('dashboard.sampleWaiting')
+  return t('dashboard.sampleHealthy', { age: sampleAge(health.lastSuccessAt) })
+}
+const sampleDetail = () => {
+  if (!data.value) return ''
+  const health = data.value.sampleHealth
+  if (health.status === 'interrupted') return t('dashboard.sampleInterruptedHelp', { time: date(health.failureSince) })
+  if (health.status === 'paused') return t('dashboard.samplePausedHelp')
+  return t('dashboard.sampleHelp')
 }
 
 const safe = guard(message => emit('toast', message))
@@ -80,7 +102,7 @@ onBeforeUnmount(() => clearInterval(timer))
     <header class="page-head"><div><span class="eyebrow">OVERVIEW / LIVE</span><h1>{{ t('dashboard.title') }}</h1></div><div class="head-actions"><ConfirmAction :title="t('dashboard.reset')" :message="t('dashboard.resetConfirm')" @confirm="reset"><button class="secondary"><Icon name="refresh"/>{{ t('dashboard.reset') }}</button></ConfirmAction><ConfirmAction :title="t('dashboard.restart')" :message="t('dashboard.restartConfirm')" @confirm="restart"><button class="primary" :disabled="data.quotaExceeded"><Icon name="power"/>{{ t('dashboard.restart') }}</button></ConfirmAction></div></header>
     <div v-if="data.quotaExceeded" class="alert danger"><strong>{{ t('dashboard.exceeded') }}</strong><span>{{ t('dashboard.exceededHelp') }}</span></div>
     <section class="status-strip">
-      <div><span class="status-dot" :class="data.active ? 'online' : 'offline'"></span><small>CORE STATUS</small><strong>{{ data.active ? t('dashboard.running') : t('dashboard.stopped') }}</strong></div>
+      <div><span class="status-dot" :class="data.coreStatus === 'running' ? 'online' : data.coreStatus === 'stopped' ? 'offline' : 'unknown'"></span><small>CORE STATUS</small><strong>{{ t(`dashboard.${data.coreStatus}`) }}</strong></div>
       <div class="version-cell">
         <small>SBM VERSION</small>
         <strong>{{ panelVersion(data.panelVersion) }}</strong>
@@ -93,16 +115,18 @@ onBeforeUnmount(() => clearInterval(timer))
     <section class="traffic-panel">
       <div class="traffic-copy">
         <div class="traffic-kicker">
-          <span class="eyebrow">SHARED TRAFFIC POOL</span>
+          <span class="eyebrow">ESTIMATED PROVIDER USAGE</span>
           <button class="traffic-refresh" :class="{ refreshing: refreshingTraffic }" :disabled="refreshingTraffic" :title="t('dashboard.refreshHelp')" @click="refreshTraffic"><Icon name="refresh"/>{{ t('dashboard.refresh') }}</button>
         </div>
-        <h2>{{ bytes(data.used) }}</h2>
-        <p>{{ data.totalBytes ? t('dashboard.totalRemaining', { total: bytes(data.totalBytes), remaining: bytes(data.remaining) }) : t('dashboard.unlimitedHelp') }}</p>
-        <small class="traffic-source" :class="{ warning: data.trafficAudit.status === 'different', pending: data.trafficAudit.status === 'collecting' || data.trafficAudit.status === 'unavailable' }" :title="auditDetail()"><i></i>{{ auditLabel() }}</small>
+        <h2>{{ providerBytes(data.estimatedProviderUsedBytes) }}</h2>
+        <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: `${data.trafficQuota.amountGB} GB`, remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
+        <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
+        <p class="proxy-actual">{{ t('dashboard.proxyActual', { amount: bytes(data.proxyUsedBytes) }) }}</p>
+        <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
       </div>
-      <div class="traffic-ring" :style="{ '--progress': `${data.totalBytes ? data.progress : 0}%` }"><div><b>{{ data.totalBytes ? Math.round(data.progress) : '∞' }}</b><small>{{ data.totalBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
+      <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
-      <div class="progress-track"><i :style="{ width: data.totalBytes ? `${data.progress}%` : '0%' }"></i></div>
+      <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
     </section>
     <section class="subscription-card">
       <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>

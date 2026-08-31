@@ -50,12 +50,6 @@ onMounted(load)
           <dl v-else><div><dt>TLS</dt><dd>Server certificate</dd></div><div><dt>ALPN</dt><dd>h3</dd></div><div><dt>OBFS</dt><dd>{{ item.hysteria2?.obfs || t('protocol.off') }}</dd></div></dl>
           <div class="card-actions"><button @click="copy(item.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item)">QR</button><button :aria-label="t('protocol.edit')" @click="edit(item)"><Icon name="edit"/></button><ConfirmAction :title="item.name" :message="t('protocol.deleteConfirm', { name: item.name })" destructive @confirm="remove(item)"><button class="destructive" :aria-label="t('protocol.delete')"><Icon name="trash"/></button></ConfirmAction></div>
         </article>
-        <article v-if="item.wireGuardNode" class="protocol-card companion-card">
-          <div class="protocol-top"><div class="protocol-glyph">WG</div><div><span class="pill">WIREGUARD · IPv4</span><h2>{{ item.wireGuardNode.name }}</h2></div><span class="companion-managed"><Icon name="route"/>{{ t('protocol.companionManaged') }}</span></div>
-          <div class="endpoint"><span>{{ item.network.toUpperCase() }}</span><code>{{ item.port }}</code><b>ACTIVE</b></div>
-          <dl><div><dt>{{ t('protocol.companionEntry') }}</dt><dd>{{ item.name }}</dd></div><div><dt>{{ t('protocol.companionEgress') }}</dt><dd>WireGuard IPv4</dd></div><div><dt>{{ t('protocol.companionControl') }}</dt><dd>{{ t('protocol.companionSettings') }}</dd></div></dl>
-          <div class="card-actions"><button @click="copy(item.wireGuardNode.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item.wireGuardNode)">QR</button></div>
-        </article>
       </template>
       <button class="add-card" @click="openCreate"><Icon name="plus"/><strong>{{ t('protocol.addAnother') }}</strong><span>{{ t('protocol.addAnotherHelp') }}</span></button>
     </div>

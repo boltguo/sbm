@@ -13,6 +13,8 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 ## 安装
 
+SBM 2.x 使用全新的 v3 配置，只支持全新安装。它不会迁移或部分读取 1.x 配置；请先备份旧实例，再使用新配置部署 2.x。
+
 系统需要是 Debian 或 Ubuntu，架构支持 amd64 和 arm64。安装前先处理域名和安全组：
 
 1. 添加域名 A 记录，指向 VPS 公网 IPv4。
@@ -43,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器会同时锁定经过验证的 SBM 与 sing-box 版本组合，不会在上游发布新版后静默换成未经测试的 sing-box。需要安装指定的已发布 SBM 版本时，使用当前安装器并设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=1.2.3 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。版本锁定功能发布前的历史标签脚本仍保留当时“查询最新版”的旧逻辑；安装这些旧版本时应使用当前安装器加 `SBM_VERSION`。
@@ -60,7 +62,7 @@ Domain: node.example.com
 
 TCP/80、TCP/443、UDP/443 或面板端口被占用时安装会中止。服务起来后脚本会检查监听端口，并从本机请求一次面板 HTTPS。
 
-VPS 内部的 UFW、firewalld 和 iptables 会自动处理，已有 iptables 规则不会被清空。云安全组在 VPS 外面，脚本改不了，各平台控制台入口见 [VPS 防火墙指南](docs/VPS-COMPATIBILITY.md)。
+VPS 内部的 UFW、firewalld 和 iptables 会自动处理，已有 iptables 规则不会被清空。云安全组在 VPS 外面，必须到厂商控制台手动配置。
 
 打开面板：
 
@@ -70,28 +72,56 @@ https://node.example.com:2096/
 
 忘记密码时运行 `sudo sbm`，选择 `重置管理员密码`。
 
+### 云防火墙与 VPS 兼容性
+
+云厂商支持时，建议先绑定固定公网 IPv4，再把域名直接指向该地址。没有完整配置 IPv6 时应删除错误的 AAAA 记录。出站流量保持允许：证书签发、更新、DNS 和代理转发都会使用它。
+
+安装表格中的四项是独立入站规则。特别是 `HTTPS/443` 预设通常只放行 TCP，Hysteria2 仍需单独放行 UDP/443。面板和总订阅共用面板端口；按来源 IP 限制时，所有需要更新订阅的手机和电脑都要包含在内。Clash API 只监听 `127.0.0.1:9090`，不要对公网开放。
+
+| 平台 | 容易漏掉的设置 |
+| --- | --- |
+| Oracle Cloud (OCI) | 检查 VNIC 的 NSG 或子网 Security List，以及镜像自带防火墙；启用 ZPR 时还需允许策略。 |
+| AWS EC2 | Security Group 要关联到实际 ENI；自定义 Network ACL 是无状态的，还要允许响应流量。用 Elastic IP 避免 Stop/Start 后地址变化。 |
+| AWS Lightsail | IPv4 与 IPv6 防火墙互相独立；域名长期使用前先绑定 Static IP。 |
+| Google Cloud | 允许规则要命中实例的 VPC、标签或服务账号，并排在拒绝策略之前；临时外部 IP 建议转为静态。 |
+| Microsoft Azure | 子网与 NIC 的 NSG 都要允许，优先级数字越小越先执行；公网 IP 建议设为 Static。 |
+| 阿里云 / 腾讯云 | 检查所有关联安全组、规则顺序和出站策略；预置 HTTPS 规则不会增加 UDP/443。 |
+| DigitalOcean / Hetzner / Vultr / Linode | 创建规则后还要确认防火墙已启用，并确实关联到实例或标签。 |
+| DMIT 和其他 KVM 商家 | 部分产品另有控制台防火墙，它与 UFW、firewalld、iptables 是两层过滤。 |
+
+操作系统内执行 `reboot` 通常不会改变公网 IP；在云控制台 Stop/Start 或 Deallocate，EC2、Lightsail、GCP、Azure 的动态 IP 可能变化，DNS 仍指向旧地址。安装器会在全新安装时检查 DNS，但不会修改第三方 DNS。
+
 ## 界面截图
 
 ### 运行概览
 
-![SBM 运行概览](docs/screenshots/dashboard-zh-CN.jpg)
+![SBM 运行概览](screenshots/dashboard-zh-CN.jpg)
 
 ### 协议管理
 
-![SBM 协议管理](docs/screenshots/protocols-zh-CN.jpg)
+![SBM 协议管理](screenshots/protocols-zh-CN.jpg)
 
 ## 面板能做什么
 
 - 中英文界面，可手动切换语言
-- SBM 与 sing-box 版本、面板更新检测、流量、配额、重置周期和订阅二维码
-- CPU、负载、内存、磁盘、运行时长、系统、内核和架构状态
+- SBM 与 sing-box 版本、面板更新检测、云套餐流量估算、重置周期和订阅二维码
+- 服务器健康页：CPU、负载、内存、磁盘、运行时长、服务/配置检查、TLS 到期、TCP/UDP 监听、采样状态和重置计划
 - 新增、修改、启停和删除 VLESS Reality、Hysteria2 入站
 - 复制单节点链接或显示二维码
 - 自动生成 UUID、Reality 密钥、short ID 和 Hysteria2 密码
 - 手动重置流量，或设置每月 1～28 日自动重置
 - 可选自动、优先 IPv4、优先 IPv6、仅 IPv4 或仅 IPv6 的代理出口策略
-- 可为每个协议增加同端口的 WireGuard IPv4 出口节点，A 端无需安装 WireGuard
 - 协议变更前自动校验 sing-box，失败时恢复原配置
+
+### 套餐流量与限额
+
+在 `设置 → 套餐流量与周期` 中统一按十进制 GB 填写额度：厂商标 `1 TB` 就填 `1000 GB`，标 `500 GB` 就填 `500`。然后选择单向计费还是入站与出站双向合计，并设置安全预留。SBM 会计算 sing-box 代理流量的停机阈值，不需要用户自己把双向套餐除以 2。
+
+概览页中的套餐额度与云厂商预计用量统一显示为 GB。最终账单仍以云厂商控制台为准：SBM 无法统计系统更新、SSH、面板访问、全部协议开销以及 VPS 上其他进程的流量。sing-box 实际字节计数使用 IEC 单位（`KiB`、`MiB`、`GiB`、`TiB`），便于明确区分数据来源。
+
+SBM 规定 `1 GB = 10^9` 字节。双向套餐的代理停机阈值是扣除安全预留后额度的一半，因为上传、下载都会消耗套餐；单向套餐则使用扣除预留后的完整额度。`1000 GB / 双向 / 10%` 会得到 450,000,000,000 字节，也就是 450 GB、约 419.10 GiB 的代理阈值。
+
+套餐额度填 `0` 表示不限量。有限额度达到安全阈值后，sing-box 会停止；手动或定时重置流量、或者提高套餐额度后会恢复。
 
 ### IPv4 / IPv6 出口
 
@@ -99,15 +129,11 @@ https://node.example.com:2096/
 
 该策略要求 sing-box 1.12 或更高版本，并且只影响 sing-box 收到的域名目标。客户端已经把域名解析成 IP 时，服务端无法再切换地址族。客户端通过 IPv6 接入还需要域名有正确的 AAAA 记录，并在云防火墙和主机防火墙中放行对应端口。
 
-### WireGuard 出口节点
+### 服务器健康与诊断
 
-从 v1.2.0 开始，可以在 `设置 → WireGuard 附加节点` 中配置 B。开关关闭时，订阅只包含原来的直连节点；打开后，每个已启用协议都会在相同域名和端口下增加一组独立凭据，例如 `DMIT VLESS · via AWS` 和 `DMIT HY2 · via AWS`。名称后缀可以自定义，原直连节点始终保留。
+服务器页只做只读检查。每项独立显示正常、警告、异常或未知，单项失败不会遮住其他结果。检查范围包括面板、sing-box 服务与配置、流量采样、TLS 证书到期、面板与已启用入站的 TCP/UDP 监听、根分区阈值和下次流量重置。配置检查会短暂缓存，不会随页面每 5 秒刷新反复启动外部进程。
 
-附加节点通过认证用户单独路由到用户态 WireGuard endpoint，目标域名按 IPv4 解析；其他节点继续使用 `代理出口网络` 中的地址族策略并从 A 直连。关闭开关只会从 sing-box 和订阅中隐藏附加凭据，重新打开后 UUID 和密码保持不变。
-
-面板可以生成 A 的 WireGuard 密钥；A 的隧道地址（`10.66.0.2/32`）、MTU（`1408`）和保活（`25s`）已经内置。B 仍需单独安装 WireGuard、开启 IPv4 转发和 NAT，并在防火墙中只允许 A 访问 WireGuard UDP 端口。B 或隧道故障时，只有附加节点不可用，客户端可直接切回原节点。
-
-B 可以是 GCP、AWS 或普通 VPS。工作原理、完整 B 端配置、各平台注意事项和排错方法见 [WireGuard B 端跳板教程](docs/WIREGUARD-EXIT.md)。
+页面只返回结构化健康字段，不暴露密码、会话密钥、订阅 Token、UUID、私钥、完整配置或外部命令原始输出。域名与公网 IP 匹配不放进 Doctor，因为多记录、IPv6 和 NAT 都可能是合法配置，仅靠本机无法可靠判断。
 
 ## 用 `sbm` 管理服务
 
@@ -128,8 +154,11 @@ sudo sbm
 9. 恢复配置
 10. 卸载
 11. 修复开机启动与防火墙
+12. 锁定或解锁 Web 管理入口，订阅保持可用
 
 备份文件放在 `/root`。下载面板或 sing-box 时会校验 GitHub Release 的 SHA-256 摘要。面板更新会选择最新 SBM Release，第 7 项则安装当前 SBM 绑定的 sing-box 兼容版本；替换后的二进制未通过配置校验或健康检查时会恢复旧版本。
+
+协议与出口修改采用事务式应用：先写候选配置、执行 `sing-box check` 并启动验证；校验或启动失败时，会恢复上一份业务配置和生成的核心配置。
 
 概览页的版本卡片会检查最新 GitHub Release，有新版本时显示红点。需要安装时通过 SSH 运行 `sudo sbm`，选择第 6 项即可。
 
@@ -140,6 +169,8 @@ journalctl -u sbm-panel -g 'audit event=login'
 ```
 
 面板能直接管理宿主机服务，端口不要放得太宽。总订阅共用这个端口，按来源 IP 限制时要把需要更新订阅的设备算进去。
+
+平时很少改设置时，可以在 `sudo sbm` 中选择第 12 项锁定 Web 页面、登录和管理 API；已有 `/sub/...` 订阅地址继续可用。需要管理时再通过 SSH 选择同一项解锁。
 
 ## 添加其他入站
 
@@ -165,6 +196,15 @@ journalctl -u sing-box -e --no-pager
 ```
 
 证书申请失败时，检查 A 记录、Cloudflare 灰云、TCP/80，以及 80 端口是否已被其他程序占用。
+
+服务连不上时，先确认云规则确实关联到这台实例，再分别查看 TCP 和 UDP 监听：
+
+```bash
+sudo ss -lntp
+sudo ss -lnup
+```
+
+运行 `sudo sbm` 选择第 11 项，可恢复主机防火墙规则和开机服务，但它不能修改云厂商防火墙。用另一条网络执行 `curl -vk https://你的域名:面板端口/` 测试；VPS 完全收不到数据包时，应先查 DNS、云防火墙、Network ACL 或上游网络，不要反复重装。
 
 `debconf: delaying package configuration, since apt-utils is not installed` 是 Debian 精简系统的普通提示，不代表安装失败。
 

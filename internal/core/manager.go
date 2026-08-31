@@ -29,14 +29,43 @@ func (ExecCommander) Run(ctx context.Context, name string, args ...string) ([]by
 // enough to pick that up without executing sing-box on every dashboard poll.
 const versionTTL = 5 * time.Minute
 
+var (
+	ErrConfigCheckTimeout = errors.New("sing-box configuration check timed out")
+	ErrConfigInvalid      = errors.New("sing-box configuration is invalid")
+)
+
 type Manager struct {
 	Binary, ConfigPath, Service string
+	InvocationPath              string
 	Renderer                    Renderer
 	Commands                    Commander
 	mu                          sync.Mutex
 	versionMu                   sync.Mutex
 	version                     string
 	versionAt                   time.Time
+}
+
+// Generation returns systemd's per-invocation ID without spawning a process.
+// systemd exports it as a symlink under /run/systemd/units for active units.
+func (m *Manager) Generation() (string, error) {
+	invocationPath := m.InvocationPath
+	if invocationPath == "" {
+		invocationPath = filepath.Join("/run/systemd/units", "invocation:"+m.Service)
+	}
+	target, err := os.Readlink(invocationPath)
+	if err != nil {
+		return "", err
+	}
+	generation := filepath.Base(target)
+	if len(generation) != 32 {
+		return "", errors.New("invalid systemd invocation ID")
+	}
+	for _, char := range generation {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f' || char >= 'A' && char <= 'F') {
+			return "", errors.New("invalid systemd invocation ID")
+		}
+	}
+	return strings.ToLower(generation), nil
 }
 
 func (m *Manager) command(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -177,6 +206,20 @@ func (m *Manager) Active(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return state == "active" || state == "activating" || state == "reloading", nil
+}
+
+// CheckConfig validates the currently installed sing-box configuration. It
+// never returns command output because validation errors can echo sensitive
+// configuration values. The caller controls the timeout through ctx.
+func (m *Manager) CheckConfig(ctx context.Context) error {
+	_, err := m.command(ctx, m.Binary, "check", "-c", m.ConfigPath)
+	if ctx.Err() != nil {
+		return ErrConfigCheckTimeout
+	}
+	if err != nil {
+		return ErrConfigInvalid
+	}
+	return nil
 }
 
 // Version reports the core version, executing the binary at most once per TTL.

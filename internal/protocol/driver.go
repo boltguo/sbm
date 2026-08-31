@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"net/url"
 	"os/exec"
 	"regexp"
@@ -32,10 +31,7 @@ type Driver interface {
 	ShareLink(model.Inbound, ShareContext) (string, error)
 }
 
-type BuildContext struct {
-	CertificatePath, KeyPath string
-	WireGuardExitEnabled     bool
-}
+type BuildContext struct{ CertificatePath, KeyPath string }
 type ShareContext struct{ Domain string }
 
 type Registry struct{ drivers map[string]Driver }
@@ -68,16 +64,13 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 	if len(cfg.SessionSecret) < 43 || len(cfg.ClashAPISecret) < 43 || len(cfg.SubscriptionToken) < 43 {
 		return errors.New("安全密钥长度不足")
 	}
-	if cfg.TotalBytes < 0 {
-		return errors.New("总流量不能为负数")
+	if err := cfg.TrafficQuota.Validate(); err != nil {
+		return err
 	}
 	if err := ValidateReset(cfg.Reset); err != nil {
 		return err
 	}
 	if err := ValidateOutboundStrategy(cfg.OutboundStrategy); err != nil {
-		return err
-	}
-	if err := ValidateWireGuardExit(cfg.WireGuardExit); err != nil {
 		return err
 	}
 	type endpoint struct {
@@ -105,9 +98,6 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 		if err := driver.Validate(inbound); err != nil {
 			return fmt.Errorf("%s: %w", inbound.Name, err)
 		}
-		if cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled && !HasWireGuardExitCredential(inbound) {
-			return fmt.Errorf("%s: 缺少 WireGuard 出口节点凭据", inbound.Name)
-		}
 		key := driver.Network() + ":" + strconv.Itoa(inbound.Port)
 		if old, exists := seen[key]; exists {
 			return fmt.Errorf("端口冲突：%s 与 %s 都使用 %s/%d", old.id, inbound.ID, driver.Network(), inbound.Port)
@@ -127,37 +117,6 @@ func ValidateOutboundStrategy(strategy string) error {
 	default:
 		return errors.New("出站地址策略无效")
 	}
-}
-
-func ValidateWireGuardExit(exit *model.WireGuardExitConfig) error {
-	if exit == nil || !exit.Enabled {
-		return nil
-	}
-	if len([]rune(strings.TrimSpace(exit.Label))) > 40 {
-		return errors.New("WireGuard 出口名称不能超过 40 个字符")
-	}
-	server, err := netip.ParseAddr(exit.Server)
-	if err != nil || !server.Is4() || server.IsUnspecified() || server.IsMulticast() {
-		return errors.New("WireGuard 出口服务器必须是有效的 IPv4 地址")
-	}
-	if err := ValidatePort(exit.ServerPort); err != nil {
-		return fmt.Errorf("WireGuard 出口端口: %w", err)
-	}
-	if err := validateWireGuardKey(exit.PrivateKey, "WireGuard A 端私钥"); err != nil {
-		return err
-	}
-	if err := validateWireGuardKey(exit.PeerPublicKey, "WireGuard B 端公钥"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateWireGuardKey(value, name string) error {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
-	if err != nil || len(decoded) != 32 {
-		return fmt.Errorf("%s必须是 32 字节 Base64 密钥", name)
-	}
-	return nil
 }
 
 func ValidateReset(reset model.ResetConfig) error {
@@ -209,9 +168,6 @@ func (VLESSDriver) Validate(in model.Inbound) error {
 	if !uuidRE.MatchString(v.UUID) {
 		return errors.New("UUID 格式无效")
 	}
-	if v.WireGuardExitUUID != "" && !uuidRE.MatchString(v.WireGuardExitUUID) {
-		return errors.New("WireGuard 出口节点 UUID 格式无效")
-	}
 	if err := ValidateDomain(v.SNI); err != nil {
 		return fmt.Errorf("Reality SNI: %w", err)
 	}
@@ -223,18 +179,14 @@ func (VLESSDriver) Validate(in model.Inbound) error {
 	}
 	return nil
 }
-func (VLESSDriver) Build(in model.Inbound, ctx BuildContext) (map[string]any, error) {
+func (VLESSDriver) Build(in model.Inbound, _ BuildContext) (map[string]any, error) {
 	if err := (VLESSDriver{}).Validate(in); err != nil {
 		return nil, err
 	}
 	v := in.VLESS
-	users := []any{map[string]any{"name": DirectAuthUser(in), "uuid": v.UUID, "flow": "xtls-rprx-vision"}}
-	if ctx.WireGuardExitEnabled && v.WireGuardExitUUID != "" {
-		users = append(users, map[string]any{"name": WireGuardAuthUser(in), "uuid": v.WireGuardExitUUID, "flow": "xtls-rprx-vision"})
-	}
 	return map[string]any{
 		"type": "vless", "tag": "in-" + in.ID, "listen": "::", "listen_port": in.Port,
-		"users": users,
+		"users": []any{map[string]any{"name": DirectAuthUser(in), "uuid": v.UUID, "flow": "xtls-rprx-vision"}},
 		"tls": map[string]any{"enabled": true, "server_name": v.SNI, "reality": map[string]any{
 			"enabled": true, "handshake": map[string]any{"server": v.SNI, "server_port": 443},
 			"private_key": v.PrivateKey, "short_id": []string{v.ShortID},
@@ -266,9 +218,6 @@ func (Hysteria2Driver) Validate(in model.Inbound) error {
 	if len(in.Hysteria2.Password) < 8 || len(in.Hysteria2.Password) > 128 {
 		return errors.New("Hysteria2 密码长度必须为 8 到 128")
 	}
-	if password := in.Hysteria2.WireGuardExitPassword; password != "" && (len(password) < 8 || len(password) > 128) {
-		return errors.New("WireGuard 出口节点 Hysteria2 密码长度必须为 8 到 128")
-	}
 	if in.Hysteria2.Obfs != "" && in.Hysteria2.Obfs != "salamander" {
 		return errors.New("只支持 salamander 混淆")
 	}
@@ -282,13 +231,9 @@ func (Hysteria2Driver) Build(in model.Inbound, ctx BuildContext) (map[string]any
 		return nil, err
 	}
 	h := in.Hysteria2
-	users := []any{map[string]any{"name": DirectAuthUser(in), "password": h.Password}}
-	if ctx.WireGuardExitEnabled && h.WireGuardExitPassword != "" {
-		users = append(users, map[string]any{"name": WireGuardAuthUser(in), "password": h.WireGuardExitPassword})
-	}
 	result := map[string]any{
 		"type": "hysteria2", "tag": "in-" + in.ID, "listen": "::", "listen_port": in.Port,
-		"users": users,
+		"users": []any{map[string]any{"name": DirectAuthUser(in), "password": h.Password}},
 		"tls":   map[string]any{"enabled": true, "alpn": []string{"h3"}, "certificate_path": ctx.CertificatePath, "key_path": ctx.KeyPath},
 	}
 	if h.Obfs != "" {

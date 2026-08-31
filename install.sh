@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
-readonly SBM_RELEASE_VERSION="1.2.3"
+readonly SBM_RELEASE_VERSION="2.0.0"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -123,7 +123,7 @@ show_cloud_firewall_guide() {
     linode) warn "Linode：Cloud Firewall 默认入站策略通常为 Drop，需添加允许规则，并确认状态为 Enabled、设备已关联。" ;;
     *) warn "DMIT/通用 KVM：若商家控制台启用了 Firewall/Security Group，也必须在那里放行上述端口。" ;;
   esac
-  warn "各云控制台的具体点击路径：https://github.com/${REPO}/blob/main/docs/VPS-COMPATIBILITY.md"
+  warn "云防火墙与 VPS 兼容要点：https://github.com/${REPO}/blob/main/README.zh-CN.md#云防火墙与-vps-兼容性"
   case "$provider" in
     aws) warn "EC2 普通公网 IPv4 在 Stop/Start 后通常会变化；域名长期使用前建议绑定 Elastic IP。" ;;
     gcp) warn "GCP 临时外部 IP 会在停止/挂起后释放；域名长期使用前建议提升为静态外部 IP。" ;;
@@ -350,7 +350,7 @@ compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v1.2.0|v1.2.1|v1.2.2|v1.2.3) printf 'v1.13.14\n' ;;
+    v1.2.0|v1.2.1|v1.2.2|v1.2.3|v2.0.0) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }
@@ -826,6 +826,10 @@ json_number() {
   local key="$1" file="$2"
   sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$file"
 }
+json_bool() {
+  local key="$1" file="$2"
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$file"
+}
 subscription_name_from_config() {
   local name
   name="$(awk -F'"' '/"inbounds"[[:space:]]*:/ { inbounds=1; next } inbounds && $2 == "name" { print $4; exit }' "$CONFIG_FILE")"
@@ -856,6 +860,22 @@ reset_admin_password() {
   warn "面板重启失败，请保存上述密码并执行 journalctl -u sbm-panel -e。"
   return 1
 }
+toggle_web_management() {
+  local enabled action
+  enabled="$(json_bool webManagementEnabled "$CONFIG_FILE")"
+  case "$enabled" in
+    true) action=lock ;;
+    false) action=unlock ;;
+    *) warn "无法读取 Web 管理入口状态。"; return 1 ;;
+  esac
+  "$SBM_BIN" admin "$action" || return 1
+  systemctl restart sbm-panel.service || { warn "面板重启失败，请执行 journalctl -u sbm-panel -e。"; return 1; }
+  if [[ "$action" == lock ]]; then
+    info "Web 页面、登录和管理 API 已锁定；订阅地址继续可用。再次选择此菜单项可解锁。"
+  else
+    info "Web 管理入口已重新开启。"
+  fi
+}
 service_healthy_after_restart() {
   local service="$1"
   systemctl restart "$service" || return 1
@@ -868,7 +888,10 @@ restore_binary() {
   install -m 0755 "${target}.bak" "$target"
 }
 update_panel() {
-  install_panel "$(panel_update_target_version)"
+	local target
+	target="$(panel_update_target_version)"
+	assert_panel_config_supported "$target" "$CONFIG_FILE"
+	install_panel "$target"
   if repair_runtime; then
     info "面板已更新并通过运行检查。"
     return
@@ -879,6 +902,19 @@ update_panel() {
   service_healthy_after_restart sbm-panel.service || { warn "恢复后面板仍未正常运行，请查看 journalctl -u sbm-panel -e。"; return 1; }
   warn "已恢复上一版面板。"
   return 1
+}
+
+assert_panel_config_supported() {
+	local target config_path config_version
+	target="$(normalize_tag "$1")"
+	config_path="${2:-$CONFIG_FILE}"
+	case "$target" in
+		v2.*)
+			[[ -f "$config_path" ]] || return 0
+			config_version="$(json_number version "$config_path")"
+			[[ "$config_version" == 3 ]] || die "SBM 2.x 只支持全新 v3 配置，不支持从旧配置原地升级。请先备份，再在新环境全新安装。"
+			;;
+	esac
 }
 update_core() {
   install_sing_box "$(core_update_target_version)"
@@ -981,7 +1017,7 @@ menu() {
   need_root
   while true; do
     printf '\n%s========= SBM 管理 =========%s\n' "$CYAN" "$RESET"
-    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 安装/恢复兼容版 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '0. 退出'
+    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 安装/恢复兼容版 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '12. 锁定/解锁 Web 管理入口' '0. 退出'
     read -r -p "选择: " choice
     case "$choice" in
       1) run_action '查看运行状态' show_status ;;
@@ -995,6 +1031,7 @@ menu() {
       9) run_action '恢复配置' restore_config ;;
       10) run_action '卸载' uninstall; return ;;
       11) run_action '修复开机启动与防火墙' repair_runtime ;;
+      12) run_action '切换 Web 管理入口状态' toggle_web_management ;;
       0) return ;;
       *) warn "无效选择。" ;;
     esac

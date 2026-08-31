@@ -25,6 +25,7 @@ import (
 
 	"github.com/boltguo/sbm/internal/auth"
 	"github.com/boltguo/sbm/internal/core"
+	"github.com/boltguo/sbm/internal/health"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
 	"github.com/boltguo/sbm/internal/releasecheck"
@@ -35,25 +36,28 @@ import (
 )
 
 type Server struct {
-	Config         *store.ConfigStore
-	Traffic        *traffic.Tracker
-	Core           *core.Manager
-	Registry       *protocol.Registry
-	Factory        protocol.Factory
-	Clash          traffic.ClashClient
-	System         *systeminfo.Collector
-	Assets         fs.FS
-	Limiter        *auth.Limiter
-	Sessions       auth.Sessions
-	PanelVersion   string
-	Releases       releasecheck.Source
-	TrafficAudit   *traffic.NetworkAudit
-	AuditLog       *log.Logger
-	mutationMu     sync.Mutex
-	releaseMu      sync.Mutex
-	releaseCache   *updateStatus
-	releaseUntil   time.Time
-	releaseRetryAt time.Time
+	Config          *store.ConfigStore
+	Traffic         *traffic.Tracker
+	Core            *core.Manager
+	Registry        *protocol.Registry
+	Factory         protocol.Factory
+	Clash           traffic.ClashClient
+	System          *systeminfo.Collector
+	Assets          fs.FS
+	Limiter         *auth.Limiter
+	Sessions        auth.Sessions
+	PanelVersion    string
+	Releases        releasecheck.Source
+	AuditLog        *log.Logger
+	CertificatePath string
+	mutationMu      sync.Mutex
+	healthMu        sync.Mutex
+	healthSlow      []health.Check
+	healthUntil     time.Time
+	releaseMu       sync.Mutex
+	releaseCache    *updateStatus
+	releaseUntil    time.Time
+	releaseRetryAt  time.Time
 }
 
 const releaseRetryDelay = 2 * time.Minute
@@ -64,11 +68,21 @@ const sessionKey contextKey = "session"
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/login", s.login)
-	mux.Handle("/api/", s.requireAuth(http.HandlerFunc(s.api)))
+	mux.Handle("POST /api/login", s.requireManagement(http.HandlerFunc(s.login)))
+	mux.Handle("/api/", s.requireManagement(s.requireAuth(http.HandlerFunc(s.api))))
 	mux.HandleFunc("GET /sub/{token}", s.subscription)
-	mux.HandleFunc("/", s.static)
+	mux.Handle("/", s.requireManagement(http.HandlerFunc(s.static)))
 	return securityHeaders(mux)
+}
+
+func (s *Server) requireManagement(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Config != nil && !s.Config.Get().WebManagementEnabled {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -186,16 +200,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.inboundByID(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/settings":
 		s.getSettings(w, r)
-	case r.Method == "PUT" && r.URL.Path == "/api/settings":
-		s.updateSettings(w, r)
 	case r.Method == "PUT" && r.URL.Path == "/api/settings/traffic":
 		s.updateTrafficSettings(w, r)
 	case r.Method == "PUT" && r.URL.Path == "/api/settings/outbound":
 		s.updateOutboundSettings(w, r)
-	case r.Method == "PUT" && r.URL.Path == "/api/settings/wireguard":
-		s.updateWireGuardSettings(w, r)
-	case r.Method == "POST" && r.URL.Path == "/api/settings/wireguard/keypair":
-		s.generateWireGuardKeypair(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/settings/token":
 		s.regenerateToken(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/settings/password":
@@ -206,11 +214,154 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serverStatus(w http.ResponseWriter, r *http.Request) {
-	if s.System == nil {
-		writeError(w, 503, "服务器状态采集不可用")
-		return
+	snapshot := systeminfo.Snapshot{CollectedAt: time.Now()}
+	if s.System != nil {
+		snapshot = s.System.Snapshot(r.Context())
 	}
-	writeJSON(w, 200, s.System.Snapshot(r.Context()))
+	report := s.healthReport(r.Context(), snapshot)
+	writeJSON(w, 200, struct {
+		systeminfo.Snapshot
+		Health healthReport `json:"health"`
+	}{Snapshot: snapshot, Health: report})
+}
+
+type healthReport struct {
+	Overall   health.Status  `json:"overall"`
+	Checks    []health.Check `json:"checks"`
+	CheckedAt time.Time      `json:"checkedAt"`
+}
+
+func (s *Server) healthReport(ctx context.Context, snapshot systeminfo.Snapshot) healthReport {
+	now := time.Now().UTC()
+	checks := []health.Check{{ID: "panel", Kind: "panel", Status: health.StatusOK, Reason: "responding", CheckedAt: now}}
+
+	if s.Core == nil {
+		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusUnknown, Reason: "state_unavailable", CheckedAt: now})
+	} else if active, err := s.Core.Active(ctx); err != nil {
+		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusUnknown, Reason: "state_unavailable", CheckedAt: now})
+	} else if active {
+		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusOK, Reason: "running", CheckedAt: now})
+	} else if s.Traffic != nil && s.Traffic.State().QuotaExceeded {
+		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusWarning, Reason: "quota_paused", CheckedAt: now})
+	} else {
+		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusError, Reason: "stopped", CheckedAt: now})
+	}
+
+	checks = append(checks, s.trafficHealth(now))
+	checks = append(checks, s.slowHealthChecks(ctx, now)...)
+	checks = append(checks, health.Disk(snapshot.DiskPercent, snapshot.DiskTotal, now))
+	checks = append(checks, s.resetHealth(now))
+
+	return healthReport{
+		Overall: health.Overall(checks), Checks: checks, CheckedAt: now,
+	}
+}
+
+func (s *Server) trafficHealth(now time.Time) health.Check {
+	check := health.Check{ID: "traffic", Kind: "traffic", Status: health.StatusUnknown, Reason: "sample_waiting", CheckedAt: now}
+	if s.Traffic == nil {
+		check.Reason = "sample_unavailable"
+		return check
+	}
+	state, sample := s.Traffic.State(), s.Traffic.SampleHealth()
+	if state.QuotaExceeded {
+		check.Status, check.Reason = health.StatusWarning, "quota_paused"
+		check.LastSuccessAt = timePointer(sample.LastSuccessAt)
+		return check
+	}
+	check.LastSuccessAt, check.FailureSince = timePointer(sample.LastSuccessAt), timePointer(sample.FailureSince)
+	switch sample.Status {
+	case traffic.SampleStatusHealthy:
+		check.Status, check.Reason = health.StatusOK, "sample_healthy"
+	case traffic.SampleStatusInterrupted:
+		check.Status, check.Reason = health.StatusError, "sample_interrupted"
+	}
+	return check
+}
+
+func (s *Server) resetHealth(now time.Time) health.Check {
+	check := health.Check{ID: "reset", Kind: "reset", Status: health.StatusOK, Reason: "reset_disabled", CheckedAt: now}
+	if s.Config == nil {
+		check.Status, check.Reason = health.StatusUnknown, "reset_unavailable"
+		return check
+	}
+	cfg := s.Config.Get()
+	check.Timezone = cfg.Reset.Timezone
+	if cfg.Reset.Mode != "monthly" {
+		return check
+	}
+	if s.Traffic == nil || s.Traffic.State().NextResetAt.IsZero() {
+		check.Status, check.Reason = health.StatusError, "reset_schedule_missing"
+		return check
+	}
+	check.Reason, check.NextResetAt = "reset_scheduled", timePointer(s.Traffic.State().NextResetAt)
+	return check
+}
+
+func timePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	copy := value
+	return &copy
+}
+
+func (s *Server) slowHealthChecks(ctx context.Context, now time.Time) []health.Check {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if now.Before(s.healthUntil) && len(s.healthSlow) > 0 {
+		return append([]health.Check(nil), s.healthSlow...)
+	}
+	checks := make([]health.Check, 0)
+	configCheck := health.Check{ID: "config", Kind: "config", Status: health.StatusUnknown, Reason: "config_unavailable", CheckedAt: now}
+	if s.Core != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := s.Core.CheckConfig(checkCtx)
+		cancel()
+		switch {
+		case err == nil:
+			configCheck.Status, configCheck.Reason = health.StatusOK, "config_valid"
+		case errors.Is(err, core.ErrConfigCheckTimeout):
+			configCheck.Status, configCheck.Reason = health.StatusError, "config_timeout"
+		default:
+			configCheck.Status, configCheck.Reason = health.StatusError, "config_invalid"
+		}
+	}
+	checks = append(checks, configCheck, health.Certificate(s.CertificatePath, now))
+
+	procRoot := "/proc"
+	if s.System != nil && s.System.ProcRoot != "" {
+		procRoot = s.System.ProcRoot
+	}
+	if s.Config != nil {
+		cfg := s.Config.Get()
+		endpoints := []health.Endpoint{{ID: "listener-panel", Kind: "listener_panel", Protocol: "tcp", Port: cfg.PanelPort}}
+		for i, inbound := range cfg.Inbounds {
+			if !inbound.Enabled {
+				continue
+			}
+			if s.Registry == nil {
+				checks = append(checks, health.Check{ID: fmt.Sprintf("listener-inbound-%d", i+1), Kind: "listener_inbound", Status: health.StatusUnknown, Reason: "listener_unavailable", CheckedAt: now, Port: inbound.Port})
+				continue
+			}
+			driver, ok := s.Registry.Get(inbound.Type)
+			if !ok {
+				checks = append(checks, health.Check{ID: fmt.Sprintf("listener-inbound-%d", i+1), Kind: "listener_inbound", Status: health.StatusUnknown, Reason: "listener_unavailable", CheckedAt: now, Port: inbound.Port})
+				continue
+			}
+			endpoints = append(endpoints, health.Endpoint{ID: fmt.Sprintf("listener-inbound-%d", i+1), Kind: "listener_inbound", Protocol: driver.Network(), Port: inbound.Port})
+		}
+		checks = append(checks, health.Listeners(procRoot, endpoints, now)...)
+	}
+	s.healthSlow = append([]health.Check(nil), checks...)
+	s.healthUntil = now.Add(15 * time.Second)
+	return checks
+}
+
+func (s *Server) invalidateHealth() {
+	s.healthMu.Lock()
+	s.healthSlow, s.healthUntil = nil, time.Time{}
+	s.healthMu.Unlock()
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
@@ -220,23 +371,57 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	cfg, state := s.Config.Get(), s.Traffic.State()
-	active, _ := s.Core.Active(r.Context())
-	coreVersion := s.Core.Version(r.Context())
-	trafficAudit := traffic.AuditResult{Status: "unavailable"}
-	if s.TrafficAudit != nil {
-		trafficAudit = s.TrafficAudit.Check(state.Total(), state.PeriodStartedAt)
+	active, activeErr := s.Core.Active(r.Context())
+	coreStatus := "unknown"
+	if activeErr == nil && active {
+		coreStatus = "running"
+	} else if activeErr == nil {
+		coreStatus = "stopped"
 	}
-	remaining := int64(0)
+	coreVersion := s.Core.Version(r.Context())
+	limit, err := cfg.EffectiveTrafficLimitBytes()
+	if err != nil {
+		writeError(w, 500, "计算流量限额失败")
+		return
+	}
+	allowance, err := cfg.TrafficQuota.AllowanceBytes()
+	if err != nil {
+		writeError(w, 500, "计算套餐流量失败")
+		return
+	}
+	factor := cfg.TrafficQuota.ProviderUsageFactor()
+	estimatedProviderUsed := multiplySaturating(state.Total(), factor)
+	providerStop := multiplySaturating(limit, factor)
+	providerRemaining := int64(0)
 	progress := float64(0)
-	if cfg.TotalBytes > 0 {
-		remaining = max(0, cfg.TotalBytes-state.Total())
-		progress = min(100, float64(state.Total())/float64(cfg.TotalBytes)*100)
+	if allowance > 0 {
+		providerRemaining = max(0, allowance-estimatedProviderUsed)
+		progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
+	}
+	sampleHealth := s.Traffic.SampleHealth()
+	if state.QuotaExceeded {
+		sampleHealth.Status = "paused"
 	}
 	writeJSON(w, 200, map[string]any{
-		"active": active, "version": coreVersion, "coreVersion": coreVersion, "panelVersion": s.PanelVersion, "upload": state.Upload, "download": state.Download, "used": state.Total(),
-		"totalBytes": cfg.TotalBytes, "remaining": remaining, "progress": progress, "periodStartedAt": state.PeriodStartedAt,
-		"nextResetAt": state.NextResetAt, "quotaExceeded": state.QuotaExceeded, "subscriptionURL": subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg), "trafficAudit": trafficAudit,
+		"coreStatus": coreStatus, "coreVersion": coreVersion, "panelVersion": s.PanelVersion,
+		"upload": state.Upload, "download": state.Download, "proxyUsedBytes": state.Total(),
+		"trafficQuota": cfg.TrafficQuota, "effectiveLimitBytes": limit,
+		"providerAllowanceBytes": allowance, "estimatedProviderUsedBytes": estimatedProviderUsed,
+		"providerStopBytes": providerStop, "providerRemainingBytes": providerRemaining, "providerProgress": progress,
+		"periodStartedAt": state.PeriodStartedAt, "nextResetAt": state.NextResetAt,
+		"quotaExceeded": state.QuotaExceeded, "sampleHealth": sampleHealth,
+		"subscriptionURL": subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
 	})
+}
+
+func multiplySaturating(value, factor int64) int64 {
+	if value <= 0 || factor <= 0 {
+		return 0
+	}
+	if value > (1<<63-1)/factor {
+		return 1<<63 - 1
+	}
+	return value * factor
 }
 
 type updateStatus struct {
@@ -326,14 +511,8 @@ func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request) {
 
 type inboundView struct {
 	model.Inbound
-	Link          string             `json:"link"`
-	Network       string             `json:"network"`
-	WireGuardNode *companionNodeView `json:"wireGuardNode,omitempty"`
-}
-
-type companionNodeView struct {
-	Name string `json:"name"`
-	Link string `json:"link"`
+	Link    string `json:"link"`
+	Network string `json:"network"`
 }
 
 func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
@@ -342,15 +521,7 @@ func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
 	for _, in := range cfg.Inbounds {
 		d, _ := s.Registry.Get(in.Type)
 		link, _ := d.ShareLink(in, protocol.ShareContext{Domain: cfg.Domain})
-		var wireGuardNode *companionNodeView
-		if in.Enabled && cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
-			if variant, ok := protocol.WireGuardExitVariant(in, cfg.WireGuardExit.Label); ok {
-				if companionLink, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
-					wireGuardNode = &companionNodeView{Name: variant.Name, Link: companionLink}
-				}
-			}
-		}
-		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network(), WireGuardNode: wireGuardNode})
+		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network()})
 	}
 	writeJSON(w, 200, result)
 }
@@ -368,12 +539,6 @@ func (s *Server) createInbound(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
-	}
-	if cfg := s.Config.Get(); cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
-		if err := protocol.EnsureWireGuardExitCredential(&inbound); err != nil {
-			writeError(w, 500, err.Error())
-			return
-		}
 	}
 	if err := s.mutate(r.Context(), func(cfg *model.Config) { cfg.Inbounds = append(cfg.Inbounds, inbound) }); err != nil {
 		writeError(w, 400, err.Error())
@@ -484,6 +649,7 @@ func (s *Server) mutate(ctx context.Context, change func(*model.Config)) error {
 		return err
 	}
 	s.syncHostFirewall(old, next)
+	s.invalidateHealth()
 	return nil
 }
 
@@ -514,167 +680,30 @@ func (s *Server) saveConfig(change func(*model.Config)) error {
 	return nil
 }
 
-func cloneWireGuardExit(exit *model.WireGuardExitConfig) *model.WireGuardExitConfig {
-	if exit == nil {
-		return nil
-	}
-	copyExit := *exit
-	return &copyExit
-}
-
-func normalizeWireGuardExit(exit *model.WireGuardExitConfig) *model.WireGuardExitConfig {
-	if exit == nil {
-		return nil
-	}
-	normalized := *exit
-	normalized.Label = protocol.WireGuardExitLabel(normalized.Label)
-	normalized.Server = strings.TrimSpace(normalized.Server)
-	normalized.PrivateKey = strings.TrimSpace(normalized.PrivateKey)
-	normalized.PeerPublicKey = strings.TrimSpace(normalized.PeerPublicKey)
-	if normalized.ServerPort == 0 {
-		normalized.ServerPort = model.DefaultWireGuardExitConfig().ServerPort
-	}
-	return &normalized
-}
-
-func ensureWireGuardExitCredentials(inbounds []model.Inbound) ([]model.Inbound, error) {
-	result := append([]model.Inbound(nil), inbounds...)
-	for i := range result {
-		if result[i].VLESS != nil {
-			options := *result[i].VLESS
-			result[i].VLESS = &options
-		}
-		if result[i].Hysteria2 != nil {
-			options := *result[i].Hysteria2
-			result[i].Hysteria2 = &options
-		}
-		if err := protocol.EnsureWireGuardExitCredential(&result[i]); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
-}
-
-func wireGuardExitCredentialsChanged(current, next []model.Inbound) bool {
-	if len(current) != len(next) {
-		return true
-	}
-	for i := range current {
-		if current[i].VLESS != nil && next[i].VLESS != nil &&
-			current[i].VLESS.WireGuardExitUUID != next[i].VLESS.WireGuardExitUUID {
-			return true
-		}
-		if current[i].Hysteria2 != nil && next[i].Hysteria2 != nil &&
-			current[i].Hysteria2.WireGuardExitPassword != next[i].Hysteria2.WireGuardExitPassword {
-			return true
-		}
-	}
-	return false
-}
-
-func wireGuardExitChangesCore(current, next *model.WireGuardExitConfig) bool {
-	currentEnabled := current != nil && current.Enabled
-	nextEnabled := next != nil && next.Enabled
-	if !currentEnabled && !nextEnabled {
-		return false
-	}
-	if currentEnabled != nextEnabled || current == nil || next == nil {
-		return true
-	}
-	currentCore, nextCore := *current, *next
-	currentCore.Label, nextCore.Label = "", ""
-	return currentCore != nextCore
-}
-
 func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.Config.Get()
 	outboundStrategy := cfg.OutboundStrategy
 	if outboundStrategy == "" {
 		outboundStrategy = model.OutboundStrategyAuto
 	}
-	wireGuardExit := model.DefaultWireGuardExitConfig()
-	if cfg.WireGuardExit != nil {
-		wireGuardExit = *cfg.WireGuardExit
-	}
-	wireGuardExit = *normalizeWireGuardExit(&wireGuardExit)
-	wireGuardLocalPublicKey, _ := protocol.WireGuardPublicKey(wireGuardExit.PrivateKey)
 	writeJSON(w, 200, map[string]any{
-		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "totalBytes": cfg.TotalBytes, "reset": cfg.Reset,
-		"outboundStrategy": outboundStrategy, "wireGuardExit": wireGuardExit, "wireGuardLocalPublicKey": wireGuardLocalPublicKey,
-		"subscriptionURL": subscriptionURL(cfg),
+		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "trafficQuota": cfg.TrafficQuota, "reset": cfg.Reset,
+		"outboundStrategy": outboundStrategy,
+		"subscriptionURL":  subscriptionURL(cfg),
 	})
-}
-func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		TotalBytes       int64                      `json:"totalBytes"`
-		Reset            model.ResetConfig          `json:"reset"`
-		OutboundStrategy string                     `json:"outboundStrategy"`
-		WireGuardExit    *model.WireGuardExitConfig `json:"wireGuardExit"`
-	}
-	if decodeJSON(r, &input) != nil {
-		writeError(w, 400, "请求格式无效")
-		return
-	}
-	if input.OutboundStrategy == "" {
-		input.OutboundStrategy = model.OutboundStrategyAuto
-	}
-	current := s.Config.Get()
-	if input.WireGuardExit == nil {
-		input.WireGuardExit = cloneWireGuardExit(current.WireGuardExit)
-	}
-	input.WireGuardExit = normalizeWireGuardExit(input.WireGuardExit)
-	nextInbounds := current.Inbounds
-	if input.WireGuardExit != nil && input.WireGuardExit.Enabled {
-		var err error
-		nextInbounds, err = ensureWireGuardExitCredentials(nextInbounds)
-		if err != nil {
-			writeError(w, 500, err.Error())
-			return
-		}
-	}
-	change := func(cfg *model.Config) {
-		cfg.TotalBytes = input.TotalBytes
-		cfg.Reset = input.Reset
-		cfg.OutboundStrategy = input.OutboundStrategy
-		cfg.WireGuardExit = cloneWireGuardExit(input.WireGuardExit)
-		cfg.Inbounds = nextInbounds
-	}
-	currentStrategy := current.OutboundStrategy
-	if currentStrategy == "" {
-		currentStrategy = model.OutboundStrategyAuto
-	}
-	var err error
-	if currentStrategy != input.OutboundStrategy || wireGuardExitChangesCore(current.WireGuardExit, input.WireGuardExit) || wireGuardExitCredentialsChanged(current.Inbounds, nextInbounds) {
-		err = s.mutate(r.Context(), change)
-	} else {
-		err = s.saveConfig(change)
-	}
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
-	if err := s.Traffic.UpdateSchedule(); err != nil {
-		writeError(w, 500, "更新重置周期失败")
-		return
-	}
-	if err := s.Traffic.ReconcileQuota(r.Context()); err != nil {
-		writeError(w, 500, "应用流量限额失败")
-		return
-	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		TotalBytes int64             `json:"totalBytes"`
-		Reset      model.ResetConfig `json:"reset"`
+		TrafficQuota model.TrafficQuotaConfig `json:"trafficQuota"`
+		Reset        model.ResetConfig        `json:"reset"`
 	}
 	if decodeJSON(r, &input) != nil {
 		writeError(w, 400, "请求格式无效")
 		return
 	}
 	if err := s.saveConfig(func(cfg *model.Config) {
-		cfg.TotalBytes = input.TotalBytes
+		cfg.TrafficQuota = input.TrafficQuota
 		cfg.Reset = input.Reset
 	}); err != nil {
 		writeError(w, 400, err.Error())
@@ -688,7 +717,8 @@ func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "应用流量限额失败")
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	limit, _ := input.TrafficQuota.EffectiveBytes()
+	writeJSON(w, 200, map[string]any{"ok": true, "effectiveLimitBytes": limit, "trafficQuota": input.TrafficQuota})
 }
 
 func (s *Server) updateOutboundSettings(w http.ResponseWriter, r *http.Request) {
@@ -720,60 +750,6 @@ func (s *Server) updateOutboundSettings(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-func (s *Server) updateWireGuardSettings(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		WireGuardExit *model.WireGuardExitConfig `json:"wireGuardExit"`
-	}
-	if decodeJSON(r, &input) != nil || input.WireGuardExit == nil {
-		writeError(w, 400, "请求格式无效")
-		return
-	}
-	input.WireGuardExit = normalizeWireGuardExit(input.WireGuardExit)
-	current := s.Config.Get()
-	nextInbounds := current.Inbounds
-	if input.WireGuardExit.Enabled {
-		var err error
-		nextInbounds, err = ensureWireGuardExitCredentials(nextInbounds)
-		if err != nil {
-			writeError(w, 500, err.Error())
-			return
-		}
-	}
-	change := func(cfg *model.Config) {
-		cfg.WireGuardExit = cloneWireGuardExit(input.WireGuardExit)
-		cfg.Inbounds = nextInbounds
-	}
-	var err error
-	if wireGuardExitChangesCore(current.WireGuardExit, input.WireGuardExit) || wireGuardExitCredentialsChanged(current.Inbounds, nextInbounds) {
-		err = s.mutate(r.Context(), change)
-	} else {
-		err = s.saveConfig(change)
-	}
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
-	stored := s.Config.Get()
-	storedStrategy := stored.OutboundStrategy
-	if storedStrategy == "" {
-		storedStrategy = model.OutboundStrategyAuto
-	}
-	publicKey, _ := protocol.WireGuardPublicKey(input.WireGuardExit.PrivateKey)
-	writeJSON(w, 200, map[string]any{
-		"ok":                      true,
-		"outboundStrategy":        storedStrategy,
-		"wireGuardLocalPublicKey": publicKey,
-	})
-}
-
-func (s *Server) generateWireGuardKeypair(w http.ResponseWriter, _ *http.Request) {
-	keys, err := protocol.GenerateWireGuardKeys()
-	if err != nil {
-		writeError(w, 500, "无法生成 WireGuard 密钥")
-		return
-	}
-	writeJSON(w, 200, keys)
-}
 func (s *Server) regenerateToken(w http.ResponseWriter, r *http.Request) {
 	token, err := protocol.RandomToken(32)
 	if err != nil {
@@ -838,16 +814,14 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			links = append(links, link)
 		}
-		if cfg.WireGuardExit != nil && cfg.WireGuardExit.Enabled {
-			if variant, ok := protocol.WireGuardExitVariant(inbound, cfg.WireGuardExit.Label); ok {
-				if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
-					links = append(links, link)
-				}
-			}
-		}
 	}
 	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", state.Upload, state.Download, cfg.TotalBytes))
+	effectiveLimit, err := cfg.EffectiveTrafficLimitBytes()
+	if err != nil {
+		writeError(w, 500, "计算流量限额失败")
+		return
+	}
+	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", state.Upload, state.Download, effectiveLimit))
 	w.Header().Set("Profile-Update-Interval", "12")
 	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(subscriptionName(cfg))))
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
@@ -1044,7 +1018,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"请求方法不支持":               "Method not allowed.",
 		"更新重置周期失败":              "Could not update the reset schedule.",
 		"应用流量限额失败":              "Could not apply the traffic quota.",
-		"无法生成 WireGuard 密钥":     "Could not generate WireGuard keys.",
 		"生成 Token 失败":           "Could not generate a token.",
 		"新密码长度必须为 12 到 128 个字符": "The new password must be 12 to 128 characters long.",
 		"当前密码错误":                "The current password is incorrect.",

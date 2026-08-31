@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
@@ -105,6 +106,34 @@ func TestApplyRunsCheckBeforeAtomicConfigInstall(t *testing.T) {
 type fixedCommander struct {
 	output []byte
 	err    error
+}
+
+type blockingCommander struct{}
+
+func (blockingCommander) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestCheckConfigReportsTimeoutWithoutCommandOutput(t *testing.T) {
+	manager := &Manager{Binary: "/fake/sing-box", ConfigPath: "/secret/config.json", Commands: blockingCommander{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := manager.CheckConfig(ctx); !errors.Is(err, ErrConfigCheckTimeout) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGenerationReadsSystemdInvocationSymlink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invocation:sing-box.service")
+	const id = "0123456789abcdef0123456789ABCDEF"
+	if err := os.Symlink(id, path); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{Service: "sing-box.service", InvocationPath: path}
+	if got, err := manager.Generation(); err != nil || got != strings.ToLower(id) {
+		t.Fatalf("generation=%q error=%v", got, err)
+	}
 }
 
 func (c fixedCommander) Run(context.Context, string, ...string) ([]byte, error) {

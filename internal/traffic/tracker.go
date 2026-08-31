@@ -23,6 +23,10 @@ type CoreControl interface {
 }
 type ConfigSource interface{ Get() model.Config }
 
+type coreGeneration interface {
+	Generation() (string, error)
+}
+
 type Tracker struct {
 	mu        sync.RWMutex
 	controlMu sync.Mutex
@@ -32,7 +36,20 @@ type Tracker struct {
 	config    ConfigSource
 	core      CoreControl
 	now       func() time.Time
+	health    SampleHealth
 }
+
+type SampleHealth struct {
+	Status        string    `json:"status"`
+	LastSuccessAt time.Time `json:"lastSuccessAt,omitempty"`
+	FailureSince  time.Time `json:"failureSince,omitempty"`
+}
+
+const (
+	SampleStatusWaiting     = "waiting"
+	SampleStatusHealthy     = "healthy"
+	SampleStatusInterrupted = "interrupted"
+)
 
 // ErrSampleUnavailable reports that the core counters could not be read. It is
 // distinct from an apply failure so callers can tell "retry later" apart from
@@ -68,7 +85,7 @@ func Open(path string, config ConfigSource, core CoreControl, now func() time.Ti
 	if state.Version != model.StateVersion {
 		return nil, fmt.Errorf("unsupported state version %d", state.Version)
 	}
-	return &Tracker{state: state, file: file, config: config, core: core, now: now}, nil
+	return &Tracker{state: state, file: file, config: config, core: core, now: now, health: SampleHealth{Status: SampleStatusWaiting}}, nil
 }
 
 func (t *Tracker) UpdateSchedule() error {
@@ -93,10 +110,15 @@ func NewForTest(state model.State, config ConfigSource, core CoreControl, now fu
 	if now == nil {
 		now = time.Now
 	}
-	return &Tracker{state: state, config: config, core: core, now: now}
+	return &Tracker{state: state, config: config, core: core, now: now, health: SampleHealth{Status: SampleStatusWaiting}}
 }
 
 func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); return t.state }
+func (t *Tracker) SampleHealth() SampleHealth {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.health
+}
 
 // Sample reads the core counters and applies them as one atomic step.
 //
@@ -108,35 +130,91 @@ func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); retu
 func (t *Tracker) Sample(ctx context.Context, client ClashClient) (bool, error) {
 	t.sampleMu.Lock()
 	defer t.sampleMu.Unlock()
+	if err := t.CheckScheduledReset(ctx); err != nil {
+		t.recordSampleFailure()
+		return false, fmt.Errorf("检查流量重置周期: %w", err)
+	}
+	generationBefore := t.readCoreGeneration()
 	upload, download, err := client.Sample(ctx)
 	if err != nil {
+		t.recordSampleFailure()
 		return false, fmt.Errorf("%w: %v", ErrSampleUnavailable, err)
 	}
-	return t.ApplySample(ctx, upload, download)
+	generationAfter := t.readCoreGeneration()
+	if generationBefore != "" && generationAfter != "" && generationBefore != generationAfter {
+		t.recordSampleFailure()
+		return false, fmt.Errorf("%w: sing-box restarted while counters were being read", ErrSampleUnavailable)
+	}
+	generation := ""
+	if generationBefore != "" && generationBefore == generationAfter {
+		generation = generationBefore
+	}
+	t.recordSampleSuccess()
+	return t.applySample(ctx, upload, download, generation)
+}
+
+func (t *Tracker) readCoreGeneration() string {
+	source, ok := t.core.(coreGeneration)
+	if !ok {
+		return ""
+	}
+	generation, err := source.Generation()
+	if err != nil {
+		return ""
+	}
+	return generation
+}
+
+func (t *Tracker) recordSampleFailure() {
+	now := t.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.health.FailureSince.IsZero() {
+		t.health.FailureSince = now
+	}
+	t.health.Status = SampleStatusInterrupted
+}
+
+func (t *Tracker) recordSampleSuccess() {
+	now := t.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.health = SampleHealth{Status: SampleStatusHealthy, LastSuccessAt: now}
 }
 
 // ApplySample folds one core counter reading into the period totals. Callers
 // outside tests should use Sample so readings stay serialised.
 func (t *Tracker) ApplySample(ctx context.Context, currentUpload, currentDownload int64) (bool, error) {
+	return t.applySample(ctx, currentUpload, currentDownload, "")
+}
+
+func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownload int64, generation string) (bool, error) {
 	if currentUpload < 0 || currentDownload < 0 {
 		return false, errors.New("核心流量计数不能为负数")
 	}
-	t.mu.Lock()
-	if currentUpload < t.state.LastCoreUpload {
-		t.state.Upload += currentUpload
-	} else {
-		t.state.Upload += currentUpload - t.state.LastCoreUpload
+	limit, err := t.config.Get().EffectiveTrafficLimitBytes()
+	if err != nil {
+		return false, fmt.Errorf("计算流量限额: %w", err)
 	}
-	if currentDownload < t.state.LastCoreDownload {
+	t.mu.Lock()
+	restarted := currentUpload < t.state.LastCoreUpload || currentDownload < t.state.LastCoreDownload
+	if generation != "" && t.state.CoreGeneration != "" && generation != t.state.CoreGeneration {
+		restarted = true
+	}
+	if restarted {
+		t.state.Upload += currentUpload
 		t.state.Download += currentDownload
 	} else {
+		t.state.Upload += currentUpload - t.state.LastCoreUpload
 		t.state.Download += currentDownload - t.state.LastCoreDownload
 	}
 	t.state.LastCoreUpload = currentUpload
 	t.state.LastCoreDownload = currentDownload
+	if generation != "" {
+		t.state.CoreGeneration = generation
+	}
 	t.state.UpdatedAt = t.now()
-	cfg := t.config.Get()
-	shouldExceed := cfg.TotalBytes > 0 && t.state.Total() >= cfg.TotalBytes
+	shouldExceed := limit > 0 && t.state.Total() >= limit
 	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {
 		t.state.QuotaExceeded = true
@@ -184,9 +262,12 @@ func (t *Tracker) Reset(ctx context.Context) error {
 
 // ReconcileQuota updates the desired quota state and makes the core converge on it.
 func (t *Tracker) ReconcileQuota(ctx context.Context) error {
+	limit, err := t.config.Get().EffectiveTrafficLimitBytes()
+	if err != nil {
+		return fmt.Errorf("计算流量限额: %w", err)
+	}
 	t.mu.Lock()
-	cfg := t.config.Get()
-	shouldExceed := cfg.TotalBytes > 0 && t.state.Total() >= cfg.TotalBytes
+	shouldExceed := limit > 0 && t.state.Total() >= limit
 	wasExceeded := t.state.QuotaExceeded
 	changed := shouldExceed != wasExceeded
 	if changed {
@@ -355,12 +436,6 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 				log.Printf("traffic: reconcile core state failed: %v", err)
 			}
 		case <-schedule.C:
-			// Reset first for the same reason as at startup: on the tick that
-			// crosses the period boundary, enforcing the old quota would stop the
-			// core moments before the reset restarts it.
-			if err := t.CheckScheduledReset(ctx); err != nil {
-				log.Printf("traffic: scheduled reset failed: %v", err)
-			}
 			if err := t.ReconcileQuota(ctx); err != nil {
 				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
 			}

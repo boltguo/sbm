@@ -59,7 +59,7 @@ func main() {
 	case "version", "--version", "-version":
 		fmt.Println(version)
 	default:
-		fatal("未知命令；可用命令：serve、init、config apply、admin reset、version")
+		fatal("未知命令；可用命令：serve、init、config apply、admin reset|lock|unlock、version")
 	}
 }
 
@@ -158,15 +158,32 @@ func runConfig(args []string) {
 }
 
 func runAdmin(args []string) {
-	if len(args) < 1 || args[0] != "reset" {
-		fatal("用法：sbm-panel admin reset [--config path]")
+	if len(args) < 1 {
+		fatal("用法：sbm-panel admin reset|lock|unlock [--config path]")
 	}
-	set := flag.NewFlagSet("admin reset", flag.ExitOnError)
+	action := args[0]
+	if action != "reset" && action != "lock" && action != "unlock" {
+		fatal("用法：sbm-panel admin reset|lock|unlock [--config path]")
+	}
+	set := flag.NewFlagSet("admin "+action, flag.ExitOnError)
 	configPath := set.String("config", defaultConfig, "业务配置路径")
 	_ = set.Parse(args[1:])
 	cfgStore, err := store.OpenConfig(*configPath)
 	if err != nil {
 		fatal("读取配置失败")
+	}
+	if action == "lock" || action == "unlock" {
+		cfg := cfgStore.Get()
+		cfg.WebManagementEnabled = action == "unlock"
+		if err := cfgStore.Replace(cfg); err != nil {
+			fatal("保存 Web 管理入口状态失败")
+		}
+		if cfg.WebManagementEnabled {
+			fmt.Println("Web 管理入口已开启")
+		} else {
+			fmt.Println("Web 管理入口已锁定，订阅继续可用")
+		}
+		return
 	}
 	password, err := protocol.RandomToken(24)
 	must(err)
@@ -206,7 +223,7 @@ func runServe(args []string) {
 		Factory: protocol.Factory{Keys: protocol.SingBoxKeyGenerator{Binary: p.singBox}}, Clash: clashClient,
 		System: systemCollector, Assets: assets, Limiter: auth.NewLimiter(),
 		Sessions: auth.Sessions{Secret: []byte(cfg.SessionSecret), Lifetime: 24 * time.Hour}, PanelVersion: version,
-		Releases: releasecheck.NewGitHub("boltguo/sbm"), TrafficAudit: traffic.NewNetworkAudit(*procRoot),
+		Releases: releasecheck.NewGitHub("boltguo/sbm"), CertificatePath: p.cert,
 	}
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

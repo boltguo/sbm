@@ -1,30 +1,35 @@
 export interface Dashboard {
-  active: boolean
+  coreStatus: 'running' | 'stopped' | 'unknown'
   coreVersion: string
   panelVersion: string
   upload: number
   download: number
-  used: number
-  totalBytes: number
-  remaining: number
-  progress: number
+  proxyUsedBytes: number
+  trafficQuota: TrafficQuota
+  effectiveLimitBytes: number
+  providerAllowanceBytes: number
+  estimatedProviderUsedBytes: number
+  providerStopBytes: number
+  providerRemainingBytes: number
+  providerProgress: number
   periodStartedAt: string
   nextResetAt?: string
   quotaExceeded: boolean
+  sampleHealth: SampleHealth
   subscriptionURL: string
   subscriptionName: string
-  trafficAudit: TrafficAudit
 }
 
-export interface TrafficAudit {
-  status: 'collecting' | 'normal' | 'different' | 'unavailable'
-  interface?: string
-  proxyBytes: number
-  receiveBytes: number
-  transmitBytes: number
-  receiveRatio: number
-  transmitRatio: number
-  startedAt?: string
+export type TrafficBillingMode = 'bidirectional' | 'single'
+export interface TrafficQuota {
+  amountGB: number
+  billingMode: TrafficBillingMode
+  headroomPercent: number
+}
+export interface SampleHealth {
+  status: 'waiting' | 'healthy' | 'interrupted' | 'paused'
+  lastSuccessAt?: string
+  failureSince?: string
 }
 
 export interface UpdateStatus {
@@ -35,9 +40,8 @@ export interface UpdateStatus {
   checkedAt: string
 }
 
-export interface VLESSOptions { uuid: string; wireGuardExitUuid?: string; sni: string; privateKey: string; publicKey: string; shortId: string }
-export interface Hysteria2Options { password: string; wireGuardExitPassword?: string; obfs?: string; obfsPassword?: string }
-export interface CompanionNode { name: string; link: string }
+export interface VLESSOptions { uuid: string; sni: string; privateKey: string; publicKey: string; shortId: string }
+export interface Hysteria2Options { password: string; obfs?: string; obfsPassword?: string }
 export interface Inbound {
   id: string
   type: 'vless-reality' | 'hysteria2'
@@ -46,29 +50,18 @@ export interface Inbound {
   port: number
   network: 'tcp' | 'udp'
   link: string
-  wireGuardNode?: CompanionNode
   vless?: VLESSOptions
   hysteria2?: Hysteria2Options
 }
 
 export interface ResetConfig { mode: 'none' | 'monthly'; day: number; timezone: string }
 export type OutboundStrategy = 'auto' | 'prefer_ipv4' | 'prefer_ipv6' | 'ipv4_only' | 'ipv6_only'
-export interface WireGuardExitConfig {
-  enabled: boolean
-  label: string
-  server: string
-  serverPort: number
-  privateKey: string
-  peerPublicKey: string
-}
 export interface Settings {
   domain: string
   panelPort: number
-  totalBytes: number
+  trafficQuota: TrafficQuota
   reset: ResetConfig
   outboundStrategy: OutboundStrategy
-  wireGuardExit: WireGuardExitConfig
-  wireGuardLocalPublicKey: string
   subscriptionURL: string
 }
 
@@ -90,4 +83,27 @@ export interface ServerStatus {
   diskPercent: number
   uptimeSeconds: number
   collectedAt: string
+  health: HealthReport
+}
+
+export type HealthStatus = 'ok' | 'warning' | 'error' | 'unknown'
+export interface HealthCheck {
+  id: string
+  kind: string
+  status: HealthStatus
+  reason: string
+  checkedAt: string
+  protocol?: 'tcp' | 'udp'
+  port?: number
+  percent?: number
+  expiresAt?: string
+  lastSuccessAt?: string
+  failureSince?: string
+  nextResetAt?: string
+  timezone?: string
+}
+export interface HealthReport {
+  overall: HealthStatus
+  checks: HealthCheck[]
+  checkedAt: string
 }
