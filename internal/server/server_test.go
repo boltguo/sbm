@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -51,6 +52,29 @@ func (c checkFailureCommander) Run(ctx context.Context, name string, args ...str
 type serviceStateCommander struct {
 	state string
 	err   error
+}
+
+type recoveryCommander struct {
+	isActiveCalls int
+	restarts      int
+	activate      bool
+}
+
+func (c *recoveryCommander) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && len(args) > 0 {
+		switch args[0] {
+		case "is-active":
+			c.isActiveCalls++
+			if c.activate && c.isActiveCalls > 1 {
+				return []byte("active"), nil
+			}
+			return []byte("inactive"), errors.New("exit status 3")
+		case "restart":
+			c.restarts++
+			return nil, nil
+		}
+	}
+	return []byte("sing-box version 1.12.0"), nil
 }
 
 type countingCommander struct {
@@ -146,6 +170,9 @@ func TestLockedWebManagementHidesUIAndAPIButKeepsSubscription(t *testing.T) {
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("%s %s status=%d", request.Method, request.URL.Path, response.Code)
 		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s %s cache-control=%q", request.Method, request.URL.Path, response.Header().Get("Cache-Control"))
+		}
 	}
 	response := httptest.NewRecorder()
 	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/sub/"+cfg.SubscriptionToken, nil))
@@ -226,16 +253,84 @@ func TestServerHealthKeepsPartialResultsWithoutSecrets(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, expected := range []string{`"id":"panel","kind":"panel","status":"ok"`, `"reason":"config_valid"`, `"reason":"certificate_invalid"`} {
+	for _, expected := range []string{`"id":"core","kind":"core","status":"ok"`, `"reason":"config_valid"`, `"reason":"certificate_invalid"`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("health response missing %s: %s", expected, body)
 		}
+	}
+	if strings.Contains(body, `"kind":"panel"`) {
+		t.Fatalf("health response retained the redundant panel check: %s", body)
 	}
 	for _, secret := range []string{cfg.ClashAPISecret, cfg.SubscriptionToken, cfg.Inbounds[0].Hysteria2.Password} {
 		if secret != "" && strings.Contains(body, secret) {
 			t.Fatalf("health response leaked secret %q", secret)
 		}
 	}
+}
+
+func TestServerHealthTreatsQuotaPauseAsPlannedState(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 0.000000001, BillingMode: model.TrafficBillingSingle}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Traffic.ApplySample(context.Background(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	s.Core.Commands = serviceStateCommander{state: "inactive", err: errors.New("exit status 3")}
+	s.System.ProcRoot = procListeners(t, []int{cfg.PanelPort}, nil)
+
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/server", nil))
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, `"overall":"warning"`) {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	if strings.Contains(body, `"kind":"listener_inbound"`) || strings.Contains(body, `"reason":"not_listening"`) {
+		t.Fatalf("planned quota pause reported stopped inbounds as failures: %s", body)
+	}
+}
+
+func TestServerHealthFlagsRunningCoreAfterQuotaExceeded(t *testing.T) {
+	s, cfg := testServer(t)
+	cfg.TrafficQuota = model.TrafficQuotaConfig{AmountGB: 0.000000001, BillingMode: model.TrafficBillingSingle}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Traffic.ApplySample(context.Background(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	s.System.ProcRoot = procListeners(t, []int{cfg.PanelPort}, []int{cfg.Inbounds[0].Port})
+
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodGet, "/api/server", nil))
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, `"overall":"error"`) || !strings.Contains(body, `"reason":"quota_enforcement_failed"`) {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+}
+
+func procListeners(t *testing.T, tcpPorts, udpPorts []int) string {
+	t.Helper()
+	root := t.TempDir()
+	netDir := filepath.Join(root, "net")
+	if err := os.MkdirAll(netDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	header := "  sl  local_address rem_address   st\n"
+	tables := map[string]string{"tcp": header, "tcp6": header, "udp": header, "udp6": header}
+	for i, port := range tcpPorts {
+		tables["tcp"] += fmt.Sprintf("%4d: 00000000:%04X 00000000:0000 0A\n", i, port)
+	}
+	for i, port := range udpPorts {
+		tables["udp"] += fmt.Sprintf("%4d: 00000000:%04X 00000000:0000 07\n", i, port)
+	}
+	for name, data := range tables {
+		if err := os.WriteFile(filepath.Join(netDir, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func TestServerHealthCachesSlowConfigCheck(t *testing.T) {
@@ -454,6 +549,49 @@ func TestSettingsRejectsUnknownOutboundStrategy(t *testing.T) {
 	}
 	if got := s.Config.Get().OutboundStrategy; got != model.OutboundStrategyAuto {
 		t.Fatalf("invalid outbound strategy was stored: %q", got)
+	}
+}
+
+func TestStoppedCoreCanRestartWhenTrafficAPIIsUnavailable(t *testing.T) {
+	s, _ := testServer(t)
+	requests := 0
+	clash := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer clash.Close()
+	s.Clash = traffic.ClashClient{URL: clash.URL, Client: clash.Client()}
+	commands := &recoveryCommander{}
+	s.Core.Commands = commands
+
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodPost, "/api/core/restart", nil))
+	if response.Code != http.StatusOK || commands.restarts != 1 || requests != 0 {
+		t.Fatalf("status=%d restarts=%d clashRequests=%d body=%s", response.Code, commands.restarts, requests, response.Body.String())
+	}
+}
+
+func TestStoppedCoreCanApplyProtocolChangeWhenTrafficAPIIsUnavailable(t *testing.T) {
+	s, cfg := testServer(t)
+	requests := 0
+	clash := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer clash.Close()
+	s.Clash = traffic.ClashClient{URL: clash.URL, Client: clash.Client()}
+	commands := &recoveryCommander{activate: true}
+	s.Core.Commands = commands
+	inbound := cfg.Inbounds[0]
+	inbound.Name = "recovered-node"
+
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, authenticatedRequest(t, s, http.MethodPut, "/api/inbounds/"+inbound.ID, inbound))
+	if response.Code != http.StatusOK || commands.restarts != 1 || requests != 0 {
+		t.Fatalf("status=%d restarts=%d clashRequests=%d body=%s", response.Code, commands.restarts, requests, response.Body.String())
+	}
+	if got := s.Config.Get().Inbounds[0].Name; got != inbound.Name {
+		t.Fatalf("protocol name=%q want=%q", got, inbound.Name)
 	}
 }
 

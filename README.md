@@ -48,7 +48,7 @@ The installer pins both SBM and sing-box to a tested release pair. It does not s
 SBM_VERSION=2.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. Historical tag scripts released before version pinning still contain their original latest-release behavior; use the current installer and `SBM_VERSION` when installing those releases.
+The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x is fresh-install only and does not provide old-config migration or old SBM release mappings.
 
 The installer asks for:
 
@@ -131,7 +131,7 @@ This setting requires sing-box 1.12 or newer and only affects domain destination
 
 ### Server Health and diagnostics
 
-The Server page is read-only. It reports each check as healthy, warning, error, or unknown without letting one failed check hide the rest. It checks the panel, sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. Configuration checks are cached briefly so the five-second page refresh does not repeatedly start external processes.
+The Server page is read-only. It normally shows only the number of passed checks, expands warning, error, or unknown items when attention is needed, and still offers a view of every result. It checks the sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. A planned quota pause does not misreport intentionally stopped inbounds as failures. Configuration and certificate checks use a short cache, while listener state is read live.
 
 The page returns only structured health fields and never exposes passwords, session secrets, subscription tokens, UUIDs, private keys, complete configuration, or raw command output. DNS/public-IP matching is intentionally left out because valid multi-record, IPv6, and NAT setups cannot be judged reliably from the host alone.
 
@@ -156,7 +156,7 @@ The menu includes:
 11. Repair boot services and host firewall
 12. Lock or unlock the Web management entry while keeping subscriptions available
 
-Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Releases. Panel updates select the latest SBM Release, while option 7 installs the sing-box version pinned to the currently installed SBM release. If a replacement binary fails configuration validation or its health check, the old one is restored.
+Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Releases. Panel updates select the latest SBM Release, while option 7 installs the sing-box version pinned to the currently installed SBM release. If a replacement binary fails configuration validation or its health check, the previously installed binary is restored.
 
 Protocol and egress changes are transactional: SBM writes a candidate, runs `sing-box check`, starts the result, and restores the previous business configuration and generated core configuration if validation or startup fails.
 

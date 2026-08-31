@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api'
 import { dateLocale, t } from '../i18n'
 import type { HealthCheck, HealthStatus, ServerStatus } from '../types'
 
 const data = ref<ServerStatus | null>(null)
+const showAllChecks = ref(false)
 let timer = 0
+
+const passedChecks = computed(() => data.value?.health.checks.filter(check => check.status === 'ok') ?? [])
+const attentionChecks = computed(() => data.value?.health.checks.filter(check => check.status !== 'ok') ?? [])
+const visibleChecks = computed(() => showAllChecks.value ? data.value?.health.checks ?? [] : attentionChecks.value)
 
 const bytes = (value: number) => {
   if (!value) return '0 B'
@@ -52,8 +57,13 @@ onBeforeUnmount(() => clearInterval(timer))
         <div><span class="eyebrow">DOCTOR / READ ONLY</span><h2>{{ t('server.doctor') }}</h2><p>{{ t('server.doctorHelp') }}</p></div>
         <div class="doctor-actions"><span class="health-chip" :data-status="data.health.overall">{{ overallStatusLabel(data.health.overall) }}</span></div>
       </header>
-      <div class="health-grid">
-        <article v-for="check in data.health.checks" :key="check.id" class="health-check" :data-status="check.status">
+      <div class="doctor-summary">
+        <p v-if="attentionChecks.length === 0">{{ t('server.allPassed', { count: passedChecks.length }) }}</p>
+        <p v-else>{{ t('server.somePassed', { passed: passedChecks.length, total: data.health.checks.length }) }}</p>
+        <button v-if="passedChecks.length" type="button" @click="showAllChecks = !showAllChecks">{{ t(showAllChecks ? 'server.hideHealthy' : 'server.showAll') }}</button>
+      </div>
+      <div v-if="visibleChecks.length" class="health-grid">
+        <article v-for="check in visibleChecks" :key="check.id" class="health-check" :data-status="check.status">
           <div><span class="health-dot"></span><strong>{{ checkTitle(check) }}</strong><small>{{ statusLabel(check.status) }}</small></div>
           <p>{{ checkReason(check) }}</p>
           <code>{{ checkDetail(check) }}</code>

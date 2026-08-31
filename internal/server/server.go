@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) requireManagement(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Config != nil && !s.Config.Get().WebManagementEnabled {
+			w.Header().Set("Cache-Control", "no-store")
 			http.NotFound(w, r)
 			return
 		}
@@ -233,22 +234,30 @@ type healthReport struct {
 
 func (s *Server) healthReport(ctx context.Context, snapshot systeminfo.Snapshot) healthReport {
 	now := time.Now().UTC()
-	checks := []health.Check{{ID: "panel", Kind: "panel", Status: health.StatusOK, Reason: "responding", CheckedAt: now}}
-
+	checks := make([]health.Check, 0)
+	quotaExceeded := s.Traffic != nil && s.Traffic.State().QuotaExceeded
+	coreKnown, coreActive := false, false
 	if s.Core == nil {
 		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusUnknown, Reason: "state_unavailable", CheckedAt: now})
 	} else if active, err := s.Core.Active(ctx); err != nil {
 		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusUnknown, Reason: "state_unavailable", CheckedAt: now})
-	} else if active {
-		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusOK, Reason: "running", CheckedAt: now})
-	} else if s.Traffic != nil && s.Traffic.State().QuotaExceeded {
-		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusWarning, Reason: "quota_paused", CheckedAt: now})
 	} else {
-		checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusError, Reason: "stopped", CheckedAt: now})
+		coreKnown, coreActive = true, active
+		switch {
+		case quotaExceeded && active:
+			checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusError, Reason: "quota_enforcement_failed", CheckedAt: now})
+		case quotaExceeded:
+			checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusWarning, Reason: "quota_paused", CheckedAt: now})
+		case active:
+			checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusOK, Reason: "running", CheckedAt: now})
+		default:
+			checks = append(checks, health.Check{ID: "core", Kind: "core", Status: health.StatusError, Reason: "stopped", CheckedAt: now})
+		}
 	}
 
-	checks = append(checks, s.trafficHealth(now))
+	checks = append(checks, s.trafficHealth(now, coreKnown, coreActive))
 	checks = append(checks, s.slowHealthChecks(ctx, now)...)
+	checks = append(checks, s.listenerHealth(now, quotaExceeded && coreKnown && !coreActive)...)
 	checks = append(checks, health.Disk(snapshot.DiskPercent, snapshot.DiskTotal, now))
 	checks = append(checks, s.resetHealth(now))
 
@@ -257,7 +266,7 @@ func (s *Server) healthReport(ctx context.Context, snapshot systeminfo.Snapshot)
 	}
 }
 
-func (s *Server) trafficHealth(now time.Time) health.Check {
+func (s *Server) trafficHealth(now time.Time, coreKnown, coreActive bool) health.Check {
 	check := health.Check{ID: "traffic", Kind: "traffic", Status: health.StatusUnknown, Reason: "sample_waiting", CheckedAt: now}
 	if s.Traffic == nil {
 		check.Reason = "sample_unavailable"
@@ -265,7 +274,11 @@ func (s *Server) trafficHealth(now time.Time) health.Check {
 	}
 	state, sample := s.Traffic.State(), s.Traffic.SampleHealth()
 	if state.QuotaExceeded {
-		check.Status, check.Reason = health.StatusWarning, "quota_paused"
+		if coreKnown && coreActive {
+			check.Status, check.Reason = health.StatusError, "quota_enforcement_failed"
+		} else {
+			check.Status, check.Reason = health.StatusWarning, "quota_paused"
+		}
 		check.LastSuccessAt = timePointer(sample.LastSuccessAt)
 		return check
 	}
@@ -329,13 +342,27 @@ func (s *Server) slowHealthChecks(ctx context.Context, now time.Time) []health.C
 	}
 	checks = append(checks, configCheck, health.Certificate(s.CertificatePath, now))
 
+	s.healthSlow = append([]health.Check(nil), checks...)
+	s.healthUntil = now.Add(15 * time.Second)
+	return checks
+}
+
+// Listener state is intentionally not cached. Reading /proc is cheap, and a
+// stale result right after a restart makes the Doctor report the wrong state.
+// During a planned quota pause, enabled proxy inbounds are expected not to
+// listen, so only the management listener remains meaningful.
+func (s *Server) listenerHealth(now time.Time, quotaPaused bool) []health.Check {
+	if s.Config == nil {
+		return nil
+	}
 	procRoot := "/proc"
 	if s.System != nil && s.System.ProcRoot != "" {
 		procRoot = s.System.ProcRoot
 	}
-	if s.Config != nil {
-		cfg := s.Config.Get()
-		endpoints := []health.Endpoint{{ID: "listener-panel", Kind: "listener_panel", Protocol: "tcp", Port: cfg.PanelPort}}
+	cfg := s.Config.Get()
+	checks := make([]health.Check, 0)
+	endpoints := []health.Endpoint{{ID: "listener-panel", Kind: "listener_panel", Protocol: "tcp", Port: cfg.PanelPort}}
+	if !quotaPaused {
 		for i, inbound := range cfg.Inbounds {
 			if !inbound.Enabled {
 				continue
@@ -351,11 +378,8 @@ func (s *Server) slowHealthChecks(ctx context.Context, now time.Time) []health.C
 			}
 			endpoints = append(endpoints, health.Endpoint{ID: fmt.Sprintf("listener-inbound-%d", i+1), Kind: "listener_inbound", Protocol: driver.Network(), Port: inbound.Port})
 		}
-		checks = append(checks, health.Listeners(procRoot, endpoints, now)...)
 	}
-	s.healthSlow = append([]health.Check(nil), checks...)
-	s.healthUntil = now.Add(15 * time.Second)
-	return checks
+	return append(checks, health.Listeners(procRoot, endpoints, now)...)
 }
 
 func (s *Server) invalidateHealth() {
@@ -473,7 +497,7 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 	if s.Traffic.State().QuotaExceeded {
-		writeError(w, 409, "流量已超限，请先重置流量或提高限额")
+		writeError(w, 409, "已达到代理安全阈值，请先重置流量或提高限额")
 		return
 	}
 	if err := s.captureTraffic(r.Context()); err != nil {
@@ -481,7 +505,7 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Traffic.State().QuotaExceeded {
-		writeError(w, 409, "流量已超限，请先重置流量或提高限额")
+		writeError(w, 409, "已达到代理安全阈值，请先重置流量或提高限额")
 		return
 	}
 	if err := s.Traffic.Persist(); err != nil {
@@ -657,6 +681,14 @@ func (s *Server) captureTraffic(ctx context.Context) error {
 	if s.Clash.URL == "" || s.Traffic.State().QuotaExceeded {
 		return nil
 	}
+	// A stopped service has no final counter left to read. Recovery actions must
+	// remain available even though the Clash API disappeared with the process.
+	if s.Core != nil {
+		active, err := s.Core.Active(ctx)
+		if err == nil && !active {
+			return nil
+		}
+	}
 	_, err := s.Traffic.Sample(ctx, s.Clash)
 	if errors.Is(err, traffic.ErrSampleUnavailable) {
 		return errors.New("无法读取核心流量，请稍后重试")
@@ -801,7 +833,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if state.QuotaExceeded {
-		writeError(w, 403, "流量已用尽，请等待重置")
+		writeError(w, 403, "已达到代理安全阈值，请等待重置")
 		return
 	}
 	links := make([]string, 0, len(cfg.Inbounds))
@@ -1000,16 +1032,16 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 func writeError(w http.ResponseWriter, status int, message string) {
 	english := map[string]string{
-		"登录尝试过于频繁，请稍后再试":        "Too many sign-in attempts. Try again later.",
-		"请求格式无效":                "The request format is invalid.",
-		"用户名或密码错误":              "Incorrect username or password.",
-		"无法创建会话":                "Could not create a session.",
-		"请先登录":                  "Sign in first.",
-		"会话已失效，请重新登录":           "Your session has expired. Sign in again.",
-		"凭据已变更，请重新登录":           "Your credentials changed. Sign in again.",
-		"CSRF 校验失败":             "CSRF validation failed.",
-		"接口不存在":                 "API endpoint not found.",
-		"流量已超限，请先重置流量或提高限额":     "The traffic quota is exhausted. Reset traffic or increase the quota first.",
+		"登录尝试过于频繁，请稍后再试": "Too many sign-in attempts. Try again later.",
+		"请求格式无效":         "The request format is invalid.",
+		"用户名或密码错误":       "Incorrect username or password.",
+		"无法创建会话":         "Could not create a session.",
+		"请先登录":           "Sign in first.",
+		"会话已失效，请重新登录":    "Your session has expired. Sign in again.",
+		"凭据已变更，请重新登录":    "Your credentials changed. Sign in again.",
+		"CSRF 校验失败":      "CSRF validation failed.",
+		"接口不存在":          "API endpoint not found.",
+		"已达到代理安全阈值，请先重置流量或提高限额": "The proxy safety threshold has been reached. Reset traffic or increase the quota first.",
 		"保存流量状态失败":              "Could not save traffic state.",
 		"重启 sing-box 失败":        "Could not restart sing-box.",
 		"重置流量失败":                "Could not reset traffic.",
@@ -1023,7 +1055,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"当前密码错误":                "The current password is incorrect.",
 		"密码处理失败":                "Could not process the password.",
 		"订阅不存在":                 "Subscription not found.",
-		"流量已用尽，请等待重置":           "The traffic quota is exhausted. Wait for the next reset.",
+		"已达到代理安全阈值，请等待重置":       "The proxy safety threshold has been reached. Wait for the next reset.",
 		"页面不存在":                 "Page not found.",
 		"服务器状态采集不可用":            "Server status collection is unavailable.",
 	}

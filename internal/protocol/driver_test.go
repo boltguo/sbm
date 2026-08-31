@@ -76,3 +76,27 @@ func TestPanelPortConflict(t *testing.T) {
 		t.Fatalf("expected panel conflict, got %v", err)
 	}
 }
+
+func TestReservedTCPPorts(t *testing.T) {
+	for _, test := range []struct {
+		port int
+		want string
+	}{
+		{port: 80, want: "证书申请和续期"},
+		{port: 9090, want: "流量接口"},
+	} {
+		cfg := testConfig()
+		cfg.Inbounds = []model.Inbound{{ID: "v1", Type: TypeVLESSReality, Name: "V1", Port: test.port, VLESS: &model.VLESSOptions{UUID: "70d0c699-73a0-4d2a-a45d-4f46a661b4f2", SNI: "www.apple.com", PrivateKey: "p", PublicKey: "P", ShortID: "aabb"}}}
+		if err := DefaultRegistry().ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("TCP/%d got %v, want error containing %q", test.port, err, test.want)
+		}
+	}
+
+	// These reservations are TCP-specific; UDP uses do not conflict with ACME
+	// HTTP-01 or the loopback Clash API listener.
+	cfg := testConfig()
+	cfg.Inbounds = []model.Inbound{{ID: "h1", Type: TypeHysteria2, Name: "H1", Port: 9090, Hysteria2: &model.Hysteria2Options{Password: "long-password"}}}
+	if err := DefaultRegistry().ValidateConfig(cfg); err != nil {
+		t.Fatalf("UDP/9090 should remain available: %v", err)
+	}
+}

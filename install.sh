@@ -107,8 +107,9 @@ cloud_provider_name() {
   esac
 }
 show_cloud_firewall_guide() {
-  local provider="$1" panel_port="$2"
-  warn "云平台外层防火墙无法从虚拟机内自动修改，请确认入站：TCP/80、TCP/443、UDP/443、TCP/${panel_port}。面板端口也供客户端更新订阅，来源限制需覆盖实际客户端。"
+  local provider="$1" panel_port="$2" required_rules
+  required_rules="$(desired_firewall_rules "$panel_port" "$CONFIG_FILE" | awk '{ item=toupper($1) "/" $2; if (result == "") result=item; else result=result "、" item } END { print result }')"
+  warn "云平台外层防火墙无法从虚拟机内自动修改，请确认入站：${required_rules}。面板端口也供客户端更新订阅，来源限制需覆盖实际客户端。"
   warn "请保持云防火墙允许全部出站，并让域名 A 记录直连本机；Cloudflare 必须使用 DNS only / 灰云。"
   case "$provider" in
     oracle) warn "OCI：VNIC NSG 与子网 Security List 的允许规则取并集，任选实际生效的一层添加即可；系统防火墙仍需放行。脚本只增量处理 iptables，不会清空原规则。" ;;
@@ -325,7 +326,7 @@ github_latest_tag() {
 }
 panel_update_target_version() {
   local latest
-  if [[ -n "${SBM_VERSION:-${SBM_PANEL_VERSION:-}}" ]]; then
+  if [[ -n "${SBM_VERSION:-}" ]]; then
     requested_sbm_version
     return
   fi
@@ -344,13 +345,16 @@ normalize_tag() {
   [[ "$tag" == v* ]] && printf '%s\n' "$tag" || printf 'v%s\n' "$tag"
 }
 requested_sbm_version() {
-  normalize_tag "${SBM_VERSION:-${SBM_PANEL_VERSION:-$SBM_RELEASE_VERSION}}"
+  local tag
+  tag="$(normalize_tag "${SBM_VERSION:-$SBM_RELEASE_VERSION}")"
+  [[ "$tag" == v2.* ]] || die "当前安装器只支持 SBM 2.x 全新安装，不提供旧版安装或降级。"
+  printf '%s\n' "$tag"
 }
 compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v1.2.0|v1.2.1|v1.2.2|v1.2.3|v2.0.0) printf 'v1.13.14\n' ;;
+    v2.0.0) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }
@@ -593,7 +597,7 @@ write_core_guard() {
 #!/usr/bin/env bash
 set -euo pipefail
 if grep -Eq '"quotaExceeded"[[:space:]]*:[[:space:]]*true' /var/lib/sbm/state.json 2>/dev/null; then
-  echo "SBM 流量配额已超限，sing-box 保持停止。" >&2
+  echo "SBM 已达到代理安全阈值，sing-box 保持停止。" >&2
   exit 1
 fi
 GUARD
@@ -685,27 +689,51 @@ detect_host_firewall_mode() {
   fi
   printf 'none\n'
 }
+desired_firewall_rules() {
+  local panel_port="$1" config_file="${2:-}"
+  {
+    printf 'tcp 80\ntcp %s\n' "$panel_port"
+    if [[ -n "$config_file" && -r "$config_file" ]]; then
+      awk '
+        BEGIN { RS="{" }
+        /"enabled"[[:space:]]*:[[:space:]]*true/ && /"port"[[:space:]]*:[[:space:]]*[0-9]+/ {
+          network=""
+          if ($0 ~ /"type"[[:space:]]*:[[:space:]]*"vless-reality"/) network="tcp"
+          if ($0 ~ /"type"[[:space:]]*:[[:space:]]*"hysteria2"/) network="udp"
+          if (network != "") {
+            value=$0
+            sub(/^.*"port"[[:space:]]*:[[:space:]]*/, "", value)
+            sub(/[^0-9].*$/, "", value)
+            if (value ~ /^[0-9]+$/) print network, value
+          }
+        }
+      ' "$config_file"
+    else
+      printf 'tcp 443\nudp 443\n'
+    fi
+  } | sort -u
+}
+
 open_firewall() {
-  local provider="$1" panel_port="$2" mode
+  local provider="$1" panel_port="$2" mode desired_file tracked_file
   mode="$(detect_host_firewall_mode "$provider")"
   printf '%s\n' "$mode" > "$FIREWALL_MODE"; chmod 0600 "$FIREWALL_MODE"
   touch "$FIREWALL_PORTS"; chmod 0600 "$FIREWALL_PORTS"
-  "$FIREWALL_HELPER" tcp 80
-  "$FIREWALL_HELPER" tcp 443
-  "$FIREWALL_HELPER" udp 443
-  "$FIREWALL_HELPER" tcp "$panel_port"
-  if [[ -r "$CONFIG_FILE" ]]; then
-    while read -r inbound_network inbound_port; do
-      [[ -n "${inbound_network:-}" ]] && "$FIREWALL_HELPER" "$inbound_network" "$inbound_port"
-    done < <(awk -F'"' '
-      $2 == "type" && $4 == "vless-reality" { network="tcp"; next }
-      $2 == "type" && $4 == "hysteria2" { network="udp"; next }
-      network != "" && $2 == "port" {
-        value=$0; sub(/^.*:[[:space:]]*/, "", value); sub(/,.*/, "", value)
-        print network, value; network=""
-      }
-    ' "$CONFIG_FILE")
-  fi
+  desired_file="$(mktemp /tmp/sbm-firewall-desired.XXXXXX)"
+  tracked_file="$(mktemp /tmp/sbm-firewall-tracked.XXXXXX)"
+  desired_firewall_rules "$panel_port" "$CONFIG_FILE" > "$desired_file"
+  cp "$FIREWALL_PORTS" "$tracked_file"
+
+  # Open every currently required port before removing stale entries, so a
+  # repair cannot create an avoidable interruption when ports have changed.
+  while read -r inbound_network inbound_port; do
+    [[ -n "${inbound_network:-}" ]] && "$FIREWALL_HELPER" "$inbound_network" "$inbound_port"
+  done < "$desired_file"
+  while read -r inbound_network inbound_port; do
+    [[ -n "${inbound_network:-}" ]] || continue
+    grep -Fqx "$inbound_network $inbound_port" "$desired_file" || "$FIREWALL_HELPER" --close "$inbound_network" "$inbound_port"
+  done < "$tracked_file"
+  rm -f "$desired_file" "$tracked_file"
   case "$mode" in
     ufw) info "已通过 UFW 放行 SBM 端口，规则会在重启后保留。" ;;
     firewalld) info "已通过 firewalld 永久放行 SBM 端口。" ;;
@@ -847,7 +875,7 @@ show_status() {
   printf '面板：  https://%s:%s/\n用户名：admin\n订阅：  https://%s:%s/sub/%s#%s\n\n' "$domain" "$panel_port" "$domain" "$panel_port" "$token" "$encoded_subscription_name"
   systemctl --no-pager --full status sbm-panel.service sing-box.service | sed -n '1,24p' || true
 }
-restart_core() { quota_exceeded && { warn "流量已超限，禁止直接重启 sing-box。请在面板中重置流量或提高限额。"; return; }; systemctl restart sing-box.service; info "sing-box 已重启。"; }
+restart_core() { quota_exceeded && { warn "已达到代理安全阈值，禁止直接重启 sing-box。请在面板中重置流量或提高限额。"; return; }; systemctl restart sing-box.service; info "sing-box 已重启。"; }
 reset_admin_password() {
   local password
   password="$("$SBM_BIN" admin reset)" || { warn "重置管理员密码失败。"; return 1; }
@@ -924,7 +952,7 @@ update_core() {
     return 1
   fi
   if quota_exceeded; then
-    info "sing-box 已更新；当前流量超限，核心保持停止。"
+    info "sing-box 已更新；当前已达到代理安全阈值，核心保持停止。"
     return
   fi
   if service_healthy_after_restart sing-box.service; then
@@ -1017,7 +1045,7 @@ menu() {
   need_root
   while true; do
     printf '\n%s========= SBM 管理 =========%s\n' "$CYAN" "$RESET"
-    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 安装/恢复兼容版 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '12. 锁定/解锁 Web 管理入口' '0. 退出'
+    printf '%s\n' '1. 查看面板地址和运行状态' '2. 重启面板' '3. 重启 sing-box' '4. 重置管理员密码' '5. 查看日志' '6. 更新面板' '7. 安装/恢复当前绑定版 sing-box' '8. 备份配置' '9. 恢复配置' '10. 卸载' '11. 修复开机启动与防火墙' '12. 锁定/解锁 Web 管理入口' '0. 退出'
     read -r -p "选择: " choice
     case "$choice" in
       1) run_action '查看运行状态' show_status ;;
@@ -1026,7 +1054,7 @@ menu() {
       4) run_action '重置管理员密码' reset_admin_password ;;
       5) run_action '查看日志' show_logs ;;
       6) run_action '更新面板' update_panel ;;
-      7) run_action '安装/恢复兼容版 sing-box' update_core ;;
+      7) run_action '安装/恢复当前绑定版 sing-box' update_core ;;
       8) run_action '备份配置' backup_config ;;
       9) run_action '恢复配置' restore_config ;;
       10) run_action '卸载' uninstall; return ;;

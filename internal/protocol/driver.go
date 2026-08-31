@@ -98,6 +98,14 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 		if err := driver.Validate(inbound); err != nil {
 			return fmt.Errorf("%s: %w", inbound.Name, err)
 		}
+		if driver.Network() == "tcp" {
+			switch inbound.Port {
+			case 80:
+				return errors.New("TCP/80 保留用于 TLS 证书申请和续期")
+			case 9090:
+				return errors.New("TCP/9090 保留用于本机 sing-box 流量接口")
+			}
+		}
 		key := driver.Network() + ":" + strconv.Itoa(inbound.Port)
 		if old, exists := seen[key]; exists {
 			return fmt.Errorf("端口冲突：%s 与 %s 都使用 %s/%d", old.id, inbound.ID, driver.Network(), inbound.Port)

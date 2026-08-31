@@ -26,40 +26,27 @@ done
 # shellcheck disable=SC1091
 source "$root_dir/install.sh"
 
-[[ "$(normalize_tag 1.2.3)" == v1.2.3 ]]
-[[ "$(normalize_tag v1.2.3)" == v1.2.3 ]]
 [[ "$(normalize_tag 2.0.0)" == v2.0.0 ]]
+[[ "$(normalize_tag v2.0.0)" == v2.0.0 ]]
 
 repo_version="$(tr -d '[:space:]' < "$root_dir/VERSION")"
 declare -p SBM_RELEASE_VERSION >/dev/null
 release_version="$(normalize_tag "$SBM_RELEASE_VERSION")"
 [[ "$release_version" == "v${repo_version}" ]]
-compatible_version="$(compatible_sing_box_version v1.2.0)"
-[[ "$compatible_version" == v1.13.14 ]]
-compatible_version="$(compatible_sing_box_version v1.2.1)"
-[[ "$compatible_version" == v1.13.14 ]]
-compatible_version="$(compatible_sing_box_version v1.2.2)"
-[[ "$compatible_version" == v1.13.14 ]]
-compatible_version="$(compatible_sing_box_version v1.2.3)"
-[[ "$compatible_version" == v1.13.14 ]]
 compatible_version="$(compatible_sing_box_version v2.0.0)"
 [[ "$compatible_version" == v1.13.14 ]]
 
-unset SBM_VERSION SBM_PANEL_VERSION SING_BOX_VERSION
+unset SBM_VERSION SING_BOX_VERSION
 selected_version="$(requested_sbm_version)"
 [[ "$selected_version" == "v${repo_version}" ]]
-SBM_VERSION=1.2.0
+SBM_VERSION=2.0.0
 selected_version="$(requested_sbm_version)"
-[[ "$selected_version" == v1.2.0 ]]
+[[ "$selected_version" == v2.0.0 ]]
 selected_core_version="$(requested_sing_box_version "$selected_version")"
 [[ "$selected_core_version" == v1.13.14 ]]
 unset SBM_VERSION
-SBM_PANEL_VERSION=v1.2.0
-selected_version="$(requested_sbm_version)"
-[[ "$selected_version" == v1.2.0 ]]
-unset SBM_PANEL_VERSION
 SING_BOX_VERSION=1.13.12
-selected_core_version="$(requested_sing_box_version v1.2.0)"
+selected_core_version="$(requested_sing_box_version v2.0.0)"
 [[ "$selected_core_version" == v1.13.12 ]]
 unset SING_BOX_VERSION
 
@@ -67,15 +54,19 @@ if (compatible_sing_box_version v9.9.9 >/dev/null 2>&1); then
   echo "unknown SBM release received an untested sing-box version" >&2
   exit 1
 fi
+if (SBM_VERSION=1.2.3 requested_sbm_version >/dev/null 2>&1); then
+  echo "the v2 installer accepted an old SBM release" >&2
+  exit 1
+fi
 
 (
   github_latest_tag() { printf 'v2.0.0\n'; }
-  unset SBM_VERSION SBM_PANEL_VERSION
+  unset SBM_VERSION
   update_target="$(panel_update_target_version)"
   [[ "$update_target" == v2.0.0 ]]
-  SBM_VERSION=1.2.0
+  SBM_VERSION=2.0.0
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v1.2.0 ]]
+  [[ "$update_target" == v2.0.0 ]]
 )
 
 fresh_config="$(mktemp /tmp/sbm-v3-config.XXXXXX)"
@@ -90,7 +81,7 @@ fi
 rm -f "$fresh_config" "$old_config"
 
 (
-  installed_panel_version() { printf '1.2.0\n'; }
+  installed_panel_version() { printf '2.0.0\n'; }
   unset SING_BOX_VERSION
   update_target="$(core_update_target_version)"
   [[ "$update_target" == v1.13.14 ]]
@@ -103,6 +94,21 @@ rm -f "$fresh_config" "$old_config"
 validate_domain node.example.com
 custom_panel_port=24443
 validate_panel_port "$custom_panel_port"
+
+firewall_config="$(mktemp /tmp/sbm-firewall-config.XXXXXX)"
+printf '%s\n' \
+  '{' \
+  '  "inbounds": [' \
+  '    {"id":"vless","type":"vless-reality","name":"VLESS","enabled":true,"port":8443},' \
+  '    {"id":"hy2","type":"hysteria2","name":"HY2","enabled":false,"port":9443}' \
+  '  ]' \
+  '}' > "$firewall_config"
+actual_rules="$(desired_firewall_rules 2096 "$firewall_config")"
+expected_rules="$(printf '%s\n' 'tcp 80' 'tcp 2096' 'tcp 8443' | sort -u)"
+[[ "$actual_rules" == "$expected_rules" ]]
+fresh_rules="$(desired_firewall_rules 2096 /does/not/exist)"
+[[ "$fresh_rules" == *"tcp 443"* && "$fresh_rules" == *"udp 443"* ]]
+rm -f "$firewall_config"
 [[ "$(country_flag US)" == "🇺🇸" ]]
 # Node names use the uppercase country code, not the full country name.
 [[ "$(location_node_name Japan JP Tokyo)" == "JP-Tokyo" ]]
@@ -226,12 +232,12 @@ ensure_acme_cron >/dev/null
 
 curl() {
   printf '%s\n' \
-    '    "name": "sing-box-1.2.3-linux-amd64.tar.gz",' \
+    '    "name": "sing-box-1.13.14-linux-amd64.tar.gz",' \
     '    "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",' \
     '    "browser_download_url": "https://example.invalid/asset"'
 }
 
-digest="$(github_asset_sha256 SagerNet/sing-box v1.2.3 sing-box-1.2.3-linux-amd64.tar.gz)"
+digest="$(github_asset_sha256 SagerNet/sing-box v1.13.14 sing-box-1.13.14-linux-amd64.tar.gz)"
 [[ "$digest" == 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ]]
 
 # Exercise the firewall helper that write_firewall_helper emits. It is a
