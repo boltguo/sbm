@@ -482,8 +482,8 @@ type ClashClient struct {
 	Client      *http.Client
 }
 type clashResponse struct {
-	Upload   int64 `json:"uploadTotal"`
-	Download int64 `json:"downloadTotal"`
+	Upload   *int64 `json:"uploadTotal"`
+	Download *int64 `json:"downloadTotal"`
 }
 
 func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
@@ -508,7 +508,10 @@ func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return 0, 0, err
 	}
-	return data.Upload, data.Download, nil
+	if data.Upload == nil || data.Download == nil || *data.Upload < 0 || *data.Download < 0 {
+		return 0, 0, errors.New("clash API response has missing or invalid counters")
+	}
+	return *data.Upload, *data.Download, nil
 }
 
 func (t *Tracker) Run(ctx context.Context, client ClashClient) {

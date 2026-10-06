@@ -124,8 +124,8 @@ func runInit(args []string) {
 		fatal("读取管理员密码失败")
 	}
 	password := strings.TrimSpace(string(passwordBytes))
-	if len(password) < 12 || len(password) > 128 {
-		fatal("管理员密码长度必须为 12 到 128")
+	if len(password) < 12 || len(password) > 72 {
+		fatal("管理员密码长度必须为 12 到 72 字节")
 	}
 	baseName := strings.TrimSpace(*nodeName)
 	if len([]rune(baseName)) == 0 || len([]rune(baseName)) > 74 {

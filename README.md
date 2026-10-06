@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-SBM is a small web panel for one sing-box server. It is meant for a personal VPS, not a multi-node or multi-user service.
+SBM is a small web panel for managing one sing-box server on a personal VPS.
 
 A fresh install starts two inbounds:
 
@@ -13,15 +13,15 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 ## Multiple WireGuard egress gateways
 
-The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Original Direct nodes remain available.
+The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Direct nodes are always available.
 
-For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; entry quota enforcement uses the entry public interface’s vnStat counters. Exit cards retain WireGuard tunnel estimates without installing collectors on B.
+For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; entry quota enforcement uses the entry public interface’s vnStat counters. Exit usage is estimated from WireGuard tunnel counters on A.
 
-See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Version 2.1.0 retains v4 config / v1 state. With no gateways, Direct proxy and subscription behavior is unchanged; entry traffic accounting uses vnStat in either case. Conflicting node names receive a stable port and identifier before the final marker. Changing display order does not restart the core.
+See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
 
 ## Install
 
-SBM uses v4 configuration. This version starts fresh traffic accounting, without migrating old traffic or reconstructing pre-install usage. Existing v4 business configurations can update in place. Versions before 2.1.1 need one CLI update to install the web updater. Reload the page after that first update; future panel updates can be installed from the version card. Older 1.x configurations are not migrated or partially loaded; deploy with a fresh v4 configuration.
+The panel supports web and CLI updates, retaining configuration and traffic history.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -50,13 +50,13 @@ Skip this step if you are already in a root shell. Then run the installer:
 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
+The installer uses a tested SBM and sing-box release pair. To install a specific published SBM version, set `SBM_VERSION`:
 
 ```bash
 SBM_VERSION=2.1.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-The current installer requires SBM 2.1 or later within 2.x and selects the sing-box version tested with that release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. It does not install or downgrade to old panels that lack the vnStat source preflight command.
+The installer supports SBM 2.1 and later 2.x releases and selects the sing-box version tested with that release. Use `SING_BOX_VERSION` to specify a core version for troubleshooting or testing.
 
 The installer asks for:
 
@@ -101,6 +101,8 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 ## Screenshots
 
+Screenshots use sample data.
+
 ### Overview
 
 ![SBM runtime overview](screenshots/dashboard-en.jpg)
@@ -125,43 +127,35 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 Under `Settings → Plan traffic and period`, choose GB or GiB exactly as shown by the provider: GB uses 1000³ bytes and GiB uses 1024³ bytes. Enter DMIT `1000 GB` as `1000 GB`, or GCP `200 GiB` as `200 GiB`.
 
-Traffic accounting uses **vnStat 2.10 or newer on the selected public network interface**. One-way plans use transmitted bytes (TX); two-way plans use received plus transmitted bytes (RX + TX). NIC counters are already measured in both directions and are never multiplied by two. The safety stop is the advertised allowance minus the configured reserve. SSH, system updates, WireGuard overhead and other traffic on that interface are included. Provider accounting may still differ; the provider dashboard remains authoritative.
+Traffic accounting uses **vnStat 2.10 or newer on the selected public interface**. One-way plans use TX; two-way plans use RX + TX. All traffic on that interface is included, such as proxy, WireGuard, SSH and system updates. The provider dashboard is authoritative for billing.
 
-Ubuntu 24.04 provides vnStat 2.12. A compatible installed vnStat is reused; otherwise the installer installs the system package. Versions below 2.10 are rejected, and real JSON data for the selected interface is checked before replacing the panel. The installer enables vnStat, uses UTC source buckets, saves every minute, and retains at least 90 days of daily records, 40 days of hourly records and 48 hours of five-minute records. Existing longer or unlimited retention and the source database are preserved. Set `Settings → vnStat public interface` explicitly when the default-route interface is not the billing interface, or when there are multiple public interfaces. A blank setting selects the Linux default-route interface. Select two-way for a two-way plan; do not divide the allowance yourself.
+An installed vnStat meeting the requirements is reused; otherwise the installer installs the system package. It validates the version and interface data, enables the service, and configures UTC records with a one-minute save interval. Source retention is at least 90 days of daily data, 40 days of hourly data and 48 hours of five-minute data. Existing longer or unlimited retention and the source database are preserved. Specify an interface in `Settings → vnStat public interface`; leave it blank to use the Linux default-route interface.
 
-A subscription client may display `G` as GiB; this does not change SBM's enforced limit.
-
-Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box stops when the configured safety threshold is reached and resumes after a manual or scheduled traffic reset, or after the plan is increased.
+Set the allowance to `0` for unlimited traffic. The safety threshold is the allowance minus the reserve. sing-box stops at the threshold and resumes after a traffic reset or an allowance increase. Collection and saving introduce a delay; set the reserve according to the host’s transfer rate.
 
 ### Daily and monthly traffic history
 
-The Overview page shows vnStat RX, TX and total bytes by day or calendar month. sing-box proxy traffic appears in small text as a reference in entry history; it is not added to NIC traffic and does not enforce quotas. The first valid sample establishes a fresh baseline. Earlier host vnStat usage is excluded; the first day records only bytes after activation, without deleting the host database. Dates without vnStat data show “No vnStat record”, not fabricated zero usage.
+Traffic history on the Overview page shows daily RX, TX and total public-interface traffic, with calendar-month summaries. sing-box proxy traffic appears in small text as a reference. Recording starts at activation; dates or months with incomplete coverage are marked as partial records.
 
-Exit cards retain the existing per-peer WireGuard estimates and independent reset schedules. They are explicitly labelled as estimates; vnStat runs only on the SBM entry. A tunnel peer’s sent bytes are approximately the other peer’s received bytes, but whole-interface totals also include the other network leg, Direct traffic, other exits and host services. Entry NIC totals are not attributed to individual exits. Exit warnings never stop the entry’s Direct nodes.
+The entry collects vnStat data every 30 seconds and saves history in `/var/lib/sbm/traffic.db`. Collection can recover retained vnStat records after an interruption. Saved history survives panel restarts and plan resets. Dates without interface records show “No vnStat record”; unavailable proxy references show “—”.
 
-An entry reset on the 15th and an exit reset on the 1st use separate plan periods. Calendar-month history remains October 1–November 1 even if a plan runs October 15–November 15. The panel uses absolute source timestamps and fine-grained boundary records for the chosen billing timezone. Changes to vnStat’s `MonthRotate` are not needed. Manual resets establish a new baseline at the latest saved vnStat snapshot; they do not clear vnStat or history. A fresh source snapshot is required before a manual reset.
+The entry and each gateway have independent plan periods. For example, an entry reset on the 15th and a gateway reset on the 1st each reset their own current-period usage. History uses calendar months independently of billing periods. Manual resets require an available vnStat source and use its latest data. The vnStat database and traffic history are retained.
 
-The panel reads the entry source every 30 seconds and stores copies in `/var/lib/sbm/traffic.db`. vnStat saves its own cache separately, so dashboard updates and safety stops have a delay of roughly the configured source save interval plus the panel read interval. Keep an appropriate reserve for the host’s transfer rate. Do not reset or delete vnStat’s database at billing boundaries.
+Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. Gateway thresholds display warnings while the gateway keeps running. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
 
-Source buckets replace earlier versions of the same timestamp instead of accumulating every response. Raw history and the state checkpoint commit in one SQLite transaction. A failed write retains pending records; retries and panel restarts do not double-count. A failed JSON mirror does not discard the committed database. Records already copied into SBM survive vnStat retention expiry and period resets. A custom state path places `traffic.db` in the same directory; override it with `sbm-panel serve --traffic-db /path/to/traffic.db`.
+The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, `from` and `to`. Dates use `YYYY-MM-DD` or `YYYY-MM`, with an inclusive end date. Responses include interface usage, proxy references and record completeness.
 
-Pre-activation traffic is excluded. After a connection outage, retained records restore their original dates. Source-switch boundaries are persisted, gaps between sources are marked missing, and a recreated database contributes only bytes within the current billing period. Data from before vnStat was installed, expired source records never copied into SBM, unresolved timezone boundaries and external database recreation can leave gaps; these are marked partial rather than estimated. Changing a database timezone does not repartition older source rows. The fixed history timezone is selected when SBM creates its history database and remains independent of later plan-schedule changes.
-
-The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, and inclusive `from` / `to` values in `YYYY-MM-DD` or `YYYY-MM` format. It returns NIC counters separately from proxy references and coverage flags. Internal legacy sing-box and WireGuard checkpoints remain available for auditing and compatibility, but entry dashboard, subscription usage and global quota enforcement use vnStat; exit cards retain their tunnel estimates.
-
-The `sudo sbm` backup command briefly pauses the panel for a consistent SQLite archive while sing-box continues forwarding. For manual backups, stop the panel first or use SQLite's online backup facility instead of copying an actively written database. Restoring a pre-SQLite archive saves any current database as `traffic.db.before-restore-*` and imports the restored JSON.
+The `sudo sbm` backup command briefly pauses the panel for a consistent database archive while sing-box continues forwarding. For manual backups, stop the panel or use SQLite’s online backup facility.
 
 ### IPv4 / IPv6 egress
 
-Choose an address-family strategy under `Settings → Proxy egress network`. If IPv6 has more accurate geolocation, use **Prefer IPv6**: sing-box prefers IPv6 for destinations with AAAA records and falls back to IPv4 when needed. IPv6-only makes IPv4-only destinations unreachable.
+Choose automatic, prefer IPv4, prefer IPv6, IPv4-only or IPv6-only under `Settings → Proxy egress network`. Prefer allows fallback to the other address family; only limits connections to the selected family.
 
-This setting requires sing-box 1.12 or newer and only affects domain destinations received by sing-box. The server cannot switch address family after a client has already resolved a domain to an IP. IPv6 client access also requires a correct AAAA record and matching rules in both the cloud and host firewalls.
+The strategy applies to domain destinations received by sing-box. Client-resolved IP destinations use that IP’s address family. IPv6 client access requires a correct AAAA record and matching port rules in both the cloud and host firewalls.
 
 ### Server Health and diagnostics
 
-The Server page is read-only. Host resources appear first, and every diagnostic result is displayed at the bottom without expand/collapse controls. It checks the sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. A planned quota pause does not misreport intentionally stopped inbounds as failures; vnStat sampling continues independently of the proxy service. Reset times use the configured billing timezone. Configuration and certificate checks use a short cache, while listener state is read live.
-
-The page returns only structured health fields and never exposes passwords, session secrets, subscription tokens, UUIDs, private keys, complete configuration, or raw command output. DNS/public-IP matching is intentionally left out because valid multi-record, IPv6, and NAT setups cannot be judged reliably from the host alone.
+The Server page refreshes host resources and all diagnostic results every five seconds. Checks cover sing-box service and configuration, traffic sampling, TLS certificate expiry, panel and inbound TCP/UDP listeners, disk space and traffic reset schedules. Reset times use the plan timezone. vnStat continues collecting whole-host traffic while sing-box is stopped.
 
 ## Manage SBM from the terminal
 
@@ -186,13 +180,13 @@ The menu includes:
 
 Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Releases. Panel updates select the latest SBM Release, while option 7 installs the sing-box version pinned to the currently installed SBM release. If a replacement binary fails configuration validation or its health check, the previously installed binary is restored.
 
-Protocol and egress changes are transactional: SBM writes a candidate, runs `sing-box check`, starts the result, and restores the previous business configuration and generated core configuration if validation or startup fails.
+Protocol and egress configurations are validated on save. A failed apply restores the previous configuration.
 
-The version card on the Overview page checks the latest GitHub Release and shows a red dot when an update is available. Click it, review the available version, then select **Update now**. A detached systemd task downloads and verifies the release, atomically replaces the panel and manager, restarts only the panel, and checks its local HTTPS response. The page shows progress and reloads automatically after success. Configuration, traffic history and vnStat data are retained. If startup fails, the previous panel and manager are restored.
+Restoring a backup reapplies port rules and removes obsolete project ports. Detected source restrictions or custom rules for the management port are preserved. List ports you manage yourself in `/etc/sbm/firewall-preserved`, one entry such as `tcp 2096` per line.
 
-The update task survives panel restarts and browser closure, and a shared lock prevents concurrent CLI and web updates. You can reopen the Overview page to see its status. Failure details are in `journalctl -u sbm-panel-update`. Full firewall and sing-box repair remains menu option 11. Development and custom-path instances cannot update the system install.
+The version card on the Overview page shows available updates. Select **Update now** to download, verify and install in the background. The panel restarts and checks service availability, then the page reloads automatically. Configuration, traffic history and vnStat data are retained while sing-box keeps running. A failed update restores the previous panel and manager.
 
-Versions before 2.1.1 only check for updates in the browser. Run `sudo sbm` and choose option 6 once to install 2.1.1, then refresh the page. The new manager also makes the 2.1.0 updater’s finalization panel-only, so this first upgrade does not deliberately restart sing-box.
+You can close the page during an update and reopen the Overview page to see progress. Web and CLI updates run one at a time. Failure details are in `journalctl -u sbm-panel-update`. Web updates support standard system installations; development and custom-path instances use their own deployment method.
 
 Successful, failed, and rate-limited sign-in attempts are recorded in the systemd journal:
 

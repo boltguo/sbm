@@ -398,9 +398,9 @@ normalize_tag() {
 requested_sbm_version() {
   local tag minor
   tag="$(normalize_tag "${SBM_VERSION:-$SBM_RELEASE_VERSION}")"
-  [[ "$tag" =~ ^v2\.([0-9]+)\.[0-9]+$ ]] || die "当前安装器只支持 SBM 2.1 或更新的 2.x 发布，不提供旧版安装或降级。"
+  [[ "$tag" =~ ^v2\.([0-9]+)\.[0-9]+$ ]] || die "当前安装器支持 SBM 2.1 及以上的 2.x 正式发布。"
   minor="${BASH_REMATCH[1]}"
-  (( 10#$minor >= 1 )) || die "当前安装器只支持 SBM 2.1 或更新的 2.x 发布，不提供旧版安装或降级。"
+  (( 10#$minor >= 1 )) || die "当前安装器支持 SBM 2.1 及以上的 2.x 正式发布。"
   printf '%s\n' "$tag"
 }
 compatible_sing_box_version() {
@@ -557,12 +557,53 @@ HOOK
   chmod 0755 "$CERT_RELOAD"
 }
 write_firewall_helper() {
-  install -d -m 0755 /usr/local/lib/sbm
-  cat > "$FIREWALL_HELPER" <<'HELPER'
+  install -d -m 0755 /usr/local/lib/sbm || return 1
+  cat > "$FIREWALL_HELPER" <<'HELPER' || return 1
 #!/usr/bin/env bash
 set -Eeuo pipefail
 readonly MODE_FILE="${SBM_FIREWALL_MODE_FILE:-/etc/sbm/firewall-mode}"
 readonly PORTS_FILE="${SBM_FIREWALL_PORTS_FILE:-/etc/sbm/firewall-ports}"
+readonly PRESERVED_FILE="${SBM_FIREWALL_PRESERVED_FILE:-/etc/sbm/firewall-preserved}"
+readonly CONFIG_FILE="${SBM_FIREWALL_CONFIG_FILE:-/etc/sbm/config.json}"
+
+preserved_rule() { [[ -r "$PRESERVED_FILE" ]] && grep -Fqx "$1 $2" "$PRESERVED_FILE"; }
+preserve_panel_access() {
+  local network="$1" port="$2" mode="$3" panel_port rules
+  [[ "$network" == tcp && -r "$CONFIG_FILE" ]] || return 1
+  panel_port="$(awk 'match($0,/"panelPort"[[:space:]]*:[[:space:]]*[0-9]+/) {value=substr($0,RSTART,RLENGTH); sub(/^.*:/,"",value); gsub(/[[:space:]]/,"",value); print value; exit}' "$CONFIG_FILE")"
+  [[ "$port" == "$panel_port" ]] || return 1
+  case "$mode" in
+    ufw)
+      rules="$(LC_ALL=C ufw show added 2>/dev/null || true)"
+      awk -v port="$port" '
+        / from |^ufw (deny|reject|limit) / {
+          for(i=1;i<=NF;i++) if(($i=="port" && $(i+1)==port) || $i==port"/tcp" || $i==port) found=1
+        } END {exit !found}' <<< "$rules" || return 1
+      ;;
+    firewalld)
+      rules="$(firewall-cmd --list-all-zones 2>/dev/null || true)"
+      if ! grep -Eq "port=\"${port}\"" <<< "$rules"; then
+        firewall-cmd --get-active-zones 2>/dev/null | awk '$1=="sources:" && NF>1 {found=1} END {exit !found}' || return 1
+      fi
+      ;;
+    iptables)
+      rules="$(iptables -w -S INPUT 2>/dev/null || true)"
+      awk -v port="$port" '
+        {matchport=0; custom=0; target="";
+         for(i=1;i<=NF;i++) {
+           if($i=="--dport" && $(i+1)==port) matchport=1;
+           if($i=="--dports") {n=split($(i+1),ports,","); for(j=1;j<=n;j++) if(ports[j]==port) matchport=1}
+           if($i=="-s") custom=1; if($i=="-j") target=$(i+1)}
+         if(matchport && (custom || target!="ACCEPT")) found=1}
+        END {exit !found}' <<< "$rules" || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  install -d -m 0700 "$(dirname "$PRESERVED_FILE")" || exit 1
+  touch "$PRESERVED_FILE" && chmod 0600 "$PRESERVED_FILE" || exit 1
+  if ! preserved_rule "$network" "$port"; then printf '%s %s\n' "$network" "$port" >> "$PRESERVED_FILE" || exit 1; fi
+  return 0
+}
 
 valid_rule() {
   [[ "${1:-}" == tcp || "${1:-}" == udp ]] && [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 65535 ))
@@ -570,6 +611,8 @@ valid_rule() {
 apply_rule() {
   local network="$1" port="$2" mode
   if [[ -r "$MODE_FILE" ]]; then mode="$(<"$MODE_FILE")"; else mode="none"; fi
+  # Remember the opt-out across reboots, when custom rules may be loaded later.
+  if preserved_rule "$network" "$port" || preserve_panel_access "$network" "$port" "$mode"; then return 0; fi
   case "$mode" in
     ufw)
       ufw allow "${port}/${network}" >/dev/null
@@ -588,6 +631,7 @@ apply_rule() {
 revoke_rule() {
   local network="$1" port="$2" mode
   if [[ -r "$MODE_FILE" ]]; then mode="$(<"$MODE_FILE")"; else mode="none"; fi
+  if preserved_rule "$network" "$port" || preserve_panel_access "$network" "$port" "$mode"; then return 0; fi
   case "$mode" in
     ufw)
       ufw delete allow "${port}/${network}" >/dev/null 2>&1 || true
@@ -785,7 +829,7 @@ desired_firewall_rules() {
 }
 
 open_firewall() {
-  local provider="$1" panel_port="$2" mode desired_file tracked_file
+  local provider="$1" panel_port="$2" previous_rules="${3:-}" mode desired_file tracked_file firewall_failed=0
   mode="$(detect_host_firewall_mode "$provider")"
   printf '%s\n' "$mode" > "$FIREWALL_MODE"; chmod 0600 "$FIREWALL_MODE"
   touch "$FIREWALL_PORTS"; chmod 0600 "$FIREWALL_PORTS"
@@ -793,17 +837,27 @@ open_firewall() {
   tracked_file="$(mktemp /tmp/sbm-firewall-tracked.XXXXXX)"
   desired_firewall_rules "$panel_port" "$CONFIG_FILE" > "$desired_file"
   cp "$FIREWALL_PORTS" "$tracked_file"
+  if [[ -n "$previous_rules" ]]; then printf '%s\n' "$previous_rules" >> "$tracked_file"; fi
 
   # Open every currently required port before removing stale entries, so a
   # repair cannot create an avoidable interruption when ports have changed.
   while read -r inbound_network inbound_port; do
-    [[ -n "${inbound_network:-}" ]] && "$FIREWALL_HELPER" "$inbound_network" "$inbound_port"
+    [[ -n "${inbound_network:-}" ]] || continue
+    if ! "$FIREWALL_HELPER" "$inbound_network" "$inbound_port"; then
+      firewall_failed=1
+      break
+    fi
   done < "$desired_file"
+  if (( firewall_failed )); then rm -f "$desired_file" "$tracked_file"; return 1; fi
   while read -r inbound_network inbound_port; do
     [[ -n "${inbound_network:-}" ]] || continue
-    grep -Fqx "$inbound_network $inbound_port" "$desired_file" || "$FIREWALL_HELPER" --close "$inbound_network" "$inbound_port"
+    if ! grep -Fqx "$inbound_network $inbound_port" "$desired_file" && ! "$FIREWALL_HELPER" --close "$inbound_network" "$inbound_port"; then
+      firewall_failed=1
+      break
+    fi
   done < "$tracked_file"
   rm -f "$desired_file" "$tracked_file"
+  (( firewall_failed == 0 )) || return 1
   case "$mode" in
     ufw) info "已通过 UFW 放行 SBM 端口，规则会在重启后保留。" ;;
     firewalld) info "已通过 firewalld 永久放行 SBM 端口。" ;;
@@ -1100,7 +1154,7 @@ assert_panel_config_supported() {
 		v2.*)
 			[[ -f "$config_path" ]] || return 0
 			config_version="$(json_number version "$config_path")"
-			[[ "$config_version" == 4 ]] || die "当前 SBM 版本只支持全新 v4 配置，不支持从旧配置原地升级。请先备份，再在新环境全新安装。"
+			[[ "$config_version" == 4 ]] || die "配置版本须为 v4。请备份当前配置后重新安装。"
 			;;
 	esac
 }
@@ -1150,7 +1204,7 @@ backup_config() {
   chmod 0600 "$target"; info "备份已保存：${target}"
 }
 restore_config() {
-  local archive entry entries
+  local archive entry entries previous_rules panel_port
   read -r -p "备份文件绝对路径: " archive
   [[ "$archive" == /* && -f "$archive" ]] || { warn "备份文件不存在。"; return; }
   if ! entries="$(tar -tzf "$archive")"; then
@@ -1163,6 +1217,7 @@ restore_config() {
   done <<< "$entries"
   read -r -p "恢复会覆盖当前配置，继续？[y/N]: " answer
   case "$answer" in y|Y) ;; *) return ;; esac
+  previous_rules="$(cat "$FIREWALL_PORTS" 2>/dev/null || true)"
   if ! systemctl stop sbm-panel.service sing-box.service; then
     warn "无法停止面板或核心，未恢复任何文件。请检查服务状态后重试。"
     return 1
@@ -1186,7 +1241,12 @@ restore_config() {
   chmod 0600 "$CONFIG_FILE" "$STATE_FILE" "$CORE_CONFIG" || true
   systemctl daemon-reload
   systemctl enable sbm-firewall.service sbm-panel.service sing-box.service >/dev/null 2>&1 || true
-  if ! systemctl start sbm-firewall.service sbm-panel.service; then
+  panel_port="$(json_number panelPort "$CONFIG_FILE")"
+  if [[ ! "$panel_port" =~ ^[0-9]+$ ]] || ! write_firewall_helper || ! open_firewall generic "$panel_port" "$previous_rules"; then
+    warn "恢复后防火墙规则协调失败，服务保持停止。"
+    return 1
+  fi
+  if ! systemctl restart sbm-firewall.service || ! systemctl start sbm-panel.service; then
     warn "恢复后面板未能启动，请执行 journalctl -u sbm-panel -e。"
     return 1
   fi

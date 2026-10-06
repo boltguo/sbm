@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -195,23 +196,53 @@ func validCounters(rx, tx int64) bool { return rx >= 0 && tx >= 0 && rx <= math.
 // once when wholly covered; boundary fragments use hourly / five-minute data.
 // Missing or unresolvable fragments are flagged, never prorated or invented.
 func Sum(snapshot Snapshot, start, end time.Time) (rx, tx int64, partial bool) {
+	return NewIndex(snapshot).Sum(start, end)
+}
+
+// Index reuses the bucket lookup across all days in a history query.
+type Index struct {
+	created, updated time.Time
+	lookup           map[[2]int64]Bucket
+	coverage         [][2]int64
+}
+
+func NewIndex(snapshot Snapshot) *Index {
+	i := &Index{created: snapshot.CreatedAt, updated: snapshot.UpdatedAt, lookup: make(map[[2]int64]Bucket, len(snapshot.Buckets))}
+	for _, b := range snapshot.Buckets {
+		i.lookup[[2]int64{b.Seconds, b.Start}] = b
+		left, right := max(b.Start, snapshot.CreatedAt.Unix()), min(b.Start+b.Seconds, snapshot.UpdatedAt.Unix())
+		if right > left {
+			i.coverage = append(i.coverage, [2]int64{left, right})
+		}
+	}
+	sort.Slice(i.coverage, func(a, b int) bool { return i.coverage[a][0] < i.coverage[b][0] })
+	return i
+}
+
+func (i *Index) HasCoverage(start, end time.Time) bool {
+	at := sort.Search(len(i.coverage), func(n int) bool { return i.coverage[n][0] >= start.Unix() })
+	for ; at < len(i.coverage) && i.coverage[at][0] < end.Unix(); at++ {
+		if i.coverage[at][1] <= end.Unix() {
+			return true
+		}
+	}
+	return false
+}
+
+func (i *Index) Sum(start, end time.Time) (rx, tx int64, partial bool) {
 	if !end.After(start) {
 		return 0, 0, false
 	}
 	requested := start
-	if start.Before(snapshot.CreatedAt) {
-		start = snapshot.CreatedAt
+	if start.Before(i.created) {
+		start = i.created
 		partial = true
 	}
-	if end.After(snapshot.UpdatedAt) {
-		end = snapshot.UpdatedAt
+	if end.After(i.updated) {
+		end = i.updated
 	}
 	if !end.After(start) {
-		return 0, 0, partial || requested.Before(snapshot.CreatedAt) || snapshot.UpdatedAt.Before(requested)
-	}
-	lookup := map[[2]int64]Bucket{}
-	for _, b := range snapshot.Buckets {
-		lookup[[2]int64{b.Seconds, b.Start}] = b
+		return 0, 0, partial || requested.Before(i.created) || i.updated.Before(requested)
 	}
 	var sum func(int64, int64, int) (int64, int64, bool)
 	widths := []int64{86400, 3600, 300}
@@ -220,12 +251,12 @@ func Sum(snapshot Snapshot, start, end time.Time) (rx, tx int64, partial bool) {
 		var r, t int64
 		p := false
 		for at := a / width * width; at < z; at += width {
-			left, right := max(at, a, snapshot.CreatedAt.Unix()), min(at+width, z, snapshot.UpdatedAt.Unix())
+			left, right := max(at, a, i.created.Unix()), min(at+width, z, i.updated.Unix())
 			if right <= left {
 				continue
 			}
-			b, ok := lookup[[2]int64{width, at}]
-			if ok && left == max(at, snapshot.CreatedAt.Unix()) && right == min(at+width, snapshot.UpdatedAt.Unix()) {
+			b, ok := i.lookup[[2]int64{width, at}]
+			if ok && left == max(at, i.created.Unix()) && right == min(at+width, i.updated.Unix()) {
 				r = saturate(r, b.RX)
 				t = saturate(t, b.TX)
 				continue

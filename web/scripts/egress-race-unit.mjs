@@ -8,6 +8,8 @@ import ts from 'typescript'
 const source = readFileSync(new URL('../src/views/EgressView.vue', import.meta.url), 'utf8')
 const compiled = compileScript(parse(source).descriptor, { id: 'egress-race' })
 const code = ts.transpileModule(compiled.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
+const pollContext = vm.createContext({exports: {}, Date, require: () => Vue})
+vm.runInContext(ts.transpileModule(readFileSync(new URL('../src/poll-status.ts', import.meta.url), 'utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS}}).outputText, pollContext)
 let server = [{ id: 'exit', marker: 'OLD', publicKey: 'public', enabled: true, position: 0, trafficQuota: { amount: 1 }, reset: {} }]
 let resolveOld
 let first = true
@@ -18,9 +20,10 @@ const api = async () => {
   return result
 }
 const context = vm.createContext({
-  exports: {}, Intl, JSON, clearInterval() {},
+  exports: {}, Intl, JSON, AbortSignal, clearInterval() {},
   require(name) {
     if (name === 'vue') return { ...Vue, onMounted() {}, onBeforeUnmount(fn) { unmount = fn } }
+    if (name === '../poll-status') return pollContext.exports
     if (name === '../api') return {
       api, guard: notify => action => async (...args) => { try { return await action(...args) } catch (error) { throw error } },
       put: async (_url, input) => { server = [{ ...server[0], ...structuredClone(input) }]; return { geoDetected: true } },

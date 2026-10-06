@@ -256,6 +256,7 @@ bash -n "$helper"
 if command -v shellcheck >/dev/null 2>&1; then shellcheck "$helper"; fi
 
 export SBM_FIREWALL_MODE_FILE="$helper_dir/mode" SBM_FIREWALL_PORTS_FILE="$helper_dir/ports"
+export SBM_FIREWALL_CONFIG_FILE="$helper_dir/config.json" SBM_FIREWALL_PRESERVED_FILE="$helper_dir/preserved"
 printf 'ufw\n' > "$SBM_FIREWALL_MODE_FILE"
 : > "$SBM_FIREWALL_PORTS_FILE"
 ufw_log="$helper_dir/ufw.log"
@@ -296,8 +297,95 @@ if ("$helper" --close tcp 70000 >/dev/null 2>&1); then
   echo "helper accepted an invalid port" >&2
   exit 1
 fi
-unset SBM_FIREWALL_MODE_FILE SBM_FIREWALL_PORTS_FILE
+# A source-restricted management port must never receive a global allow rule.
+printf '{"panelPort":2096}\n' > "$SBM_FIREWALL_CONFIG_FILE"
+cat > "$helper_dir/bin/ufw" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == 'show added' ]]; then
+  printf 'ufw allow from 192.0.2.10 to any port 2096 proto tcp\n'
+else
+  printf '%s\n' "$*" >> "$SBM_FIREWALL_TEST_LOG"
+fi
+MOCK
+export SBM_FIREWALL_TEST_LOG="$ufw_log"
+: > "$ufw_log"
+"$helper" tcp 2096
+grep -Fxq 'tcp 2096' "$SBM_FIREWALL_PRESERVED_FILE"
+[[ ! -s "$ufw_log" ]]
+"$helper" --restore
+"$helper" --close tcp 2096
+[[ ! -s "$ufw_log" ]]
+# Protection persists even if host rules have not loaded yet after a reboot.
+cat > "$helper_dir/bin/ufw" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SBM_FIREWALL_TEST_LOG"
+MOCK
+"$helper" tcp 2096
+[[ ! -s "$ufw_log" ]]
+printf 'iptables\n' > "$SBM_FIREWALL_MODE_FILE"
+printf '{"domain":"node.example.com","panelPort":24443}\n' > "$SBM_FIREWALL_CONFIG_FILE"
+cat > "$helper_dir/bin/iptables" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == '-w -S INPUT' ]]; then
+  printf '%s\n' '-A INPUT -s 192.0.2.10/32 -p tcp --dport 24443 -j ACCEPT'
+else
+  printf '%s\n' "$*" >> "$SBM_FIREWALL_TEST_LOG"
+fi
+MOCK
+chmod 0755 "$helper_dir/bin/iptables"
+"$helper" tcp 24443
+grep -Fxq 'tcp 24443' "$SBM_FIREWALL_PRESERVED_FILE"
+[[ ! -s "$ufw_log" ]]
+printf 'firewalld\n' > "$SBM_FIREWALL_MODE_FILE"
+printf '{"panelPort":34443}\n' > "$SBM_FIREWALL_CONFIG_FILE"
+cat > "$helper_dir/bin/firewall-cmd" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == '--list-all-zones' ]]; then
+  printf '%s\n' 'rule family="ipv4" source address="192.0.2.10/32" port port="34443" protocol="tcp" accept'
+else
+  printf '%s\n' "$*" >> "$SBM_FIREWALL_TEST_LOG"
+fi
+MOCK
+chmod 0755 "$helper_dir/bin/firewall-cmd"
+"$helper" tcp 34443
+grep -Fxq 'tcp 34443' "$SBM_FIREWALL_PRESERVED_FILE"
+[[ ! -s "$ufw_log" ]]
+unset SBM_FIREWALL_MODE_FILE SBM_FIREWALL_PORTS_FILE SBM_FIREWALL_CONFIG_FILE SBM_FIREWALL_PRESERVED_FILE SBM_FIREWALL_TEST_LOG
 rm -rf "$helper_dir"
+
+# Reconcile actual desired ports against the pre-restore ledger as well as the
+# restored one. This covers a port change with an already-active oneshot.
+(
+  firewall_reconcile_dir="$(mktemp -d /tmp/sbm-firewall-reconcile.XXXXXX)"
+  trap 'command rm -rf "$firewall_reconcile_dir"' EXIT
+  reconcile_mode="$firewall_reconcile_dir/mode"
+  reconcile_ports="$firewall_reconcile_dir/ports"
+  reconcile_helper="$firewall_reconcile_dir/helper"
+  reconcile_config="$firewall_reconcile_dir/config"
+  reconcile_log="$firewall_reconcile_dir/log"
+  printf '{"inbounds":[{"type":"vless-reality","enabled":true,"port":8443}]}\n' > "$reconcile_config"
+  printf 'tcp 443\n' > "$reconcile_ports"
+  cat > "$reconcile_helper" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SBM_RECONCILE_LOG"
+MOCK
+  chmod 0755 "$reconcile_helper"
+  export SBM_RECONCILE_LOG="$reconcile_log"
+  reconcile_function="$(declare -f open_firewall)"
+  reconcile_function="${reconcile_function//FIREWALL_MODE/reconcile_mode}"
+  reconcile_function="${reconcile_function//FIREWALL_PORTS/reconcile_ports}"
+  reconcile_function="${reconcile_function//FIREWALL_HELPER/reconcile_helper}"
+  eval "${reconcile_function//CONFIG_FILE/reconcile_config}"
+  detect_host_firewall_mode() { printf 'none\n'; }
+  open_firewall generic 443 'tcp 60443' >/dev/null
+  [[ "$(cat "$reconcile_mode")" == none ]]
+  grep -Fxq 'tcp 443' "$reconcile_log"
+  grep -Fxq 'tcp 8443' "$reconcile_log"
+  grep -Fxq -- '--close tcp 60443' "$reconcile_log"
+  if grep -Fxq -- '--close tcp 443' "$reconcile_log"; then echo 'restored port closed' >&2; exit 1; fi
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$reconcile_helper"
+  if open_firewall generic 443 'tcp 60443' >/dev/null; then echo 'failed firewall helper reported success' >&2; exit 1; fi
+)
 
 ss() {
   [[ "$*" == *":2096"* ]] && printf '%s\n' 'LISTEN 0 4096 *:2096 *:*'
@@ -374,13 +462,18 @@ post_install_check node.example.com "$custom_panel_port" >/dev/null
     command mv "$@"
   }
   quota_exceeded() { return 1; }
+  json_number() { printf '443\n'; }
+  write_firewall_helper() { printf 'refresh firewall helper\n' >> "$restore_trace"; }
+  open_firewall() { printf 'reconcile firewall %s\n' "$2" >> "$restore_trace"; }
   run_restore() { restore_config <<< "$archive"$'\ny' >/dev/null; }
 
   printf 'current checkpoint' > "$restore_test_state_dir/traffic.db"
   run_restore
   [[ ! -f "$restore_test_state_dir/traffic.db" ]]
   [[ "$(cat "$restore_test_state_dir"/traffic.db.before-restore-*)" == 'current checkpoint' ]]
-  grep -Fxq 'systemctl start sbm-firewall.service sbm-panel.service' "$restore_trace"
+  grep -Fxq 'reconcile firewall 443' "$restore_trace"
+  grep -Fxq 'systemctl restart sbm-firewall.service' "$restore_trace"
+  grep -Fxq 'systemctl start sbm-panel.service' "$restore_trace"
 
   : > "$restore_trace"
   restore_has_database=1

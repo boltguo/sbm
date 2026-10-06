@@ -127,6 +127,34 @@ func testServer(t *testing.T) (*Server, model.Config) {
 	return &Server{Config: cfgStore, Traffic: tracker, Core: manager, Registry: registry, Factory: protocol.Factory{}, System: systeminfo.New(), Assets: assets, Limiter: auth.NewLimiter(), Sessions: auth.Sessions{Secret: []byte(secret), Lifetime: time.Hour}, PanelVersion: "0.1.0"}, cfg
 }
 
+func TestPasswordUTF8ByteBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, password string
+		status         int
+	}{
+		{"ascii72", strings.Repeat("x", 72), 200},
+		{"ascii73", strings.Repeat("x", 73), 400},
+		{"unicode72", strings.Repeat("密", 24), 200},
+		{"unicode75", strings.Repeat("密", 25), 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cfg := testServer(t)
+			r := authenticatedRequest(t, s, "POST", "/api/settings/password", map[string]string{"currentPassword": "old-password-123", "newPassword": tc.password})
+			w := httptest.NewRecorder()
+			s.changePassword(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.status == 400 && s.Config.Get().AdminPasswordHash != cfg.AdminPasswordHash {
+				t.Fatal("rejected password changed credentials")
+			}
+			if tc.status == 200 && bcrypt.CompareHashAndPassword([]byte(s.Config.Get().AdminPasswordHash), []byte(tc.password)) != nil {
+				t.Fatal("accepted password is unusable")
+			}
+		})
+	}
+}
+
 func authenticatedRequest(t *testing.T, s *Server, method, target string, body any) *http.Request {
 	t.Helper()
 	var payload bytes.Buffer

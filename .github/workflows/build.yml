@@ -30,6 +30,7 @@ jobs:
         working-directory: web
       - run: bash scripts/frontend-style-unit.sh
       - run: node web/scripts/egress-race-unit.mjs
+      - run: node web/scripts/polling-unit.mjs
       - run: node web/scripts/panel-update-unit.mjs
       # The bundle is committed and embedded by the Go build, so it must match
       # web/src. Releases rebuild it anyway; this keeps the repo copy honest.

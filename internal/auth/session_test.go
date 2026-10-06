@@ -2,6 +2,8 @@ package auth
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,6 +23,70 @@ func TestSessionSignatureAndExpiry(t *testing.T) {
 	}
 	if _, err := sessions.Verify(value, now.Add(2*time.Hour)); err == nil {
 		t.Fatal("expired session accepted")
+	}
+}
+
+func TestLimiterReservesConcurrentBudget(t *testing.T) {
+	l := NewLimiter()
+	var accepted atomic.Int32
+	var wg, reserved sync.WaitGroup
+	ready, release := make(chan struct{}), make(chan struct{})
+	for range 24 {
+		wg.Add(1)
+		reserved.Add(1)
+		go func() {
+			defer wg.Done()
+			<-ready
+			finish, ok := l.Begin("192.0.2.1:1234")
+			reserved.Done()
+			if !ok {
+				return
+			}
+			accepted.Add(1)
+			<-release
+			finish(false)
+			finish(false) // A deferred completion must not spend the budget twice.
+		}()
+	}
+	close(ready)
+	reserved.Wait()
+	close(release)
+	wg.Wait()
+	if accepted.Load() != int32(l.Limit) {
+		t.Fatalf("accepted %d concurrent attempts", accepted.Load())
+	}
+	if _, ok := l.Begin("192.0.2.1:5555"); ok {
+		t.Fatal("failed budget was not blocked")
+	}
+	if l.active != 0 || len(l.inFlight) != 0 {
+		t.Fatal("reservations leaked")
+	}
+}
+
+func TestLimiterGlobalConcurrencyAndSuccessfulRecovery(t *testing.T) {
+	l := NewLimiter()
+	var finishers []func(bool)
+	for n := range maxConcurrentLogins {
+		finish, ok := l.Begin(fmt.Sprintf("192.0.2.%d:1234", n+1))
+		if !ok {
+			t.Fatal("early global limit")
+		}
+		finishers = append(finishers, finish)
+	}
+	if _, ok := l.Begin("198.51.100.1:1234"); ok {
+		t.Fatal("global concurrency unbounded")
+	}
+	for _, finish := range finishers {
+		finish(true)
+	}
+	l.Fail("192.0.2.1:1234")
+	finish, ok := l.Begin("192.0.2.1:1234")
+	if !ok {
+		t.Fatal("success blocked")
+	}
+	finish(true)
+	if !l.Allow("192.0.2.1:1234") || len(l.attempts) != 0 {
+		t.Fatal("success did not reset failures")
 	}
 }
 

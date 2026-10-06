@@ -41,6 +41,28 @@ type fakeCore struct {
 	startErr, stopErr, stateErr error
 }
 
+func TestClashMissingCountersDoNotResetReference(t *testing.T) {
+	responses := []string{`{"uploadTotal":100,"downloadTotal":200}`, `{}`, `{"uploadTotal":100,"downloadTotal":200}`}
+	n := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(responses[n])); n++ }))
+	defer server.Close()
+	now := time.Now()
+	tracker := NewForTest(stateAt(now), &configSource{}, nil, func() time.Time { return now })
+	client := ClashClient{URL: server.URL}
+	if _, err := tracker.Sample(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tracker.Sample(context.Background(), client); err == nil {
+		t.Fatal("missing fields accepted as zero")
+	}
+	if _, err := tracker.Sample(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	if tracker.State().Total() != 300 {
+		t.Fatalf("reference counted twice: %+v", tracker.State())
+	}
+}
+
 func (f *fakeCore) Active(context.Context) (bool, error) { return f.running, f.stateErr }
 func (f *fakeCore) Start(context.Context) error {
 	f.starts++

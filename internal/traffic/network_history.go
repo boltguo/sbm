@@ -22,12 +22,22 @@ func readNetwork(ctx context.Context, db networkQuerier, scope, generation strin
 	return readNetworkRows(ctx, db, scope, generation, false)
 }
 func readNetworkRows(ctx context.Context, db networkQuerier, scope, generation string, baseline bool) (nettraffic.Snapshot, error) {
+	return readNetworkWindow(ctx, db, scope, generation, baseline, time.Time{}, time.Time{})
+}
+func readNetworkWindow(ctx context.Context, db networkQuerier, scope, generation string, baseline bool, start, end time.Time) (nettraffic.Snapshot, error) {
 	result := nettraffic.Snapshot{}
 	query := `SELECT start, seconds, rx, tx FROM network_bucket WHERE scope=? AND generation=?`
 	if baseline {
 		query = `SELECT start, seconds, rx, tx FROM network_baseline WHERE scope=? AND generation=?`
 	}
-	rows, err := db.QueryContext(ctx, query, scope, generation)
+	args := []any{scope, generation}
+	if !start.IsZero() && !end.IsZero() {
+		// vnStat's largest retained bucket is one day. Bound both sides of the
+		// indexed start column instead of scanning every older row.
+		query += ` AND start>=? AND start<? AND start+seconds>?`
+		args = append(args, start.Unix()-86400, end.Unix(), start.Unix())
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return result, err
 	}
@@ -40,6 +50,108 @@ func readNetworkRows(ctx context.Context, db networkQuerier, scope, generation s
 		result.Buckets = append(result.Buckets, b)
 	}
 	return result, rows.Err()
+}
+
+type networkSource struct {
+	generation       string
+	snapshot         nettraffic.Snapshot
+	available, ended time.Time
+	index            *nettraffic.Index
+}
+
+// Release the read transaction before indexing and aggregating the buckets, so
+// a long history query does not hold the only SQLite connection during its work.
+func (h *historyStore) networkSources(ctx context.Context, scope, exclude string, start, end time.Time) ([]networkSource, time.Time, error) {
+	tx, err := h.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer tx.Rollback()
+	var first sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(available_from) FROM network_source WHERE scope=?`, scope).Scan(&first); err != nil {
+		return nil, time.Time{}, err
+	}
+	started := time.Time{}
+	if first.Valid {
+		started = time.Unix(first.Int64, 0).UTC()
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT generation,interface,created_at,updated_at,available_from,ended_at FROM network_source WHERE scope=? AND generation<>? AND available_from<? AND (ended_at=0 OR ended_at>?) ORDER BY available_from,generation`, scope, exclude, end.Unix(), start.Unix())
+	if err != nil {
+		return nil, started, err
+	}
+	var all []networkSource
+	for rows.Next() {
+		var s networkSource
+		var created, updated, available, ended int64
+		if err := rows.Scan(&s.generation, &s.snapshot.Interface, &created, &updated, &available, &ended); err != nil {
+			rows.Close()
+			return nil, started, err
+		}
+		s.snapshot.CreatedAt, s.snapshot.UpdatedAt = time.Unix(created, 0).UTC(), time.Unix(updated, 0).UTC()
+		s.available, s.ended = time.Unix(available, 0).UTC(), time.Unix(ended, 0).UTC()
+		all = append(all, s)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, started, err
+	}
+	for n := range all {
+		s := &all[n]
+		buckets, err := readNetworkWindow(ctx, tx, scope, s.generation, false, start, end)
+		if err != nil {
+			return nil, started, err
+		}
+		prefix, err := readNetworkWindow(ctx, tx, scope, s.generation, true, start, end)
+		if err != nil {
+			return nil, started, err
+		}
+		s.snapshot.Buckets = buckets.Buckets
+		s.snapshot = networkSince(s.snapshot, s.available, prefix.Buckets)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, started, err
+	}
+	for n := range all {
+		all[n].index = nettraffic.NewIndex(all[n].snapshot)
+	}
+	return all, started, nil
+}
+
+// Both current billing usage and history use the same source intervals.
+func sumNetworkSources(sources []networkSource, start, end time.Time) (rx, tx int64, available, partial bool) {
+	type interval struct{ left, right time.Time }
+	var coverage []interval
+	for _, source := range sources {
+		a, z := start, end
+		if a.Before(source.available) {
+			a = source.available
+		}
+		if source.ended.Unix() > 0 && z.After(source.ended) {
+			z = source.ended
+		}
+		if z.After(source.snapshot.UpdatedAt) {
+			z = source.snapshot.UpdatedAt
+		}
+		if !z.After(a) || !source.index.HasCoverage(a, z) {
+			continue
+		}
+		r, t, p := source.index.Sum(a, z)
+		rx, tx = addSaturating(rx, r), addSaturating(tx, t)
+		available, partial = true, partial || p
+		coverage = append(coverage, interval{a, z})
+	}
+	sort.Slice(coverage, func(i, j int) bool { return coverage[i].left.Before(coverage[j].left) })
+	covered := start
+	for _, c := range coverage {
+		if c.left.After(covered) {
+			partial = true
+		}
+		if c.right.After(covered) {
+			covered = c.right
+		}
+	}
+	return rx, tx, available, partial || covered.Before(end)
 }
 
 func networkSince(snapshot nettraffic.Snapshot, available time.Time, baseline []nettraffic.Bucket) nettraffic.Snapshot {
@@ -118,62 +230,20 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 	if err != nil {
 		return result, err
 	}
-	tx, err := h.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	prepared, recordedFrom, err := h.networkSources(ctx, scope, "", start, end)
 	if err != nil {
 		return result, err
 	}
-	defer tx.Rollback()
-	sources, err := tx.QueryContext(ctx, `SELECT generation,interface,created_at,updated_at,available_from,ended_at FROM network_source WHERE scope=? ORDER BY available_from,generation`, scope)
-	if err != nil {
-		return result, err
+	if recordedFrom.IsZero() {
+		result.Rows, result.Imports = []Usage{}, []ImportedUsage{}
+		return result, nil
 	}
-	type source struct {
-		generation, iface                  string
-		created, updated, available, ended int64
-	}
-	var all []source
-	for sources.Next() {
-		var s source
-		if err := sources.Scan(&s.generation, &s.iface, &s.created, &s.updated, &s.available, &s.ended); err != nil {
-			sources.Close()
-			return result, err
-		}
-		all = append(all, s)
-	}
-	err = sources.Err()
-	sources.Close()
-	if err != nil {
-		return result, err
-	}
-	if len(all) == 0 {
-		result.Rows = []Usage{}
-		result.Imports = []ImportedUsage{}
-		return result, tx.Commit()
-	}
-	result.StartedAt = time.Unix(all[0].available, 0).UTC()
+	result.StartedAt = recordedFrom
 	result.Imports = []ImportedUsage{}
-	type preparedSource struct {
-		snapshot         nettraffic.Snapshot
-		available, ended time.Time
-	}
-	prepared := make([]preparedSource, 0, len(all))
-	for _, source := range all {
-		snapshot, err := readNetwork(ctx, tx, scope, source.generation)
-		if err != nil {
-			return result, err
+	for _, source := range prepared {
+		if source.snapshot.UpdatedAt.After(result.UpdatedAt) {
+			result.UpdatedAt = source.snapshot.UpdatedAt
 		}
-		snapshot.Interface = source.iface
-		snapshot.CreatedAt = time.Unix(source.created, 0).UTC()
-		snapshot.UpdatedAt = time.Unix(source.updated, 0).UTC()
-		baseline, err := readNetworkRows(ctx, tx, scope, source.generation, true)
-		if err != nil {
-			return result, err
-		}
-		snapshot = networkSince(snapshot, time.Unix(source.available, 0), baseline.Buckets)
-		if snapshot.UpdatedAt.After(result.UpdatedAt) {
-			result.UpdatedAt = snapshot.UpdatedAt
-		}
-		prepared = append(prepared, preparedSource{snapshot, time.Unix(source.available, 0), time.Unix(source.ended, 0)})
 	}
 	buckets := map[string]Usage{}
 	firstKey := result.StartedAt.In(h.location).Format(time.DateOnly)
@@ -208,42 +278,11 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		row := buckets[key]
 		row.Date = key
 		row.NetworkPartial = row.NetworkPartial || left.After(at) || right.Before(next)
-		type interval struct{ left, right time.Time }
-		var coverage []interval
-		for _, source := range prepared {
-			a, z := left, right
-			if a.Before(source.available) {
-				a = source.available
-			}
-			if source.ended.Unix() > 0 && z.After(source.ended) {
-				z = source.ended
-			}
-			if z.After(source.snapshot.UpdatedAt) {
-				z = source.snapshot.UpdatedAt
-			}
-			if !z.After(a) || !nettraffic.HasCoverage(source.snapshot, a, z) {
-				continue
-			}
-			rx, txBytes, partial := nettraffic.Sum(source.snapshot, a, z)
-			row.NetworkAvailable = true
-			row.NetworkRX = addSaturating(row.NetworkRX, rx)
-			row.NetworkTX = addSaturating(row.NetworkTX, txBytes)
-			row.NetworkPartial = row.NetworkPartial || partial
-			coverage = append(coverage, interval{a, z})
-		}
-		sort.Slice(coverage, func(i, j int) bool { return coverage[i].left.Before(coverage[j].left) })
-		covered := left
-		for _, interval := range coverage {
-			if interval.left.After(covered) {
-				row.NetworkPartial = true
-			}
-			if interval.right.After(covered) {
-				covered = interval.right
-			}
-		}
-		if covered.Before(right) {
-			row.NetworkPartial = true
-		}
+		rx, txBytes, available, partial := sumNetworkSources(prepared, left, right)
+		row.NetworkRX = addSaturating(row.NetworkRX, rx)
+		row.NetworkTX = addSaturating(row.NetworkTX, txBytes)
+		row.NetworkAvailable = row.NetworkAvailable || available
+		row.NetworkPartial = row.NetworkPartial || partial
 		buckets[key] = row
 	}
 	result.Rows = nil
@@ -252,7 +291,7 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		result.Rows = append(result.Rows, row)
 	}
 	sort.Slice(result.Rows, func(i, j int) bool { return result.Rows[i].Date < result.Rows[j].Date })
-	return result, tx.Commit()
+	return result, nil
 }
 func (t *Tracker) NetworkState(id string) model.NetworkTrafficState {
 	t.mu.RLock()

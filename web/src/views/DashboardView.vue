@@ -8,6 +8,7 @@ import TrafficHistory from '../components/TrafficHistory.vue'
 import PanelUpdate from '../components/PanelUpdate.vue'
 import { dateLocale, t } from '../i18n'
 import { createQrCard, downloadQrCard } from '../qr'
+import { usePollStatus } from '../poll-status'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
@@ -15,6 +16,11 @@ const activeGateways = computed(() => data.value?.egressGateways?.filter(g => g.
 const refreshingTraffic = ref(false)
 const qr = ref('')
 let timer = 0
+let revision = 0
+let disposed = false
+let pending = 0
+let mutating = false
+const { stale, tick, succeeded, failed } = usePollStatus()
 
 const bytes = (value: number) => {
   if (!value) return '0 B'
@@ -66,17 +72,26 @@ const sampleDetail = () => {
 const safe = guard(message => emit('toast', message))
 
 async function load() {
-  const next = await api<Dashboard>('/api/dashboard')
-  if (!data.value || data.value.subscriptionURL !== next.subscriptionURL || data.value.subscriptionName !== next.subscriptionName) {
-    qr.value = await createQrCard(next.subscriptionURL, next.subscriptionName)
-  }
-  data.value = next
+  const request = ++revision
+  pending++
+  try {
+    const next = await api<Dashboard>('/api/dashboard', { signal: AbortSignal.timeout(10000) })
+    let nextQR = qr.value
+    if (!data.value || data.value.subscriptionURL !== next.subscriptionURL || data.value.subscriptionName !== next.subscriptionName) {
+      nextQR = await createQrCard(next.subscriptionURL, next.subscriptionName)
+    }
+    if (disposed || request !== revision) return
+    qr.value = nextQR
+    data.value = next
+    succeeded()
+  } catch (error) {
+    if (!disposed && request === revision) failed()
+    throw error
+  } finally { pending-- }
 }
-// A failed background poll stays quiet — a 401 already returns to the login
-// screen, and toasting every 5 seconds during an outage helps nobody.
-const poll = () => { load().catch(() => {}) }
+const poll = () => { tick(); if (!pending && !mutating) load().catch(() => {}) }
 const refreshTraffic = safe(async () => {
-  if (refreshingTraffic.value) return
+  if (refreshingTraffic.value || mutating) return
   refreshingTraffic.value = true
   try {
     await load()
@@ -87,15 +102,23 @@ const refreshTraffic = safe(async () => {
 })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) })
 const saveQR = () => { if (!data.value || !qr.value) return; downloadQrCard(qr.value, data.value.subscriptionName); emit('toast', t('dashboard.qrSaved')) }
-const restart = safe(async () => { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() })
-const reset = safe(async () => { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() })
+const mutate = safe(async (url: string, message: string) => {
+  if (mutating) return
+  mutating = true
+  ++revision
+  try { await post(url); emit('toast', message); await load() }
+  finally { mutating = false }
+})
+const restart = () => mutate('/api/core/restart', t('dashboard.restartDone'))
+const reset = () => mutate('/api/traffic/reset', t('dashboard.resetDone'))
 onMounted(() => { poll(); timer = window.setInterval(poll, 5000) })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
 </script>
 
 <template>
   <div v-if="data" class="page dashboard">
     <header class="page-head"><div><span class="eyebrow">OVERVIEW / LIVE</span><h1>{{ t('dashboard.title') }}</h1></div><div class="head-actions"><ConfirmAction :title="t('dashboard.reset')" :message="t('dashboard.resetConfirm')" @confirm="reset"><button class="secondary"><Icon name="refresh"/>{{ t('dashboard.reset') }}</button></ConfirmAction><ConfirmAction :title="t('dashboard.restart')" :message="t('dashboard.restartConfirm')" @confirm="restart"><button class="primary" :disabled="data.quotaExceeded"><Icon name="power"/>{{ t('dashboard.restart') }}</button></ConfirmAction></div></header>
+    <div v-if="stale" class="alert" role="status">{{ t('api.stale') }}</div>
     <div v-if="data.quotaExceeded" class="alert danger"><strong>{{ t('dashboard.exceeded') }}</strong><span>{{ t('dashboard.exceededHelp') }}</span></div>
     <section class="status-strip">
       <div><span class="status-dot" :class="data.coreStatus === 'running' ? 'online' : data.coreStatus === 'stopped' ? 'offline' : 'unknown'"></span><small>CORE STATUS</small><strong>{{ t(`dashboard.${data.coreStatus}`) }}</strong></div>
@@ -139,5 +162,5 @@ onBeforeUnmount(() => clearInterval(timer))
     </section>
     <TrafficHistory :unit="data.trafficQuota.unit" />
   </div>
-  <div v-else class="loading">{{ t('dashboard.loading') }}</div>
+  <div v-else class="loading" role="status">{{ t(stale ? 'api.stale' : 'dashboard.loading') }}</div>
 </template>

@@ -78,13 +78,55 @@ type attempt struct {
 // failures, so without a bound a spray from many source addresses would pin
 // memory for as long as the panel runs.
 const maxTrackedClients = 4096
+const maxConcurrentLogins = 8
 
 type Limiter struct {
 	mu            sync.Mutex
 	attempts      map[string]attempt
+	inFlight      map[string]int
+	active        int
 	Limit         int
 	Window, Block time.Duration
 	now           func() time.Time
+}
+
+// Begin reserves a failure-budget slot before reading the body or hashing a
+// password. Pending requests count against the same IP's budget.
+func (l *Limiter) Begin(remote string) (func(bool), bool) {
+	l.mu.Lock()
+	now, key := l.now(), ClientIP(remote)
+	item := l.attempts[key]
+	if !item.Window.IsZero() && now.Sub(item.Window) >= l.Window && !now.Before(item.BlockedUntil) {
+		delete(l.attempts, key)
+		item = attempt{}
+	}
+	if now.Before(item.BlockedUntil) || item.Count+l.inFlight[key] >= l.Limit || l.active >= maxConcurrentLogins {
+		l.mu.Unlock()
+		return nil, false
+	}
+	if l.inFlight == nil {
+		l.inFlight = make(map[string]int)
+	}
+	l.inFlight[key]++
+	l.active++
+	l.mu.Unlock()
+	var once sync.Once
+	return func(success bool) {
+		once.Do(func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.active--
+			l.inFlight[key]--
+			if l.inFlight[key] == 0 {
+				delete(l.inFlight, key)
+			}
+			if success {
+				delete(l.attempts, key)
+				return
+			}
+			l.failLocked(key, l.now())
+		})
+	}, true
 }
 
 func NewLimiter() *Limiter {
@@ -128,8 +170,9 @@ func (l *Limiter) Allow(remote string) bool {
 func (l *Limiter) Fail(remote string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := l.now()
-	key := ClientIP(remote)
+	l.failLocked(ClientIP(remote), l.now())
+}
+func (l *Limiter) failLocked(key string, now time.Time) {
 	item, tracked := l.attempts[key]
 	if !tracked && len(l.attempts) >= maxTrackedClients {
 		l.sweep(now)

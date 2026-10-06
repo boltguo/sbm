@@ -108,11 +108,14 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.Limiter.Allow(r.RemoteAddr) {
+	finish, allowed := s.Limiter.Begin(r.RemoteAddr)
+	if !allowed {
 		s.auditLogin(r, "blocked")
 		writeError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
 		return
 	}
+	success := false
+	defer func() { finish(success) }()
 	var input struct{ Username, Password string }
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, 400, "请求格式无效")
@@ -122,13 +125,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	userOK := subtle.ConstantTimeCompare([]byte(input.Username), []byte(cfg.AdminUsername)) == 1
 	passwordOK := bcrypt.CompareHashAndPassword([]byte(cfg.AdminPasswordHash), []byte(input.Password)) == nil
 	if !userOK || !passwordOK {
-		s.Limiter.Fail(r.RemoteAddr)
 		s.auditLogin(r, "failed")
 		time.Sleep(250 * time.Millisecond)
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
-	s.Limiter.Success(r.RemoteAddr)
+	success = true
 	csrf, err := protocol.RandomToken(24)
 	if err != nil {
 		writeError(w, 500, "无法创建会话")
@@ -926,8 +928,8 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "请求格式无效")
 		return
 	}
-	if len(input.NewPassword) < 12 || len(input.NewPassword) > 128 {
-		writeError(w, 400, "新密码长度必须为 12 到 128 个字符")
+	if len(input.NewPassword) < 12 || len(input.NewPassword) > 72 {
+		writeError(w, 400, "新密码长度必须为 12 到 72 字节")
 		return
 	}
 	cfg := s.Config.Get()
@@ -1228,7 +1230,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"更新重置周期失败":                     "Could not update the reset schedule.",
 		"应用流量限额失败":                     "Could not apply the traffic quota.",
 		"生成 Token 失败":                  "Could not generate a token.",
-		"新密码长度必须为 12 到 128 个字符":        "The new password must be 12 to 128 characters long.",
+		"新密码长度必须为 12 到 72 字节":          "The new password must be 12 to 72 UTF-8 bytes long.",
 		"当前密码错误":                       "The current password is incorrect.",
 		"密码处理失败":                       "Could not process the password.",
 		"订阅不存在":                        "Subscription not found.",

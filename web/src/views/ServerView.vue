@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api'
+import { usePollStatus } from '../poll-status'
 import { dateLocale, t } from '../i18n'
 import type { HealthCheck, HealthStatus, ServerStatus } from '../types'
 
 const data = ref<ServerStatus | null>(null)
 let timer = 0
+let revision = 0
+let disposed = false
+let pending = 0
+const { stale, tick, succeeded, failed } = usePollStatus()
 
 const passedChecks = computed(() => data.value?.health.checks.filter(check => check.status === 'ok').length ?? 0)
 
@@ -38,16 +43,25 @@ const checkDetail = (check: HealthCheck) => {
   if (check.nextResetAt) return t('server.detail.nextReset', { time: dateTime(check.nextResetAt, check.timezone), timezone: check.timezone || 'Local' })
   return ''
 }
-// Read-only polling: a 401 already returns to the login screen, and any other
-// failure simply leaves the last snapshot on screen until the next tick.
-const load = () => { api<ServerStatus>('/api/server').then(next => { data.value = next }).catch(() => {}) }
+const load = async () => {
+  tick()
+  if (pending) return
+  const request = ++revision
+  pending++
+  try {
+    const next = await api<ServerStatus>('/api/server', { signal: AbortSignal.timeout(10000) })
+    if (disposed || request !== revision) return
+    data.value = next; succeeded()
+  } catch { if (!disposed && request === revision) failed() } finally { pending-- }
+}
 onMounted(() => { load(); timer = window.setInterval(load, 5000) })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
 </script>
 
 <template>
   <div v-if="data" class="page server-page">
     <header class="page-head"><div><span class="eyebrow">HOST / LIVE</span><h1>{{ t('server.title') }}</h1><p>{{ t('server.help') }}</p></div><small class="server-updated">{{ t('server.updated', { time: time(data.collectedAt) }) }}</small></header>
+    <div v-if="stale" class="alert" role="status">{{ t('api.stale') }}</div>
     <section class="resource-grid">
       <article class="resource-card"><div class="resource-head"><span>{{ t('server.cpu') }}</span><strong>{{ data.cpuPercent.toFixed(1) }}%</strong></div><div class="resource-meter"><i :style="{ width: `${data.cpuPercent}%` }"></i></div><footer><span>{{ t('server.cores', { count: data.cpuCores }) }}</span></footer></article>
       <article class="resource-card"><div class="resource-head"><span>{{ t('server.memory') }}</span><strong>{{ data.memoryPercent.toFixed(1) }}%</strong></div><div class="resource-meter"><i :style="{ width: `${data.memoryPercent}%` }"></i></div><footer><span>{{ t('server.usedOf', { used: bytes(data.memoryUsed), total: bytes(data.memoryTotal) }) }}</span></footer></article>
@@ -72,5 +86,5 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
     </section>
   </div>
-  <div v-else class="loading">{{ t('server.loading') }}</div>
+  <div v-else class="loading">{{ t(stale ? 'api.stale' : 'server.loading') }}</div>
 </template>

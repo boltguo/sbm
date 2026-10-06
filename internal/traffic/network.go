@@ -136,22 +136,15 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		// A different interface/host may have overlapping history, so establish a
 		// fresh total baseline rather than adding its old traffic to this machine.
 		if (periodChanged || resetChanged) && t.history != nil {
-			old, err := t.history.loadNetwork(ctx, id, previous.Generation)
+			sources, _, err := t.history.networkSources(ctx, id, "", st.PeriodStartedAt, previous.UpdatedAt)
 			if err != nil {
+				t.networkFailure(id, err)
 				return err
 			}
-			old.CreatedAt = previous.CreatedAt
-			old.UpdatedAt = previous.UpdatedAt
-			prefix, err := readNetworkRows(ctx, t.history.db, id, previous.Generation, true)
-			if err != nil {
-				return err
+			st.RX, st.TX, _, st.Partial = sumNetworkSources(sources, st.PeriodStartedAt, previous.UpdatedAt)
+			if st.Partial && !st.PeriodStartedAt.After(previous.PeriodStartedAt) {
+				st.RX, st.TX = max(st.RX, previous.RX), max(st.TX, previous.TX)
 			}
-			old = networkSince(old, previous.SourceStartedAt, prefix.Buckets)
-			from := st.PeriodStartedAt
-			if previous.SourceStartedAt.After(from) {
-				from = previous.SourceStartedAt
-			}
-			st.RX, st.TX, _ = nettraffic.Sum(old, from, now)
 		}
 		st.Manual = true
 		st.CarryRX = st.RX
@@ -200,6 +193,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 			return loadErr
 		}
 	}
+	periodAvailable := false
 	if st.Manual {
 		st.RX = addSaturating(st.CarryRX, max(0, snapshot.RX-st.BaselineRX))
 		st.TX = addSaturating(st.CarryTX, max(0, snapshot.TX-st.BaselineTX))
@@ -214,7 +208,26 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 			prefix = append(prefix, baseline.Buckets...)
 		}
 		merged = networkSince(merged, available, prefix)
-		st.RX, st.TX, st.Partial = nettraffic.Sum(merged, st.PeriodStartedAt, snapshot.UpdatedAt)
+		var sources []networkSource
+		if t.history != nil && available.After(st.PeriodStartedAt) {
+			var err error
+			sources, _, err = t.history.networkSources(ctx, id, generation, st.PeriodStartedAt, available)
+			if err != nil {
+				t.networkFailure(id, err)
+				return err
+			}
+			// A source switch may not have reached SQLite yet.
+			for n := range sources {
+				if sources[n].ended.Unix() <= 0 || sources[n].ended.After(available) {
+					sources[n].ended = available
+				}
+			}
+		}
+		sources = append(sources, networkSource{snapshot: merged, available: available, index: nettraffic.NewIndex(merged)})
+		st.RX, st.TX, periodAvailable, st.Partial = sumNetworkSources(sources, st.PeriodStartedAt, snapshot.UpdatedAt)
+		if st.Partial && resetChanged && !st.PeriodStartedAt.After(previous.PeriodStartedAt) {
+			st.RX, st.TX = max(st.RX, previous.RX), max(st.TX, previous.TX)
+		}
 		if generation == previous.Generation && !resetChanged && !periodChanged && (st.RX < previous.RX || st.TX < previous.TX) {
 			// A missing or inconsistent source bucket cannot erase bytes already
 			// counted in the same billing period or release an existing quota stop.
@@ -224,7 +237,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		}
 	}
 	st.Origin = networkOrigin(req, snapshot)
-	st.Available = st.Manual || snapshot.UpdatedAt.Equal(st.PeriodStartedAt) || nettraffic.HasCoverage(merged, st.PeriodStartedAt, snapshot.UpdatedAt)
+	st.Available = st.Manual || snapshot.UpdatedAt.Equal(st.PeriodStartedAt) || periodAvailable
 	st.Interface = snapshot.Interface
 	st.Generation = generation
 	st.CreatedAt = snapshot.CreatedAt

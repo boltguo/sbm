@@ -2,7 +2,7 @@
 
 English | [简体中文](WIREGUARD-EXIT.md)
 
-SBM still manages one entry VPS, one sing-box process, and one administrator. Optional gateways let clients choose their final exit within one master subscription.
+SBM manages one entry VPS, one sing-box process, and one administrator. Optional gateways let clients choose their final exit within one master subscription.
 
 ```text
 Client → VLESS / Hysteria2 → A / SBM Entry
@@ -12,9 +12,9 @@ Client → VLESS / Hysteria2 → A / SBM Entry
                               └─ WireGuard → B / SG  → Internet (SG IP)
 ```
 
-A uses the **userspace WireGuard endpoint in official sing-box 1.13.14**, without installing a system WireGuard interface. B can use ordinary Linux WireGuard. All variants retain the entry domain and VLESS TCP / HY2 UDP ports. Independent UUIDs or passwords identify `auth_user` routes to distinct endpoints.
+A uses the **userspace WireGuard endpoint in official sing-box 1.13.14**, without installing a system WireGuard interface. B can use ordinary Linux WireGuard. Direct and gateway nodes share the entry domain and VLESS TCP / HY2 UDP ports. Each gateway uses independent UUIDs or passwords.
 
-With no gateways, the original configuration, Direct nodes, and subscription behavior are unchanged.
+Direct nodes leave through A; gateway nodes use WireGuard to leave through B.
 
 ## Add a gateway on A
 
@@ -43,7 +43,7 @@ Generate a separate A key pair for each gateway. Private keys stay on their own 
 | A tunnel address: 10.66.X.2/32 | `[Peer] AllowedIPs = 10.66.X.2/32` |
 | B interface address: 10.66.X.1/24 | `[Interface] Address = 10.66.X.1/24` |
 
-Tunnel slots are persisted. Removing or reordering another gateway never renumbers an existing gateway. The first version offers 254 slots; personal use usually needs just a few.
+Supports 254 fixed tunnel slots, with addresses saved independently for each gateway.
 
 **Use the X shown on each gateway card. Do not copy 10.66.1.1 to every B.**
 
@@ -57,7 +57,7 @@ Install tools and generate B's keys:
 sudo apt update
 sudo apt install -y wireguard iptables iproute2
 sudo install -d -m 700 /etc/wireguard
-sudo sh -c 'umask 077; wg genkey > /etc/wireguard/b-private.key; wg pubkey < /etc/wireguard/b-private.key > /etc/wireguard/b-public.key'
+sudo sh -c 'umask 077; test -s /etc/wireguard/b-private.key || wg genkey > /etc/wireguard/b-private.key; wg pubkey < /etc/wireguard/b-private.key > /etc/wireguard/b-public.key'
 sudo cat /etc/wireguard/b-public.key
 ```
 
@@ -105,7 +105,7 @@ sudo ufw allow from A_PUBLIC_IPV4 to any port 51820 proto udp
 sudo ufw route allow in on wg0 out on B_PUBLIC_INTERFACE
 ```
 
-Persist NAT according to your firewall setup. A only needs its original entry ports; gateway variants require no additional VLESS/HY2 ports. A must allow outbound UDP to every B; B must allow Internet egress.
+Persist NAT according to your firewall setup. Gateways share A’s VLESS/HY2 entry ports. A must allow outbound UDP to every B; B must allow Internet egress.
 
 ## Cloud differences
 
@@ -120,7 +120,7 @@ If B's cloud IP changes, update its gateway IPv4 on A. A-to-B latency adds to th
 
 ## Naming, geolocation, and lifecycle
 
-Direct names remain as configured, such as `US-LosAngeles-VLESS` and `US-LosAngeles-HY2`.
+Direct node names include `US-LosAngeles-VLESS` and `US-LosAngeles-HY2`.
 
 Gateway names describe the **final exit**:
 
@@ -134,7 +134,7 @@ SG-Singapore-VLESS-SG1
 
 The optional marker follows the protocol at the end of the node name. Automatic location follows the installer: uppercase country code, a hyphen before the city, whitespace removed, and no emoji. `SG + Singapore` remains `SG-Singapore`.
 
-Adding or changing an IPv4 queries `https://ipwho.is/<IPv4>` with a maximum three-second timeout and stores country, region, and city. Subscription and Dashboard reads never query Geo. Failure still allows saving; changing an IP discards the old IP's location. Detect location refreshes the cache; failure for the same IP retains the previous result.
+Adding or changing IPv4 automatically detects the exit location. If detection fails, enter a location override. A failed recheck of the same IP keeps its last result.
 
 Location override wins over detection. Without a location, naming uses Marker, then `Gateway-<ID>`, so names never become empty.
 
@@ -144,28 +144,23 @@ Subscriptions list all Direct inbounds first, followed by gateways grouped in di
 
 ## Estimated traffic and periods
 
-On A, `SBM_EGRESS_TX` and `SBM_EGRESS_RX` filter accounting chains contain uniquely commented rules for each B IPv4 + UDP port. Counter rules have no ACCEPT/DROP target and return to the existing INPUT/OUTPUT flow. SBM never flushes host rules or removes UFW/firewalld policies. Parsing uses raw byte counters from `iptables-save -c -t filter`.
+The entry uses vnStat RX and TX from its selected public interface, covering Direct, all gateways and system traffic. Each gateway’s usage is estimated from WireGuard traffic on A to B’s IPv4 + UDP port. Every address/port pair must be unique.
 
-Sampling checks the position and number of owned jumps, maintaining one first-position jump per parent chain while preserving tunnel counters and user rules. After all gateways are disabled and cleanup succeeds, polling stops invoking iptables; inactive monthly periods still advance. Gateway sampling runs independently of the entry's global counters and quota checks. Global usage includes all proxy traffic served by the entry, while each gateway independently estimates B's plan usage; these figures must not be added together.
-
-Counters include encrypted tunnel packets, IP/UDP overhead, handshakes, and keepalives. They also include other programs talking to that same peer address/port, so each gateway's IPv4 + UDP port pair must be unique.
+Tunnel counters include encryption, IP/UDP overhead, handshakes, keepalives and other host programs communicating with the same address and port. Gateway plan estimates use:
 
 ```text
-TunnelBytes = TunnelTX + TunnelRX
-EstimatedProviderUsage = TunnelBytes × ProviderUsageFactor
-single → ×1
-bidirectional → ×2
+Tunnel traffic = TunnelTX + TunnelRX
+One-way plan estimate = Tunnel traffic
+Two-way plan estimate = Tunnel traffic × 2
 ```
 
-GB=1000³ bytes; GiB=1024³. Enter the advertised allowance directly rather than dividing it by two. Headroom determines the warning threshold. Each gateway has its own monthly day (1–28) and timezone.
+GB=1000³ bytes; GiB=1024³ bytes. The reserve sets the warning threshold; gateways keep running after reaching it. Entry quotas independently stop sing-box based on local vnStat usage. The provider dashboard is authoritative for billing.
 
-**Estimated from WireGuard tunnel traffic is not a provider invoice. A gateway warning never stops sing-box, Direct, or other gateways.** Existing global local-plan enforcement remains independent.
+The entry and each gateway have their own monthly reset day (1–28) and timezone. For example, resets on the 15th for the entry and the 1st for a gateway each reset their own current-period usage. Daily and calendar-month history is saved independently and retained after plan resets.
 
-Period totals, baselines, boot/rule generations, and reset times use the complete state checkpoint in `traffic.db`, with a JSON state compatibility mirror. Each 5-second gateway sample immediately commits deltas and baselines; entry history is also saved every 5 seconds. Daily TX/RX records live in gateway_daily; existing period totals are preserved in gateway_imports without inventing daily details. Missing rules are recreated. Counter rollback or a generation change folds in the new counter. Updating peer IP/port establishes a new baseline while retaining period usage. Resetting a period never clears kernel counters.
+Gateway traffic is sampled every five seconds. Period usage and daily TX/RX are saved in `/var/lib/sbm/traffic.db`. Cards show current-plan usage. Disabling preserves credentials and traffic records for reactivation; changing B’s address or port retains accumulated usage.
 
-The entry and each gateway reset on their own day and timezone. If the entry resets on the 15th and a gateway on the 1st, each reset clears only its own plan usage. A gateway reset neither clears another gateway nor releases an exceeded entry quota. Entry daily/calendar-month history survives these resets. Gateway cards show current-period totals. Background daily records survive disabling, deletion, and resets; a gateway-history page and completed-period archives are not provided. A calendar-month summary is not the total for a plan period starting on the 15th.
-
-If an outage spans a reset boundary, cumulative counters cannot split bytes exactly between months; the old baseline is retained and recoverable deltas join the recovery date and current period, explicitly marking uncertain date/period attribution. Sampling failure retains the last result and displays an interruption. Statistics problems do not prevent saving or running the proxy. Failed database writes retain pending deltas for retry without duplication and show a save warning separately. Incomplete rule cleanup after deleting the last gateway is recorded and retried. A host restart or external rule deletion can erase bytes after the last successful sample; counter-generation changes mark potentially incomplete usage.
+Sampling interruptions show the last result. Failed saves display a warning and retry. Outages spanning a reset, host restarts or counter-rule recreation can leave gaps, which the interface marks as incomplete records.
 
 ## Verify and troubleshoot
 
@@ -187,7 +182,7 @@ ip route show default
 - **Handshake but no Internet:** check B forwarding, FORWARD rules, NAT subnet X, and the public interface. Allow rules must precede applicable rejects.
 - **Some sites fail:** gateways are IPv4-only. Client-resolved IPv6 destinations cannot use them. Domain targets receive an IPv4 resolve rule; Direct's address-family strategy remains independent.
 - **Sampling interruption:** A needs root/CAP_NET_ADMIN, iptables and iptables-save, using the active firewall backend. Do not switch legacy/nft backends and mix two rule sets.
-- **Disconnect while saving:** core changes restart sing-box. The independent apply context finishes the persisted transaction; refresh once the connection recovers.
+- **Disconnect while saving:** core changes restart sing-box and briefly disconnect proxy connections. Refresh the page once the connection recovers.
 
 Read-only checks on A:
 
@@ -199,45 +194,8 @@ sudo journalctl -u sbm-panel -e --no-pager
 
 A has no system WireGuard interface, so an empty `wg show` on A is expected.
 
-## Upgrade and test development builds
+## Maintenance
 
-ConfigVersion remains 4 and StateVersion remains 1. Existing 2.0.2 v4 configurations load directly; omitted optional fields mean no gateways. No 1.x→2.x migration is restored. Back up `/etc/sbm` and `/var/lib/sbm` before upgrading. Old 2.0.2 binaries are not guaranteed to read added fields, so restore original backups when downgrading.
+For panel updates, backups and service management, see [SBM management](../README.md#manage-sbm-from-the-terminal). sing-box keeps running during panel updates; protocol or gateway network changes restart sing-box.
 
-`make release` produces Linux amd64/arm64 archives. Deploy a locally built artifact until the new code is released; the published 2.0.2 release lacks this feature. Official sing-box remains pinned to 1.13.14; no custom build or V2Ray API is needed.
-
-To test the source version on an existing 2.0.2 instance, run `make release VERSION=egress-dev` on the development machine. Upload the matching archive and `checksums.txt` to a temporary directory on A. Run there (amd64 example; replace the archive name for arm64):
-
-```bash
-sha256sum -c --ignore-missing checksums.txt
-tar -xzf sbm-panel_egress-dev_linux_amd64.tar.gz
-sudo systemctl stop sbm-panel.service
-egress_backup_dir="$(sudo mktemp -d /root/sbm-egress-backup.XXXXXX)"
-sudo tar -czf "$egress_backup_dir/config-state.tar.gz" -C / etc/sbm var/lib/sbm etc/sing-box/config.json
-sudo cp -p /usr/local/bin/sbm-panel "$egress_backup_dir/sbm-panel"
-sudo cp -p /usr/local/bin/sbm "$egress_backup_dir/sbm"
-sudo install -m 755 sbm-panel /usr/local/bin/sbm-panel
-sudo install -m 755 sbm /usr/local/bin/sbm
-sudo /usr/local/bin/sbm-panel config apply --no-start
-sudo systemctl start sbm-panel.service
-sudo systemctl is-active sbm-panel.service
-```
-
-Investigate any command failure before continuing and retain the backup directory named by `egress_backup_dir`. Existing sing-box can keep running while the panel is replaced; gateway additions subsequently apply core configuration through the panel transaction. If the new panel cannot start, restore the backed-up panel and management script before adding gateways. Downgrading after adding new fields also requires restoring configuration and state. Backups contain keys and tokens; keep them private to root.
-
-The development version `egress-dev` has no formal installer core-version mapping. When installing the core from the management menu, use `sudo SING_BOX_VERSION=1.13.14 sbm`. Before a supporting release is published, avoid replacing the development panel with 2.0.2 through “Update panel”.
-
-Test commands:
-
-```bash
-go test ./...
-go test -race ./...
-go vet ./...
-npm --prefix web run build
-bash scripts/install-unit.sh
-bash scripts/frontend-style-unit.sh
-shellcheck install.sh scripts/*.sh
-SBM_TEST_SING_BOX=/path/to/sing-box-1.13.14 go test ./internal/core -run TestSingBoxEgressIntegration -v
-bash scripts/egress-linux-test.sh
-```
-
-The final script tests real iptables inside a new Linux network namespace, without changing host networking. Setting `SBM_TEST_SING_BOX` to the official binary also runs genuine VLESS/HY2 → A → two userspace WireGuard B peers, verifying observed exits and counters. Production B NAT and cloud firewalls still need the deployment IP checks above.
+Use `sudo sbm` to back up configuration, keys and traffic history. Backups contain private keys and subscription tokens; keep them in a private directory.

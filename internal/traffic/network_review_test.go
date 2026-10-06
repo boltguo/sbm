@@ -2,9 +2,11 @@ package traffic
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/nettraffic"
 )
 
@@ -16,6 +18,70 @@ func reviewSnapshot(created, updated time.Time) nettraffic.Snapshot {
 		s.TX += 200
 	}
 	return s
+}
+
+func TestVnStatBillingChangeIncludesEverySource(t *testing.T) {
+	for _, mode := range []string{"single", "bidirectional"} {
+		for _, switchBack := range []bool{false, true} {
+			t.Run(mode+fmt.Sprint(switchBack), func(t *testing.T) {
+				now := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+				tracker, reader, _ := newNetworkTest(t, &now)
+				defer tracker.Close()
+				cfg := tracker.config.(*configSource)
+				limit := int64(2500)
+				if mode == "bidirectional" {
+					limit = 4000
+				}
+				cfg.cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: float64(limit) / model.TrafficGBBytes, Unit: "GB", BillingMode: mode}
+				core := &fakeCore{running: true}
+				tracker.core = core
+				ctx := context.Background()
+				sample := func(iface string) {
+					t.Helper()
+					cfg.cfg.VnStatInterface = iface
+					s := networkFixture(now)
+					s.Interface = iface
+					reader.snapshots["entry"] = s
+					if err := tracker.SampleNetwork(ctx, "entry"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				sample("ens5")
+				sample("ens6")
+				now = now.AddDate(0, 0, 1)
+				sample("ens6")
+				expectRX, expectTX := int64(1440), int64(2880)
+				if switchBack {
+					sample("ens5")
+					now = now.AddDate(0, 0, 1)
+					sample("ens5")
+					expectRX += 240
+					expectTX += 480
+				}
+				if !tracker.State().QuotaExceeded || core.running {
+					t.Fatal("quota was not stopped before schedule change")
+				}
+				cfg.cfg.Reset.Day = 1
+				reader.fail["entry"] = true
+				if err := tracker.SampleNetwork(ctx, "entry"); err == nil {
+					t.Fatal("expected failed read")
+				}
+				if !tracker.State().QuotaExceeded || core.running {
+					t.Fatal("failed read released quota stop")
+				}
+				reader.fail["entry"] = false
+				sample(cfg.cfg.VnStatInterface)
+				st := tracker.NetworkState("entry")
+				if st.RX != expectRX || st.TX != expectTX || st.Partial || !tracker.State().QuotaExceeded || core.running {
+					t.Fatalf("source usage lost: %+v, quota=%v", st, tracker.State().QuotaExceeded)
+				}
+				h, err := tracker.NetworkHistory(ctx, "entry", "month", "2026-10", "2026-10")
+				if err != nil || len(h.Rows) != 1 || h.Rows[0].NetworkTX != expectTX {
+					t.Fatalf("history disagrees: %+v %v", h, err)
+				}
+			})
+		}
+	}
 }
 
 func TestVnStatRegressionUnlimitedWithoutSource(t *testing.T) {
@@ -30,6 +96,59 @@ func TestVnStatRegressionUnlimitedWithoutSource(t *testing.T) {
 	}
 	if tracker.State().QuotaExceeded {
 		t.Fatal("unlimited still retains quota stop without first vnStat sample")
+	}
+}
+
+func TestVnStatPartialSourceAllowsQuotaAdjustment(t *testing.T) {
+	for _, adjustment := range []string{"increase", "billing-mode"} {
+		t.Run(adjustment, func(t *testing.T) {
+			now := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+			tracker, reader, _ := newNetworkTest(t, &now)
+			defer tracker.Close()
+			cfg := tracker.config.(*configSource)
+			cfg.cfg.TrafficQuota = model.TrafficQuotaConfig{Amount: 0.000009, Unit: "GB", BillingMode: "single"}
+			if adjustment == "billing-mode" {
+				cfg.cfg.TrafficQuota.Amount = 0.000014
+				cfg.cfg.TrafficQuota.BillingMode = "bidirectional"
+			}
+			core := &fakeCore{running: true}
+			tracker.core = core
+			ctx := context.Background()
+			if err := tracker.SampleNetwork(ctx, "entry"); err != nil {
+				t.Fatal(err)
+			}
+			cfg.cfg.VnStatInterface = "ens6"
+			snapshot := networkFixture(now)
+			snapshot.Interface = "ens6"
+			reader.snapshots["entry"] = snapshot
+			if err := tracker.SampleNetwork(ctx, "entry"); err != nil {
+				t.Fatal(err)
+			}
+			st := tracker.NetworkState("entry")
+			if !st.Partial || !tracker.State().QuotaExceeded || core.running {
+				t.Fatal("expected a stopped quota with partial source history")
+			}
+			if adjustment == "increase" {
+				cfg.cfg.TrafficQuota.Amount = 0.00002
+			} else {
+				cfg.cfg.TrafficQuota.BillingMode = "single"
+			}
+			if err := tracker.ReconcileQuota(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if tracker.State().QuotaExceeded || !core.running || core.starts != 1 {
+				t.Fatal("partial source history blocked the explicit quota adjustment")
+			}
+			if got := tracker.NetworkState("entry"); got.RX != st.RX || got.TX != st.TX {
+				t.Fatal("quota adjustment changed recorded usage")
+			}
+			if err := tracker.SampleNetwork(ctx, "entry"); err != nil {
+				t.Fatal(err)
+			}
+			if tracker.State().QuotaExceeded || !core.running || core.starts != 1 {
+				t.Fatal("the next sample restored an obsolete quota stop")
+			}
+		})
 	}
 }
 

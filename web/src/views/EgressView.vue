@@ -10,6 +10,7 @@ import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import EgressGuide from '../components/EgressGuide.vue'
 import { dateLocale, t } from '../i18n'
+import { usePollStatus } from '../poll-status'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const items = ref<EgressGateway[]>([])
@@ -21,6 +22,9 @@ const publicKey = ref('')
 let timer = 0
 let keyRevision = 0
 let listRevision = 0
+let disposed = false
+let pending = 0
+const { stale, tick, succeeded, failed } = usePollStatus()
 const safe = guard(message => emit('toast', message))
 const billingOptions = computed(() => [{ value: 'single', label: t('settings.billingSingle') }, { value: 'bidirectional', label: t('settings.billingBidirectional') }])
 const resetOptions = computed(() => [{ value: 'none', label: t('settings.noReset') }, { value: 'monthly', label: t('settings.monthly') }])
@@ -29,9 +33,15 @@ const amount = (bytes: number, unit: string) => `${new Intl.NumberFormat(dateLoc
 const date = (value?: string) => !value || value.startsWith('0001') ? t('settings.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 async function load() {
   const revision = ++listRevision
-  const next = await api<EgressGateway[]>('/api/egress')
-  if (revision !== listRevision) return
-  items.value = next; loaded.value = true
+  pending++
+  try {
+    const next = await api<EgressGateway[]>('/api/egress', { signal: AbortSignal.timeout(10000) })
+    if (disposed || revision !== listRevision) return
+    items.value = next; loaded.value = true; succeeded()
+  } catch (error) {
+    if (!disposed && revision === listRevision) failed()
+    throw error
+  } finally { pending-- }
 }
 const refresh = safe(load)
 function input(g: GatewayInput): GatewayInput {
@@ -75,13 +85,14 @@ const remove = (g: EgressGateway) => run(async () => { await del(`/api/egress/${
 const detect = (g: EgressGateway) => run(async () => { const result = await post<{ geoDetected: boolean }>(`/api/egress/${g.id}/geo`); emit('toast', result.geoDetected ? t('egress.geoDone') : t('egress.geoFailed')) })
 const reset = (g: EgressGateway) => run(async () => { await post(`/api/egress/${g.id}/reset`); emit('toast', t('egress.resetDone')) })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('copied')) })
-onMounted(() => { refresh(); timer = window.setInterval(() => { if (!busy.value && !form.value) load().catch(() => {}) }, 5000) })
-onBeforeUnmount(() => { ++listRevision; ++keyRevision; clearInterval(timer) })
+onMounted(() => { refresh(); timer = window.setInterval(() => { tick(); if (!pending && !busy.value && !form.value) load().catch(() => {}) }, 5000) })
+onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInterval(timer) })
 </script>
 
 <template>
   <div class="page egress-page">
     <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></header>
+    <div v-if="stale" class="alert" role="status">{{ t('api.stale') }}</div>
     <div class="egress-flow"><span>{{ t('egress.client') }}</span><b>→</b><span>{{ t('egress.entry') }}</span><b>→</b><strong>{{ t('egress.gateway') }}</strong><b>→</b><span>Internet</span></div>
     <p class="egress-source">{{ t('egress.estimate') }} · {{ t('egress.warningOnly') }}</p>
     <EgressGuide/>
