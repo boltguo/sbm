@@ -15,6 +15,8 @@ Client → VLESS Reality / Hysteria2 → A / SBM
 
 不配置或全部停用 Gateway 时，核心只渲染原有 Direct 配置。订阅仍使用一个 URL，先输出 Direct，再按 Gateway 的 `position` 分组，位置相同时保持保存顺序。Profile Title 继续使用入口名称。概览页只显示已启用的 Gateway；全部关闭时隐藏整个中继出口区域。
 
+中继作为现有二进制中的可选扩展：启用只增加独立用户、路由和 endpoint，Direct 凭据、监听端口及地址族策略继续保留。关闭状态的出口草稿可以创建、编辑和删除，保存凭据而不重启核心。出口不可达或计数不可用不触发全局停机。
+
 ## 2. 修改文件
 
 下列是源文件清单；构建产物另列，避免把压缩 bundle 当作可维护源码。
@@ -109,7 +111,11 @@ VLESS users 为 `direct-<inboundID>` 和 `egress-<gatewayID>-<inboundID>`，每�
 
 A 的 `SBM_EGRESS_TX` / `SBM_EGRESS_RX` filter chain 仅使用无 target 的计数规则。按 B IPv4+UDP 端口匹配 TX 的 destination/dport 和 RX 的 source/sport；带自有 comment 的 jump 返回原 INPUT/OUTPUT 流程。不会 flush 用户链或改变 ACCEPT/DROP 策略；保留自有链中的陌生 verdict 时拒绝协调，避免激活未知规则。
 
+每次协调保证 INPUT/OUTPUT 各有一个位于首位的自有 jump；防火墙 reload 把它移到 terminal verdict 后面或产生重复 jump 时，只修复自有入口，保留计数规则的累计和代次。全部关闭并清理成功后停止调用 iptables；关闭出口的月度周期仍推进，失败的最后一次清理仍会重试。
+
 读取 `iptables-save -c -t filter` 原始字节 counter，不解析 locale 展示文本。每方向保存 boot ID + 随机规则代次，处理 reboot、规则重建和 counter 回退。改 peer 后重新基线但保留周期累计；删除只移除该出口的自有规则。5 秒采样、30 秒持久化，手动和月度重置更新基线而不清空内核计数。
+
+出口采样使用独立循环。等待 iptables 或配置事务不会阻塞原有 1 秒核心采样及全局配额检查；正常关闭会等待采样循环退出再保存状态。入口全局用量继续统计该入口服务的全部代理流量，出口用量独立估算 B 的套餐，两者不相加。
 
 ```text
 TunnelBytes = TX + RX
@@ -142,7 +148,7 @@ Gateway 禁用时从 core、衍生卡片和订阅隐藏，UUID/password 保留�
 
 新代码尚未发布为正式 Release；当前发布的 2.0.2 包不含该功能。使用源码构建的 Linux amd64/arm64 包部署，升级前备份业务配置和 state。含新字段的配置不保证由旧 2.0.2 二进制读取；降级应恢复原备份。
 
-配置事务继续捕获流量、验证、持久化候选、渲染、执行官方 check、重启及验证 active，失败恢复原配置。apply/rollback 使用独立于 HTTP request cancellation 的超时上下文。仅位置、顺序、套餐等不改变 core 内容的编辑跳过重启。
+配置事务继续捕获流量、验证、持久化候选、渲染、执行官方 check、重启及验证 active，失败恢复原配置。apply/rollback 使用独立于 HTTP request cancellation 的超时上下文。位置、顺序、套餐及关闭出口的草稿不改变 core 内容时跳过重启；原有 Direct 入站编辑的核心恢复行为保留。
 
 B 的安装、公钥交换、forwarding、NAT、云防火墙和排障步骤见 [中文指南](WIREGUARD-EXIT.md) / [English guide](WIREGUARD-EXIT.en.md)。
 
@@ -157,8 +163,11 @@ B 的安装、公钥交换、forwarding、NAT、云防火墙和排障步骤见 [
 | 中英文类型、API、静态 i18n 引用及占位符 | 57 个新增文案键校验通过 |
 | 安装测试、bash syntax、shellcheck | 通过 |
 | 官方 sing-box 1.13.14 `check` | 0/1/2/3 Gateway × 5 个 Direct 地址族策略，共 20 个组合通过 |
-| Linux 原生 iptables accounting | 两个 peer 独立 TX/RX、规则重建、删除通过；原用户 DROP 规则保留 |
+| 对比原始 `main` 的 Direct 配置 | 独立构建 `ef33404` 与当前二进制；五种地址族策略的无 Gateway 配置逐字节相同 |
+| 可选扩展回归 | 草稿不重启、全部关闭停止内核采样、阻塞采样隔离、关闭周期推进、删除清理重试及 state 重启恢复通过 |
+| Linux 原生 iptables accounting | 两个 peer 独立 TX/RX、入口顺序与去重修复、规则重建、删除通过；原用户 ACCEPT/DROP 规则保留 |
 | 真实 VLESS/HY2 运行 | Direct、Gateway 1、Gateway 2 的六条路径全部通过 |
+| 单出口故障隔离 | 停止 Gateway 1 后，其 VLESS/HY2 请求失败，Direct 与 Gateway 2 的四条路径继续可用，无 Direct 回落 |
 | 前端浏览器检查 | 中英文页面、编辑保存、隐藏私钥、只读衍生节点及 QR；390px 移动端无横向溢出且显示 UDP 端口 |
 | release smoke | Linux amd64/arm64 打包、checksum 校验通过 |
 
@@ -171,7 +180,7 @@ Linux 测试经授权通过 SSH alias `anya` 执行，所有网络操作位于�
 - Gateway 第一版只支持公网 IPv4 和 IPv4 出口；客户端直接传来 IPv6 目的地址时不能经这些出口访问。
 - 固定地址池最多 254 个 Gateway；系统仍定位个人单入口实例。
 - 主机计数包含隧道封装、握手、keepalive 和其他程序向同一 peer 地址端口发的流量，不能等同云账单；INPUT 计数也可能包含最终被防火墙丢弃的数据包。
-- 启动、采样中断、规则重建或周期边界附近可能少计；跨重置边界的离线累计无法精确拆到两个周期，恢复后的首个样本作为新周期基线。异常退出可能丢失最近 30 秒未持久化的数据。
+- 启动、采样中断、规则重建、防火墙 reload 后到入口修复之前、周期边界附近可能少计；跨重置边界的离线累计无法精确拆到两个周期，恢复后的首个样本作为新周期基线。异常退出可能丢失最近 30 秒未持久化的数据。
 - 依赖 root/CAP_NET_ADMIN 及主机当前活跃的 iptables backend；统计不可用时保留最后用量并显示中断，代理可继续运行。
 - 尚未完成真实 AWS/GCP/普通 VPS B 的 kernel WireGuard、NAT 和云防火墙联网验证，也未做长期压力与故障注入测试。
 

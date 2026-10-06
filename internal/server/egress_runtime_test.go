@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,7 +119,7 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		{ID: "vless", Type: protocol.TypeVLESSReality, Name: "Entry-VLESS", Enabled: true, Port: 28443, VLESS: &model.VLESSOptions{UUID: "70d0c699-73a0-4d2a-a45d-4f46a661b4f2", SNI: cfg.Domain, PrivateKey: base64.RawURLEncoding.EncodeToString(reality.Bytes()), PublicKey: base64.RawURLEncoding.EncodeToString(reality.PublicKey().Bytes()), ShortID: "aabb"}},
 		{ID: "hy2", Type: protocol.TypeHysteria2, Name: "Entry-HY2", Enabled: true, Port: 28443, Hysteria2: &model.Hysteria2Options{Password: "direct-password", Obfs: "salamander", ObfsPassword: "obfs-password"}},
 	}
-	start := func(name string, doc any) {
+	start := func(name string, doc any) func() {
 		data, err := json.Marshal(doc)
 		if err != nil {
 			t.Fatal(err)
@@ -142,8 +143,14 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 			cancel()
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { cancel(); _ = command.Wait(); _ = logFile.Close() })
+		var once sync.Once
+		stop := func() {
+			once.Do(func() { cancel(); _ = command.Wait(); _ = logFile.Close() })
+		}
+		t.Cleanup(stop)
+		return stop
 	}
+	peers := map[string]func(){}
 	for i, id := range []string{"aws", "jp"} {
 		aKeys, err := protocol.GenerateWireGuardKeys()
 		if err != nil {
@@ -156,7 +163,7 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		ip := "203.0.113." + strconv.Itoa(i+1)
 		g := model.EgressGateway{ID: id, Enabled: true, TunnelSlot: i + 1, Server: ip, ServerPort: 28100 + i, PrivateKey: aKeys.Private, PeerPublicKey: bKeys.Public, TrafficQuota: cfg.TrafficQuota, Reset: cfg.Reset}
 		cfg.EgressGateways = append(cfg.EgressGateways, g)
-		start("peer-"+id, map[string]any{
+		peers[id] = start("peer-"+id, map[string]any{
 			"log":       map[string]any{"level": "warn"},
 			"endpoints": []any{map[string]any{"type": "wireguard", "tag": "wg-b", "system": false, "mtu": 1408, "listen_port": g.ServerPort, "address": []string{g.PeerAddress()}, "private_key": bKeys.Private, "peers": []any{map[string]any{"public_key": aKeys.Public, "allowed_ips": []string{g.TunnelAddress()}}}}},
 			"outbounds": []any{map[string]any{"type": "direct", "tag": "direct", "inet4_bind_address": ip}}, "route": map[string]any{"final": "direct"},
@@ -246,6 +253,37 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		}
 		t.Logf("%s tunnel bytes: tx=%d rx=%d", g.ID, state.TX, state.RX)
 	}
+	// A failed optional peer must not disturb Direct or another gateway, and
+	// its credentials must never silently fall back to the entry's Direct IP.
+	peers["aws"]()
+	for i, in := range variants {
+		socks := fmt.Sprintf("127.0.0.1:%d", 29000+i)
+		transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return runtimeSOCKSDial(ctx, socks, address)
+		}}
+		client := &http.Client{Transport: transport, Timeout: 4 * time.Second}
+		resp, err := client.Get("http://198.18.0.100:28080/")
+		var body []byte
+		if err == nil {
+			body, err = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}
+		transport.CloseIdleConnections()
+		if i == 2 || i == 3 {
+			if err == nil {
+				t.Fatalf("failed gateway's %s credential fell back to exit %s", in.Type, strings.TrimSpace(string(body)))
+			}
+			continue
+		}
+		want := "127.0.0.1"
+		if i >= 4 {
+			want = "203.0.113.2"
+		}
+		if err != nil || strings.TrimSpace(string(body)) != want {
+			t.Fatalf("failed peer disrupted independent %s route %d", in.Type, i)
+		}
+	}
+	t.Log("stopped gateway 1: both its credentials failed; Direct and gateway 2 stayed available for VLESS/HY2")
 }
 func runtimeSOCKSDial(ctx context.Context, socks, address string) (net.Conn, error) {
 	c, err := (&net.Dialer{}).DialContext(ctx, "tcp", socks)

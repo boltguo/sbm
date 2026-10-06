@@ -405,11 +405,16 @@ func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
 }
 
 func (t *Tracker) Run(ctx context.Context, client ClashClient) {
+	// Accounting may wait for iptables or an in-flight configuration apply.
+	// It must never delay the original core counters or quota enforcement.
+	egressDone := make(chan struct{})
+	go func() {
+		defer close(egressDone)
+		t.runGatewaySampling(ctx)
+	}()
 	poll := time.NewTicker(time.Second)
 	schedule := time.NewTicker(15 * time.Second)
 	persist := time.NewTicker(30 * time.Second)
-	egress := time.NewTicker(5 * time.Second)
-	defer egress.Stop()
 	defer poll.Stop()
 	defer schedule.Stop()
 	defer persist.Stop()
@@ -417,6 +422,7 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 	for {
 		select {
 		case <-ctx.Done():
+			<-egressDone
 			if err := t.Persist(); err != nil {
 				log.Printf("traffic: final state save failed: %v", err)
 			}
@@ -446,12 +452,23 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 			if err := t.ReconcileQuota(ctx); err != nil {
 				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
 			}
-		case <-egress.C:
-			_ = t.SampleGateways(ctx)
 		case <-persist.C:
 			if err := t.Persist(); err != nil {
 				log.Printf("traffic: periodic state save failed: %v", err)
 			}
+		}
+	}
+}
+
+func (t *Tracker) runGatewaySampling(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = t.SampleGateways(ctx)
 		}
 	}
 }

@@ -43,9 +43,13 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 	if t.Gateways == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	counters, err := t.Gateways.Sample(ctx, gateways)
+	var counters map[string]GatewayCounters
+	var err error
+	if hasEnabledGateway(gateways) || t.State().EgressAccountingPending {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		counters, err = t.Gateways.Sample(ctx, gateways)
+	}
 	now := t.now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -100,6 +104,16 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 	}
 	return err
 }
+
+func hasEnabledGateway(gateways []model.EgressGateway) bool {
+	for _, g := range gateways {
+		if g.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *Tracker) SampleGateways(ctx context.Context) error {
 	t.gatewayMu.Lock()
 	defer t.gatewayMu.Unlock()
@@ -126,7 +140,9 @@ func (t *Tracker) CommitEgressChange(ctx context.Context, old, next model.Config
 	if t.state.Egress == nil {
 		t.state.Egress = map[string]model.GatewayTrafficState{}
 	}
-	pending := t.state.EgressAccountingPending || len(t.state.Egress) > 0
+	// Once inactive rules are cleaned up, disabled drafts need no kernel
+	// accounting dependency. Preserve failed cleanup for periodic retries.
+	t.state.EgressAccountingPending = t.state.EgressAccountingPending || hasEnabledGateway(old.EgressGateways)
 	keep := map[string]bool{}
 	for _, g := range next.EgressGateways {
 		keep[g.ID] = true
@@ -154,7 +170,7 @@ func (t *Tracker) CommitEgressChange(ctx context.Context, old, next model.Config
 	}
 	t.mu.Unlock()
 	var err error
-	if pending || len(old.EgressGateways) > 0 || len(next.EgressGateways) > 0 {
+	if t.State().EgressAccountingPending || len(next.EgressGateways) > 0 {
 		err = t.sampleGateways(ctx, next.EgressGateways)
 	}
 	return errors.Join(err, t.Persist())
@@ -198,5 +214,10 @@ func (t *Tracker) ReconcileGateways(ctx context.Context) error {
 	t.gatewayMu.Lock()
 	defer t.gatewayMu.Unlock()
 	cfg := t.config.Get()
+	// On startup, reconcile once even if every gateway is disabled: a crash
+	// may have left jumps behind before their cleanup was persisted.
+	t.mu.Lock()
+	t.state.EgressAccountingPending = t.state.EgressAccountingPending || len(cfg.EgressGateways) > 0 || len(t.state.Egress) > 0
+	t.mu.Unlock()
 	return t.CommitEgressChange(ctx, cfg, cfg)
 }

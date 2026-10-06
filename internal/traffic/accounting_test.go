@@ -25,6 +25,8 @@ func TestParseRawAccountingCounters(t *testing.T) {
 [5:1234567890] -A SBM_EGRESS_TX -d 203.0.113.1/32 -p udp -m udp --dport 51820 -m comment --comment "sbm-egress:aws:tx:abc123"
 [7:987654321] -A SBM_EGRESS_RX -s 203.0.113.1/32 -p udp -m udp --sport 51820 -m comment --comment "sbm-egress:aws:rx:def456"
 [9:123] -A INPUT -m comment --comment "a user rule" -j DROP
+[0:0] -A INPUT -m comment --comment "sbm-egress-jump-rx" -j SBM_EGRESS_RX
+[0:0] -A OUTPUT -m comment --comment "sbm-egress-jump-tx" -j SBM_EGRESS_TX
 COMMIT
 `
 	snapshot, err := parseAccounting([]byte(raw))
@@ -33,6 +35,9 @@ COMMIT
 	}
 	if len(snapshot.rules) != 2 || snapshot.rules[0].bytes != 1234567890 || snapshot.rules[1].bytes != 987654321 || !snapshot.chains[txChain] {
 		t.Fatal("raw counters incorrectly parsed")
+	}
+	if len(snapshot.jumps) != 2 || snapshot.jumps[0].position != 2 || snapshot.jumps[1].position != 1 {
+		t.Fatal("accounting jump order incorrectly parsed")
 	}
 	g := model.EgressGateway{ID: "aws", Server: "203.0.113.1", ServerPort: 51820}
 	if !ruleMatches(snapshot.rules[0], g, "tx") || !ruleMatches(snapshot.rules[1], g, "rx") {
@@ -59,7 +64,7 @@ func (c *accountingCommander) Run(_ context.Context, name string, args ...string
 func TestAccountingPreservesUnchangedRules(t *testing.T) {
 	k, _ := protocol.GenerateWireGuardKeys()
 	g := model.EgressGateway{ID: "aws", Enabled: true, TunnelSlot: 1, Server: "203.0.113.1", ServerPort: 51820, PrivateKey: k.Private, PeerPublicKey: k.Public, TrafficQuota: model.DefaultConfig().TrafficQuota, Reset: model.DefaultConfig().Reset}
-	c := &accountingCommander{raw: []byte(":SBM_EGRESS_TX - [0:0]\n:SBM_EGRESS_RX - [0:0]\n[1:100] -A SBM_EGRESS_TX -d 203.0.113.1/32 -p udp -m udp --dport 51820 -m comment --comment sbm-egress:aws:tx:one\n[2:200] -A SBM_EGRESS_RX -s 203.0.113.1/32 -p udp -m udp --sport 51820 -m comment --comment sbm-egress:aws:rx:two\n")}
+	c := &accountingCommander{raw: []byte(":SBM_EGRESS_TX - [0:0]\n:SBM_EGRESS_RX - [0:0]\n[0:0] -A OUTPUT -m comment --comment sbm-egress-jump-tx -j SBM_EGRESS_TX\n[0:0] -A INPUT -m comment --comment sbm-egress-jump-rx -j SBM_EGRESS_RX\n[1:100] -A SBM_EGRESS_TX -d 203.0.113.1/32 -p udp -m udp --dport 51820 -m comment --comment sbm-egress:aws:tx:one\n[2:200] -A SBM_EGRESS_RX -s 203.0.113.1/32 -p udp -m udp --sport 51820 -m comment --comment sbm-egress:aws:rx:two\n")}
 	boot := filepath.Join(t.TempDir(), "boot")
 	if err := os.WriteFile(boot, []byte("boot-one"), 0600); err != nil {
 		t.Fatal(err)
@@ -72,7 +77,7 @@ func TestAccountingPreservesUnchangedRules(t *testing.T) {
 		t.Fatal("wrong counters/generation")
 	}
 	for _, call := range c.calls {
-		if strings.Contains(call, " -A ") || strings.Contains(call, " -D ") || strings.Contains(call, " -F ") {
+		if strings.Contains(call, " -A ") || strings.Contains(call, " -D ") || strings.Contains(call, " -I ") || strings.Contains(call, " -F ") {
 			t.Fatal("unchanged counters were modified")
 		}
 	}
@@ -153,6 +158,28 @@ func TestLinuxAccountingIntegration(t *testing.T) {
 	if second["jp"].TX != 156 || second["jp"].RX != 92 || second["aws"].TX != first["aws"].TX {
 		t.Fatal("second gateway counters cross-contaminated")
 	}
+	// A firewall reload may prepend terminal rules or duplicate our jumps.
+	// Restore one first-position jump without clearing any tunnel counters.
+	for _, spec := range []struct{ parent, direction, chain string }{{"OUTPUT", "tx", txChain}, {"INPUT", "rx", rxChain}} {
+		linuxCommand(t, "iptables", "-A", spec.parent, "-m", "comment", "--comment", "sbm-egress-jump-"+spec.direction, "-j", spec.chain)
+		linuxCommand(t, "iptables", "-I", spec.parent, "1", "-m", "comment", "--comment", "user-accept-"+spec.direction, "-j", "ACCEPT")
+	}
+	repaired, err := a.Sample(context.Background(), gateways)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired["aws"] != second["aws"] || repaired["jp"] != second["jp"] {
+		t.Fatal("jump repair reset tunnel counters or generations")
+	}
+	ordered, err := a.snapshot(context.Background())
+	if err != nil || len(ordered.jumps) != 2 || ordered.jumps[0].position != 1 || ordered.jumps[1].position != 1 {
+		t.Fatal("jump order/duplicates were not repaired")
+	}
+	exchange(gateways[0])
+	repaired, err = a.Sample(context.Background(), gateways)
+	if err != nil || repaired["aws"].TX != 312 || repaired["aws"].RX != 184 || repaired["jp"] != second["jp"] {
+		t.Fatal("repaired jumps missed or double-counted UDP traffic")
+	}
 	// Rebuild only TX: keep RX and the other gateway's counters/generation.
 	snapshot, err := a.snapshot(context.Background())
 	if err != nil {
@@ -177,10 +204,10 @@ func TestLinuxAccountingIntegration(t *testing.T) {
 	if strings.Contains(saved, "sbm-egress:") || strings.Contains(saved, "sbm-egress-jump") {
 		t.Fatal("deleted accounting rules remain")
 	}
-	if !strings.Contains(saved, "user-test-rule") || !strings.Contains(saved, "-j DROP") {
+	if !strings.Contains(saved, "user-test-rule") || !strings.Contains(saved, "-j DROP") || !strings.Contains(saved, "user-accept-tx") || !strings.Contains(saved, "user-accept-rx") {
 		t.Fatal("existing user firewall changed")
 	}
-	t.Log(fmt.Sprintf("two gateways: TX/RX 156/92 bytes each; reconstruction/deletion preserved user DROP rule"))
+	t.Log(fmt.Sprintf("independent TX/RX 156/92 bytes per exchange; jump repair, reconstruction and deletion preserved user ACCEPT/DROP rules"))
 }
 
 func TestAccountingRejectsUnownedVerdictsInReservedChain(t *testing.T) {

@@ -146,6 +146,8 @@ Subscriptions list all Direct inbounds first, followed by gateways grouped in di
 
 On A, `SBM_EGRESS_TX` and `SBM_EGRESS_RX` filter accounting chains contain uniquely commented rules for each B IPv4 + UDP port. Counter rules have no ACCEPT/DROP target and return to the existing INPUT/OUTPUT flow. SBM never flushes host rules or removes UFW/firewalld policies. Parsing uses raw byte counters from `iptables-save -c -t filter`.
 
+Sampling checks the position and number of owned jumps, maintaining one first-position jump per parent chain while preserving tunnel counters and user rules. After all gateways are disabled and cleanup succeeds, polling stops invoking iptables; inactive monthly periods still advance. Gateway sampling runs independently of the entry's global counters and quota checks. Global usage includes all proxy traffic served by the entry, while each gateway independently estimates B's plan usage; these figures must not be added together.
+
 Counters include encrypted tunnel packets, IP/UDP overhead, handshakes, and keepalives. They also include other programs talking to that same peer address/port, so each gateway's IPv4 + UDP port pair must be unique.
 
 ```text

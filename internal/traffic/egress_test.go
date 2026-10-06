@@ -3,8 +3,12 @@ package traffic
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,10 +19,63 @@ import (
 type fakeGatewaySampler struct {
 	counters map[string]GatewayCounters
 	err      error
+	calls    int
 }
 
 func (f *fakeGatewaySampler) Sample(context.Context, []model.EgressGateway) (map[string]GatewayCounters, error) {
+	f.calls++
 	return f.counters, f.err
+}
+
+type blockingGatewaySampler struct{ started chan struct{} }
+
+func (s *blockingGatewaySampler) Sample(ctx context.Context, _ []model.EgressGateway) (map[string]GatewayCounters, error) {
+	close(s.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestBlockedGatewaySamplingDoesNotDelayCoreTraffic(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.EgressGateways = []model.EgressGateway{{ID: "aws", Enabled: true}}
+	tracker := NewForTest(model.DefaultState(time.Now()), &configSource{cfg: cfg}, nil, time.Now)
+	sampler := &blockingGatewaySampler{started: make(chan struct{})}
+	tracker.Gateways = sampler
+	var samples atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"uploadTotal":%d,"downloadTotal":0}`, samples.Add(1))
+	}))
+	defer api.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		tracker.Run(ctx, ClashClient{URL: api.URL})
+		close(done)
+	}()
+	select {
+	case <-sampler.started:
+	case <-time.After(7 * time.Second):
+		t.Fatal("gateway sampler did not start")
+	}
+	before := tracker.State().Upload
+	deadline := time.NewTimer(1500 * time.Millisecond)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for tracker.State().Upload <= before {
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("blocked gateway sampling delayed original core traffic sampling")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tracker did not join its cancelled gateway sampler")
+	}
 }
 func gatewayTracker(t *testing.T) (*Tracker, *store.ConfigStore, *fakeGatewaySampler, *time.Time) {
 	t.Helper()
@@ -156,4 +213,86 @@ func TestGatewaySnapshotIsIndependentAndConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestDisabledGatewaysDoNotDependOnAccountingAfterCleanup(t *testing.T) {
+	tracker, config, sampler, now := gatewayTracker(t)
+	sampler.counters["aws"] = GatewayCounters{TX: 200, RX: 300, TXGeneration: "one", RXGeneration: "one"}
+	release := tracker.BeginEgressChange(context.Background())
+	old := config.Get()
+	next := config.Get()
+	for i := range next.EgressGateways {
+		next.EgressGateways[i].Enabled = false
+	}
+	_ = config.Replace(next)
+	if err := tracker.CommitEgressChange(context.Background(), old, next); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	calls := sampler.calls
+	sampler.err = errors.New("accounting unavailable")
+	if err := tracker.SampleGateways(context.Background()); err != nil || sampler.calls != calls {
+		t.Fatal("disabled gateways still depend on kernel accounting")
+	}
+	if s := tracker.State().Egress["aws"]; s.TX != 100 || s.RX != 100 || s.Status != "disabled" {
+		t.Fatal("disabling gateway lost its final usage")
+	}
+	*now = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	_ = tracker.SampleGateways(context.Background())
+	if s := tracker.State().Egress["aws"]; s.TX != 0 || s.RX != 0 || s.NextResetAt.Month() != time.December || sampler.calls != calls {
+		t.Fatal("inactive monthly reset requires kernel accounting")
+	}
+}
+
+func TestDeletedLastGatewayRetriesFailedAccountingCleanup(t *testing.T) {
+	tracker, config, sampler, _ := gatewayTracker(t)
+	release := tracker.BeginEgressChange(context.Background())
+	old := config.Get()
+	next := config.Get()
+	next.EgressGateways = nil
+	_ = config.Replace(next)
+	sampler.err = errors.New("accounting unavailable")
+	if err := tracker.CommitEgressChange(context.Background(), old, next); err == nil {
+		t.Fatal("failed cleanup was not reported")
+	}
+	release()
+	if !tracker.State().EgressAccountingPending || len(tracker.State().Egress) != 0 {
+		t.Fatal("deleted state retained or failed cleanup forgotten")
+	}
+	sampler.err = nil
+	calls := sampler.calls
+	if err := tracker.SampleGateways(context.Background()); err != nil || sampler.calls != calls+1 || tracker.State().EgressAccountingPending {
+		t.Fatal("last gateway cleanup did not retry")
+	}
+	_ = tracker.SampleGateways(context.Background())
+	if sampler.calls != calls+1 {
+		t.Fatal("empty optional layer kept polling accounting")
+	}
+}
+
+func TestGatewayStateSurvivesPanelRestartWithoutDoubleCounting(t *testing.T) {
+	tracker, config, sampler, now := gatewayTracker(t)
+	path := filepath.Join(t.TempDir(), "state.json")
+	tracker.file = store.NewJSONFile[model.State](path)
+	sampler.counters["aws"] = GatewayCounters{TX: 210, RX: 320, TXGeneration: "one", RXGeneration: "one"}
+	_ = tracker.SampleGateways(context.Background())
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(path, config, nil, func() time.Time { return *now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.Gateways = sampler
+	if err := restarted.ReconcileGateways(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := restarted.State().Egress["aws"]; s.TX != 110 || s.RX != 120 {
+		t.Fatal("panel restart recounted persisted counters")
+	}
+	sampler.counters["aws"] = GatewayCounters{TX: 220, RX: 335, TXGeneration: "one", RXGeneration: "one"}
+	_ = restarted.SampleGateways(context.Background())
+	if s := restarted.State().Egress["aws"]; s.TX != 120 || s.RX != 135 {
+		t.Fatal("panel restart lost the incremental baseline")
+	}
 }

@@ -146,6 +146,8 @@ SG-Singapore-VLESS-SG1
 
 A 上的 `SBM_EGRESS_TX`、`SBM_EGRESS_RX` filter accounting chain 使用带唯一 comment 的规则。规则只按 B 的 IPv4 + UDP 端口计数，没有 ACCEPT/DROP target，返回原 INPUT/OUTPUT 流程。SBM 不 flush 主机规则，不清理 UFW/firewalld 策略。套餐显示使用 `iptables-save -c -t filter` 的原始字节计数。
 
+每次采样会检查自有计数入口的位置和重复项，保证各有一个首位入口；修复保留已有计数及用户规则。全部停用且清理成功后不再调用 iptables，关闭出口仍按月推进周期。出口采样独立运行，不阻塞入口的全局计数和配额检查。概览总流量代表入口机器服务的全部代理流量，出口卡片独立估算 B 的套餐，不能与总流量相加。
+
 这个计数包含加密封装、IP/UDP 开销、握手和 keepalive；也包含主机上其他程序发往同一 IPv4/UDP 端口的流量。因此每个 Gateway 的 IPv4+UDP 端口组合必须唯一。
 
 ```text

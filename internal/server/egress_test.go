@@ -102,6 +102,36 @@ func gatewaySubscription(t *testing.T, s *Server) ([]*url.URL, string) {
 	}
 	return result, resp.Header().Get("Profile-Title")
 }
+func TestDisabledGatewayDraftDoesNotRestartCore(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	commands := &gatewayCommander{}
+	s.Core.Commands = commands
+	input := gatewayInput(t, "203.0.113.1")
+	input.Enabled = false
+	gatewayRequest(t, s, "POST", "/api/egress", input, 201)
+	cfg := s.Config.Get()
+	g := cfg.EgressGateways[0]
+	if len(cfg.Inbounds[0].EgressCredentials) != 1 {
+		t.Fatal("disabled draft credentials were not saved")
+	}
+	g.Marker = "draft"
+	gatewayRequest(t, s, "PUT", "/api/egress/"+g.ID, g, 200)
+	gatewayRequest(t, s, "DELETE", "/api/egress/"+g.ID, nil, 200)
+	if commands.checks != 0 || commands.restarts != 0 || commands.stops != 0 {
+		t.Fatalf("disabled draft disrupted core: checks=%d restarts=%d stops=%d", commands.checks, commands.restarts, commands.stops)
+	}
+	if len(s.Config.Get().Inbounds[0].EgressCredentials) != 0 {
+		t.Fatal("deleted draft retained credentials")
+	}
+	gatewayRequest(t, s, "POST", "/api/egress", input, 201)
+	g = s.Config.Get().EgressGateways[0]
+	g.Enabled = true
+	gatewayRequest(t, s, "PUT", "/api/egress/"+g.ID, g, 200)
+	if commands.checks != 1 || commands.restarts != 1 {
+		t.Fatal("enabling draft did not apply the additional egress")
+	}
+}
 func TestGatewayLifecycleAPIAndSubscription(t *testing.T) {
 	s, _ := testServer(t)
 	geo := &testGeo{}

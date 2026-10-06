@@ -709,7 +709,7 @@ func (s *Server) mutateChange(ctx context.Context, change func(*model.Config) er
 	defer cancel()
 	before, _ := s.Core.Renderer.Render(old)
 	after, _ := s.Core.Renderer.Render(next)
-	if !bytes.Equal(before, after) || !reflect.DeepEqual(old.Inbounds, next.Inbounds) {
+	if !bytes.Equal(before, after) || !equalDirectInbounds(old.Inbounds, next.Inbounds) {
 		if err := s.Core.Apply(applyCtx, next, s.Traffic.State().QuotaExceeded); err != nil {
 			_ = s.Config.Replace(old)
 			return err
@@ -724,6 +724,24 @@ func (s *Server) mutateChange(ctx context.Context, change func(*model.Config) er
 	s.syncHostFirewall(old, next)
 	s.invalidateHealth()
 	return nil
+}
+
+func equalDirectInbounds(old, next []model.Inbound) bool {
+	// Draft egress credentials are persisted before activation but do not
+	// change the running core. Keep the existing Direct recovery behavior for
+	// inbound edits, including display names, without restarting for drafts.
+	direct := func(inbounds []model.Inbound) []model.Inbound {
+		if inbounds == nil {
+			return nil
+		}
+		result := make([]model.Inbound, len(inbounds))
+		copy(result, inbounds)
+		for i := range result {
+			result[i].EgressCredentials = nil
+		}
+		return result
+	}
+	return reflect.DeepEqual(direct(old), direct(next))
 }
 
 func (s *Server) captureTraffic(ctx context.Context) error {

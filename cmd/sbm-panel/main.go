@@ -241,7 +241,11 @@ func runServe(args []string) {
 	if err := tracker.ReconcileGateways(ctx); err != nil {
 		log.Print("出口流量计数暂不可用，代理核心不受影响")
 	}
-	go tracker.Run(ctx, clashClient)
+	trackerDone := make(chan struct{})
+	go func() {
+		tracker.Run(ctx, clashClient)
+		close(trackerDone)
+	}()
 	errCh := make(chan error, 1)
 	go func() {
 		if *plainHTTP {
@@ -260,10 +264,16 @@ func runServe(args []string) {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+	stop()
+	select {
+	case <-trackerDone:
+	case <-shutdownCtx.Done():
+		log.Print("关闭时等待流量采样结束超时")
+	}
 	if err := tracker.Persist(); err != nil {
 		log.Printf("关闭时保存流量状态失败：%v", err)
 	}
-	_ = httpServer.Shutdown(shutdownCtx)
 }
 
 func loadCore(p *paths) (*store.ConfigStore, *core.Manager) {

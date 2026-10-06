@@ -40,10 +40,18 @@ type accountingRule struct {
 type accountingSnapshot struct {
 	chains map[string]bool
 	rules  []accountingRule
+	jumps  []accountingJump
+}
+
+type accountingJump struct {
+	parent   string
+	position int
+	args     []string
 }
 
 func parseAccounting(data []byte) (accountingSnapshot, error) {
 	result := accountingSnapshot{chains: map[string]bool{}}
+	positions := map[string]int{}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
@@ -55,7 +63,7 @@ func parseAccounting(data []byte) (accountingSnapshot, error) {
 			result.chains[strings.TrimPrefix(fields[0], ":")] = true
 			continue
 		}
-		if len(fields) < 5 || fields[1] != "-A" || (fields[2] != txChain && fields[2] != rxChain) {
+		if len(fields) < 5 || fields[1] != "-A" {
 			continue
 		}
 		args := append([]string(nil), fields[3:]...)
@@ -63,6 +71,17 @@ func parseAccounting(data []byte) (accountingSnapshot, error) {
 			args[i] = strings.Trim(args[i], `"`)
 		}
 		comment := ruleValue(args, "--comment")
+		if fields[2] == "INPUT" || fields[2] == "OUTPUT" {
+			positions[fields[2]]++
+			if (fields[2] == "INPUT" && comment == "sbm-egress-jump-rx" && ruleValue(args, "-j") == rxChain) ||
+				(fields[2] == "OUTPUT" && comment == "sbm-egress-jump-tx" && ruleValue(args, "-j") == txChain) {
+				result.jumps = append(result.jumps, accountingJump{parent: fields[2], position: positions[fields[2]], args: args})
+			}
+			continue
+		}
+		if fields[2] != txChain && fields[2] != rxChain {
+			continue
+		}
 		parts := strings.Split(comment, ":")
 		if len(parts) != 4 || parts[0] != "sbm-egress" || (parts[2] != "tx" && parts[2] != "rx") || ruleValue(args, "-j") != "" || ruleValue(args, "-g") != "" {
 			return result, errors.New("reserved accounting chain contains an unowned rule")
@@ -182,16 +201,26 @@ func (a *Accounting) Sample(ctx context.Context, gateways []model.EgressGateway)
 		if i == 1 {
 			parent, direction = "INPUT", "rx"
 		}
-		jump := []string{parent, "-m", "comment", "--comment", "sbm-egress-jump-" + direction, "-j", chain}
-		// -C checks semantic equality and does not read locale-dependent output.
-		checkErr := a.iptables(ctx, append([]string{"-C"}, jump...)...)
-		if len(desired) > 0 && checkErr != nil {
-			insert := append([]string{"-I", parent, "1"}, jump[1:]...)
-			if err := a.iptables(ctx, insert...); err != nil {
+		jump := []string{"-m", "comment", "--comment", "sbm-egress-jump-" + direction, "-j", chain}
+		var existing []accountingJump
+		for _, j := range snapshot.jumps {
+			if j.parent == parent {
+				existing = append(existing, j)
+			}
+		}
+		// A jump below an ACCEPT/DROP no longer observes all packets, while
+		// duplicate jumps double count. Repair only our commented jumps and
+		// preserve the tunnel rules' counters/generations and user verdicts.
+		if len(desired) > 0 && len(existing) == 1 && existing[0].position == 1 && strings.Join(existing[0].args, " ") == strings.Join(jump, " ") {
+			continue
+		}
+		for _, j := range existing {
+			if err := a.iptables(ctx, append([]string{"-D", parent}, j.args...)...); err != nil {
 				return nil, err
 			}
-		} else if len(desired) == 0 && checkErr == nil {
-			if err := a.iptables(ctx, append([]string{"-D"}, jump...)...); err != nil {
+		}
+		if len(desired) > 0 {
+			if err := a.iptables(ctx, append([]string{"-I", parent, "1"}, jump...)...); err != nil {
 				return nil, err
 			}
 		}

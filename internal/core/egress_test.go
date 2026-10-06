@@ -146,25 +146,28 @@ func TestNoGatewayRenderUnchanged(t *testing.T) {
 		cfg.Inbounds[i].EgressCredentials = nil
 	}
 	renderer := Renderer{Registry: protocol.DefaultRegistry()}
-	before, err := renderer.Render(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// A fully disabled optional layer must render exactly the original document.
 	optional := multiEgressConfig(t)
-	optional.Inbounds = cfg.Inbounds
+	optional.Inbounds = append([]model.Inbound(nil), cfg.Inbounds...)
 	for i := range optional.EgressGateways {
 		optional.EgressGateways[i].Enabled = false
 	}
 	if err := protocol.SyncEgressCredentials(&optional); err != nil {
 		t.Fatal(err)
 	}
-	after, err := renderer.Render(optional)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("disabled gateways changed direct configuration")
+	for _, strategy := range []string{"auto", "prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only"} {
+		cfg.OutboundStrategy, optional.OutboundStrategy = strategy, strategy
+		before, err := renderer.Render(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := renderer.Render(optional)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatalf("disabled gateways changed direct configuration for %s", strategy)
+		}
 	}
 }
 func testCertificate(t *testing.T) (string, string) {
