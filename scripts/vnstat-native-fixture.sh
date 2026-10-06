@@ -60,3 +60,7 @@ wait "$daemon"
 daemon=""
 export SBM_VNSTAT_TEST_CONFIG="$fixture/vnstat.conf"
 "$fixture/nettraffic.test" -test.run '^TestNativeVnStat$' -test.v
+if [[ -x "$fixture/traffic.test" ]]; then
+  export SBM_VNSTAT_TEST_DAEMON="$fixture/extracted/usr/sbin/vnstatd"
+  "$fixture/traffic.test" -test.run '^TestNativeVnStatAccounting$' -test.v
+fi

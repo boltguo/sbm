@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -29,6 +29,7 @@ jobs:
       - run: npm run build
         working-directory: web
       - run: bash scripts/frontend-style-unit.sh
+      - run: node web/scripts/egress-race-unit.mjs
       # The bundle is committed and embedded by the Go build, so it must match
       # web/src. Releases rebuild it anyway; this keeps the repo copy honest.
       - name: Verify the committed frontend bundle is up to date
@@ -39,10 +40,11 @@ jobs:
             exit 1
           fi
       - run: bash -n install.sh scripts/*.sh
-      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck iptables iproute2
+      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck iptables iproute2 vnstat
       - run: shellcheck install.sh scripts/*.sh
       - run: bash scripts/install-unit.sh
       - run: bash scripts/vnstat-config-unit.sh
+      - run: bash scripts/vnstat-native-test.sh
       - run: bash scripts/sing-box-integration.sh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -57,7 +59,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

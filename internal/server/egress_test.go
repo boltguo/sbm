@@ -180,6 +180,19 @@ func TestGatewayLifecycleAPIAndSubscription(t *testing.T) {
 	if commander.checks != checks {
 		t.Fatal("display rename restarted core")
 	}
+	// This edit actually swaps two enabled gateways; changing 0 to 0 did not.
+	restarts := commander.restarts
+	aws.Position = 2
+	gatewayRequest(t, s, "PUT", "/api/egress/"+aws.ID, aws, 200)
+	if commander.checks != checks || commander.restarts != restarts {
+		t.Fatal("display reorder restarted core")
+	}
+	links, _ = gatewaySubscription(t, s)
+	if links[2].Fragment != "JP-Tokyo-VLESS-JP1" {
+		t.Fatal("display order did not change subscription")
+	}
+	aws.Position = 0
+	gatewayRequest(t, s, "PUT", "/api/egress/"+aws.ID, aws, 200)
 	aws.Enabled = false
 	gatewayRequest(t, s, "PUT", "/api/egress/"+aws.ID, aws, 200)
 	links, _ = gatewaySubscription(t, s)

@@ -21,6 +21,7 @@ type networkRecord struct {
 	Generation    string
 	AvailableFrom time.Time
 	Revision      uint64
+	Baseline      []nettraffic.Bucket
 }
 
 func (t *Tracker) UsesVnStat() bool { return t.NetworkReader != nil }
@@ -73,6 +74,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 	generation := networkGeneration(req, snapshot)
 	t.mu.RLock()
 	previous := t.state.Network[id]
+	pending := t.pendingNetwork[id]
 	t.mu.RUnlock()
 	if previous.Generation != "" {
 		if previous.Origin == networkOrigin(req, snapshot) && previous.CreatedAt.Equal(snapshot.CreatedAt) {
@@ -83,6 +85,11 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 	}
 	if generation == previous.Generation && (snapshot.UpdatedAt.Before(previous.UpdatedAt) || snapshot.RX < previous.LastRX || snapshot.TX < previous.LastTX) {
 		err = errors.New("vnStat counters moved backwards; last saved usage retained")
+		t.networkFailure(id, err)
+		return err
+	}
+	if generation != previous.Generation && t.now().Sub(snapshot.UpdatedAt) > 3*time.Minute {
+		err := errors.New("vnStat database is stale; waiting for a fresh source baseline")
 		t.networkFailure(id, err)
 		return err
 	}
@@ -100,6 +107,9 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		st.CarryTX = 0
 		if reset.Mode == "monthly" {
 			st.PeriodStartedAt = start
+			if st.RecordedFrom.After(start) {
+				st.PeriodStartedAt = st.RecordedFrom
+			}
 		} else if st.PeriodStartedAt.IsZero() {
 			st.PeriodStartedAt = snapshot.CreatedAt
 			st.Manual = true
@@ -107,7 +117,20 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 			st.BaselineTX = 0
 		}
 	}
-	available := snapshot.CreatedAt
+	available := st.SourceStartedAt
+	if available.IsZero() {
+		available = snapshot.CreatedAt
+	}
+	if previous.Generation == "" {
+		// Start at the first saved sample, even when the host already has vnStat
+		// history. Installing SBM does not import earlier NIC usage.
+		available = snapshot.UpdatedAt
+		st.RecordedFrom = available
+		st.PeriodStartedAt = available
+		st.Manual = true
+		st.BaselineRX, st.BaselineTX = snapshot.RX, snapshot.TX
+		st.CarryRX, st.CarryTX = 0, 0
+	}
 	if previous.Generation != "" && previous.Generation != generation {
 		// Recreated database: keep already-recorded usage and collect new bytes.
 		// A different interface/host may have overlapping history, so establish a
@@ -119,7 +142,16 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 			}
 			old.CreatedAt = previous.CreatedAt
 			old.UpdatedAt = previous.UpdatedAt
-			st.RX, st.TX, _ = nettraffic.Sum(old, st.PeriodStartedAt, now)
+			prefix, err := readNetworkRows(ctx, t.history.db, id, previous.Generation, true)
+			if err != nil {
+				return err
+			}
+			old = networkSince(old, previous.SourceStartedAt, prefix.Buckets)
+			from := st.PeriodStartedAt
+			if previous.SourceStartedAt.After(from) {
+				from = previous.SourceStartedAt
+			}
+			st.RX, st.TX, _ = nettraffic.Sum(old, from, now)
 		}
 		st.Manual = true
 		st.CarryRX = st.RX
@@ -128,13 +160,31 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		st.BaselineTX = snapshot.TX
 		available = now
 		if previous.Origin == networkOrigin(req, snapshot) && snapshot.CreatedAt.After(previous.UpdatedAt) {
-			st.BaselineRX = 0
-			st.BaselineTX = 0
 			available = snapshot.CreatedAt
+			from := st.PeriodStartedAt
+			if st.RecordedFrom.After(from) {
+				from = st.RecordedFrom
+			}
+			// Lifetime totals may include bytes before the new billing period.
+			rx, tx, _ := nettraffic.Sum(snapshot, from, snapshot.UpdatedAt)
+			st.BaselineRX = snapshot.RX - rx
+			st.BaselineTX = snapshot.TX - tx
 		}
 		st.Partial = true
 	}
 	record := networkRecord{Snapshot: snapshot, Generation: generation, AvailableFrom: available}
+	if pending.Generation == generation {
+		record.Baseline = pending.Baseline
+	}
+	if generation != previous.Generation && available.After(snapshot.CreatedAt) {
+		// Keep the prefix of the buckets containing the first sample. History
+		// can subtract it exactly without importing earlier bytes in that day.
+		for _, b := range snapshot.Buckets {
+			if b.Start <= available.Unix() && b.Start+b.Seconds > available.Unix() {
+				record.Baseline = append(record.Baseline, b)
+			}
+		}
+	}
 	// Merge retained SBM buckets with the source's complete snapshot. Replacing
 	// a bucket, rather than adding every response, makes retries idempotent.
 	merged := snapshot
@@ -154,6 +204,16 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		st.RX = addSaturating(st.CarryRX, max(0, snapshot.RX-st.BaselineRX))
 		st.TX = addSaturating(st.CarryTX, max(0, snapshot.TX-st.BaselineTX))
 	} else {
+		prefix := record.Baseline
+		if t.history != nil {
+			baseline, err := readNetworkRows(ctx, t.history.db, id, generation, true)
+			if err != nil {
+				t.networkFailure(id, err)
+				return err
+			}
+			prefix = append(prefix, baseline.Buckets...)
+		}
+		merged = networkSince(merged, available, prefix)
 		st.RX, st.TX, st.Partial = nettraffic.Sum(merged, st.PeriodStartedAt, snapshot.UpdatedAt)
 		if generation == previous.Generation && !resetChanged && !periodChanged && (st.RX < previous.RX || st.TX < previous.TX) {
 			// A missing or inconsistent source bucket cannot erase bytes already
@@ -168,6 +228,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 	st.Interface = snapshot.Interface
 	st.Generation = generation
 	st.CreatedAt = snapshot.CreatedAt
+	st.SourceStartedAt = available
 	st.UpdatedAt = snapshot.UpdatedAt
 	st.LastRX = snapshot.RX
 	st.LastTX = snapshot.TX
@@ -309,7 +370,7 @@ func (t *Tracker) reconcileNetworkQuota(ctx context.Context) error {
 	t.mu.Lock()
 	st := t.state.Network[EntryNetworkScope]
 	// Missing source data must not clear a persisted safety stop on startup.
-	if st.Generation == "" || (!st.Available) || st.UpdatedAt.Before(st.PeriodStartedAt) {
+	if limit > 0 && (st.Generation == "" || (!st.Available) || st.UpdatedAt.Before(st.PeriodStartedAt)) {
 		t.mu.Unlock()
 		return t.reconcileCore(ctx)
 	}

@@ -17,11 +17,11 @@ The Egress page manages optional gateways while keeping one master subscription.
 
 For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; entry quota enforcement uses the entry public interface’s vnStat counters. Exit cards retain WireGuard tunnel estimates without installing collectors on B.
 
-See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). This extension retains v4 config / v1 state and directly loads existing 2.0.2 configurations. With no gateways, Direct proxy and subscription behavior is unchanged; entry traffic accounting uses vnStat in either case. Build this development code to deploy the new feature; the published 2.0.2 archive does not contain these changes.
+See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Version 2.1.0 retains v4 config / v1 state. With no gateways, Direct proxy and subscription behavior is unchanged; entry traffic accounting uses vnStat in either case. Conflicting node names receive a stable port and identifier before the final marker. Changing display order does not restart the core.
 
 ## Install
 
-SBM uses v4 configuration. Existing 2.0.2 v4 installations can upgrade directly. Older 1.x configurations are not migrated or partially loaded; back up those installations and deploy with a fresh v4 configuration.
+SBM uses v4 configuration. This version starts fresh traffic accounting, without migrating old traffic or reconstructing pre-install usage. Existing v4 business configurations require the new installer to update the panel; do not rely only on an already-loaded old management script. Older 1.x configurations are not migrated or partially loaded; deploy with a fresh v4 configuration.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -53,10 +53,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.0.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x does not provide 1.x configuration migration or old SBM release mappings.
+The current installer requires SBM 2.1 or later within 2.x and selects the sing-box version tested with that release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. It does not install or downgrade to old panels that lack the vnStat source preflight command.
 
 The installer asks for:
 
@@ -125,9 +125,9 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 Under `Settings → Plan traffic and period`, choose GB or GiB exactly as shown by the provider: GB uses 1000³ bytes and GiB uses 1024³ bytes. Enter DMIT `1000 GB` as `1000 GB`, or GCP `200 GiB` as `200 GiB`.
 
-Traffic accounting uses **vnStat 2 on the selected public network interface**. One-way plans use transmitted bytes (TX); two-way plans use received plus transmitted bytes (RX + TX). NIC counters are already measured in both directions and are never multiplied by two. The safety stop is the advertised allowance minus the configured reserve. SSH, system updates, WireGuard overhead and other traffic on that interface are included. Provider accounting may still differ; the provider dashboard remains authoritative.
+Traffic accounting uses **vnStat 2.10 or newer on the selected public network interface**. One-way plans use transmitted bytes (TX); two-way plans use received plus transmitted bytes (RX + TX). NIC counters are already measured in both directions and are never multiplied by two. The safety stop is the advertised allowance minus the configured reserve. SSH, system updates, WireGuard overhead and other traffic on that interface are included. Provider accounting may still differ; the provider dashboard remains authoritative.
 
-The installer enables vnStat, uses UTC source buckets, saves every minute, and retains at least 90 days of daily records, 40 days of hourly records and 48 hours of five-minute records. Existing longer or unlimited retention and the source database are preserved. Set `Settings → vnStat public interface` explicitly when the default-route interface is not the billing interface, or when there are multiple public interfaces. A blank setting selects the Linux default-route interface. Select two-way for a two-way plan; do not divide the allowance yourself.
+Ubuntu 24.04 provides vnStat 2.12. A compatible installed vnStat is reused; otherwise the installer installs the system package. Versions below 2.10 are rejected, and real JSON data for the selected interface is checked before replacing the panel. The installer enables vnStat, uses UTC source buckets, saves every minute, and retains at least 90 days of daily records, 40 days of hourly records and 48 hours of five-minute records. Existing longer or unlimited retention and the source database are preserved. Set `Settings → vnStat public interface` explicitly when the default-route interface is not the billing interface, or when there are multiple public interfaces. A blank setting selects the Linux default-route interface. Select two-way for a two-way plan; do not divide the allowance yourself.
 
 A subscription client may display `G` as GiB; this does not change SBM's enforced limit.
 
@@ -135,7 +135,7 @@ Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box sto
 
 ### Daily and monthly traffic history
 
-The Overview page shows vnStat RX, TX and total bytes by day or calendar month. sing-box proxy traffic appears in small text as a reference in entry history; it is not added to NIC traffic and does not enforce quotas. Legacy sing-box records stay readable as references. Dates without vnStat data show “No vnStat record”, not fabricated zero usage.
+The Overview page shows vnStat RX, TX and total bytes by day or calendar month. sing-box proxy traffic appears in small text as a reference in entry history; it is not added to NIC traffic and does not enforce quotas. The first valid sample establishes a fresh baseline. Earlier host vnStat usage is excluded; the first day records only bytes after activation, without deleting the host database. Dates without vnStat data show “No vnStat record”, not fabricated zero usage.
 
 Exit cards retain the existing per-peer WireGuard estimates and independent reset schedules. They are explicitly labelled as estimates; vnStat runs only on the SBM entry. A tunnel peer’s sent bytes are approximately the other peer’s received bytes, but whole-interface totals also include the other network leg, Direct traffic, other exits and host services. Entry NIC totals are not attributed to individual exits. Exit warnings never stop the entry’s Direct nodes.
 
@@ -145,7 +145,7 @@ The panel reads the entry source every 30 seconds and stores copies in `/var/lib
 
 Source buckets replace earlier versions of the same timestamp instead of accumulating every response. Raw history and the state checkpoint commit in one SQLite transaction. A failed write retains pending records; retries and panel restarts do not double-count. A failed JSON mirror does not discard the committed database. Records already copied into SBM survive vnStat retention expiry and period resets. A custom state path places `traffic.db` in the same directory; override it with `sbm-panel serve --traffic-db /path/to/traffic.db`.
 
-After a connection outage, retained vnStat records restore their original dates. Data from before vnStat was installed, expired source records never copied into SBM, unresolved timezone boundaries and external database recreation can leave gaps; these are marked partial rather than estimated. Changing a database timezone does not repartition older source rows. The fixed history timezone is selected when SBM creates its history database and remains independent of later plan-schedule changes.
+Pre-activation traffic is excluded. After a connection outage, retained records restore their original dates. Source-switch boundaries are persisted, gaps between sources are marked missing, and a recreated database contributes only bytes within the current billing period. Data from before vnStat was installed, expired source records never copied into SBM, unresolved timezone boundaries and external database recreation can leave gaps; these are marked partial rather than estimated. Changing a database timezone does not repartition older source rows. The fixed history timezone is selected when SBM creates its history database and remains independent of later plan-schedule changes.
 
 The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, and inclusive `from` / `to` values in `YYYY-MM-DD` or `YYYY-MM` format. It returns NIC counters separately from proxy references and coverage flags. Internal legacy sing-box and WireGuard checkpoints remain available for auditing and compatibility, but entry dashboard, subscription usage and global quota enforcement use vnStat; exit cards retain their tunnel estimates.
 

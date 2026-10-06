@@ -27,6 +27,25 @@ bash -n "$temp_dir/sbm"
 if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
   [[ "$("$temp_dir/sbm-panel" version)" == "$version" ]]
 
+  # Test candidate source preflight through the shipped CLI, with a private
+  # executable fixture rather than the host's daemon or database.
+  mkdir -p "$temp_dir/bin"
+  cat > "$temp_dir/bin/vnstat" <<'VNSTAT'
+#!/usr/bin/env bash
+cat "$SBM_VNSTAT_SMOKE_JSON"
+VNSTAT
+  chmod 0755 "$temp_dir/bin/vnstat"
+  export SBM_VNSTAT_SMOKE_JSON="$temp_dir/vnstat.json"
+  sample_epoch="$(date +%s)"
+  printf '{"jsonversion":"2","interfaces":[{"name":"ens5","created":{"timestamp":%s},"updated":{"timestamp":%s},"traffic":{"total":{"rx":0,"tx":0}}}]}\n' "$sample_epoch" "$sample_epoch" > "$SBM_VNSTAT_SMOKE_JSON"
+  PATH="$temp_dir/bin:$PATH" "$temp_dir/sbm-panel" vnstat-check --config "$temp_dir/not-yet-created.json" --interface ens5 --vnstat-config "$temp_dir/vnstat.conf"
+  # JSON v2 without epoch timestamps (vnStat 2.9) must fail clearly.
+  printf '{"jsonversion":"2","interfaces":[{"name":"ens5","created":{},"updated":{},"traffic":{"total":{"rx":0,"tx":0}}}]}\n' > "$SBM_VNSTAT_SMOKE_JSON"
+  if PATH="$temp_dir/bin:$PATH" "$temp_dir/sbm-panel" vnstat-check --interface ens5 > "$temp_dir/source-error" 2>&1; then
+    echo 'candidate accepted vnStat without timestamp support' >&2; exit 1
+  fi
+  grep -Fq '2.10' "$temp_dir/source-error"
+
   fake_sing_box="$temp_dir/sing-box"
   password_file="$temp_dir/password"
   printf '%s\n' 'temporary-admin-password' > "$password_file"

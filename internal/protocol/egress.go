@@ -2,12 +2,14 @@ package protocol
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -78,6 +80,74 @@ func EgressVariant(in model.Inbound, g model.EgressGateway) (model.Inbound, bool
 		return variant, true
 	}
 	return model.Inbound{}, false
+}
+
+type EgressNode struct {
+	Gateway model.EgressGateway
+	Inbound model.Inbound
+}
+
+// EgressNodes supplies the same unique names to the node page and subscription.
+// A display reorder never changes the suffix; markers remain at the end.
+func EgressNodes(cfg model.Config) []EgressNode {
+	counts := map[string]int{}
+	for _, in := range cfg.Inbounds {
+		if in.Enabled {
+			counts[in.Name]++
+		}
+	}
+	nodes := []EgressNode{}
+	for _, g := range model.OrderedGateways(cfg.EgressGateways) {
+		if !g.Enabled {
+			continue
+		}
+		for _, in := range cfg.Inbounds {
+			if !in.Enabled {
+				continue
+			}
+			if variant, ok := EgressVariant(in, g); ok {
+				counts[variant.Name]++
+				nodes = append(nodes, EgressNode{g, variant})
+			}
+		}
+	}
+	reserved := map[string]bool{}
+	for _, in := range cfg.Inbounds {
+		if in.Enabled {
+			reserved[in.Name] = true
+		}
+	}
+	var conflicts []int
+	for i := range nodes {
+		if counts[nodes[i].Inbound.Name] < 2 {
+			reserved[nodes[i].Inbound.Name] = true
+		} else {
+			conflicts = append(conflicts, i)
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool {
+		a, b := nodes[conflicts[i]], nodes[conflicts[j]]
+		if a.Gateway.ID != b.Gateway.ID {
+			return a.Gateway.ID < b.Gateway.ID
+		}
+		return a.Inbound.ID < b.Inbound.ID
+	})
+	for _, i := range conflicts {
+		node := &nodes[i]
+		kind := "HY2"
+		if node.Inbound.Type == TypeVLESSReality {
+			kind = "VLESS"
+		}
+		suffix := sha256.Sum256([]byte(node.Gateway.ID + "\x00" + node.Inbound.ID))
+		label := fmt.Sprintf("%s-%d-%x", kind, node.Inbound.Port, suffix[:4])
+		name := gatewayName(node.Gateway, label)
+		for n := 2; reserved[name]; n++ {
+			name = gatewayName(node.Gateway, fmt.Sprintf("%s-%d", label, n))
+		}
+		node.Inbound.Name = name
+		reserved[name] = true
+	}
+	return nodes
 }
 
 // SyncEgressCredentials is used only by configuration mutations, never by a

@@ -19,8 +19,15 @@ type networkQuerier interface {
 }
 
 func readNetwork(ctx context.Context, db networkQuerier, scope, generation string) (nettraffic.Snapshot, error) {
+	return readNetworkRows(ctx, db, scope, generation, false)
+}
+func readNetworkRows(ctx context.Context, db networkQuerier, scope, generation string, baseline bool) (nettraffic.Snapshot, error) {
 	result := nettraffic.Snapshot{}
-	rows, err := db.QueryContext(ctx, `SELECT start, seconds, rx, tx FROM network_bucket WHERE scope=? AND generation=?`, scope, generation)
+	query := `SELECT start, seconds, rx, tx FROM network_bucket WHERE scope=? AND generation=?`
+	if baseline {
+		query = `SELECT start, seconds, rx, tx FROM network_baseline WHERE scope=? AND generation=?`
+	}
+	rows, err := db.QueryContext(ctx, query, scope, generation)
 	if err != nil {
 		return result, err
 	}
@@ -33,6 +40,25 @@ func readNetwork(ctx context.Context, db networkQuerier, scope, generation strin
 		result.Buckets = append(result.Buckets, b)
 	}
 	return result, rows.Err()
+}
+
+func networkSince(snapshot nettraffic.Snapshot, available time.Time, baseline []nettraffic.Bucket) nettraffic.Snapshot {
+	if available.After(snapshot.CreatedAt) {
+		snapshot.CreatedAt = available
+	}
+	snapshot.Buckets = append([]nettraffic.Bucket(nil), snapshot.Buckets...)
+	prefix := map[[2]int64]nettraffic.Bucket{}
+	for _, b := range baseline {
+		prefix[[2]int64{b.Start, b.Seconds}] = b
+	}
+	for i := range snapshot.Buckets {
+		b := &snapshot.Buckets[i]
+		if old, ok := prefix[[2]int64{b.Start, b.Seconds}]; ok {
+			b.RX = max(0, b.RX-old.RX)
+			b.TX = max(0, b.TX-old.TX)
+		}
+	}
+	return snapshot
 }
 func saveNetworks(tx *sql.Tx, pending map[string]networkRecord) error {
 	for scope, r := range pending {
@@ -57,6 +83,11 @@ func saveNetworks(tx *sql.Tx, pending map[string]networkRecord) error {
 		}
 		if err := stmt.Close(); err != nil {
 			return err
+		}
+		for _, b := range r.Baseline {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO network_baseline VALUES(?,?,?,?,?,?)`, scope, r.Generation, b.Start, b.Seconds, b.RX, b.TX); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -92,7 +123,7 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		return result, err
 	}
 	defer tx.Rollback()
-	sources, err := tx.QueryContext(ctx, `SELECT generation,interface,created_at,updated_at,available_from,ended_at FROM network_source WHERE scope=?`, scope)
+	sources, err := tx.QueryContext(ctx, `SELECT generation,interface,created_at,updated_at,available_from,ended_at FROM network_source WHERE scope=? ORDER BY available_from,generation`, scope)
 	if err != nil {
 		return result, err
 	}
@@ -114,14 +145,18 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 	if err != nil {
 		return result, err
 	}
-	buckets := map[string]Usage{}
-	for _, row := range result.Rows {
-		row.ProxyAvailable = true
-		buckets[row.Date] = row
+	if len(all) == 0 {
+		result.Rows = []Usage{}
+		result.Imports = []ImportedUsage{}
+		return result, tx.Commit()
 	}
-	if len(all) > 0 {
-		result.StartedAt = time.Unix(all[0].available, 0).UTC()
+	result.StartedAt = time.Unix(all[0].available, 0).UTC()
+	result.Imports = []ImportedUsage{}
+	type preparedSource struct {
+		snapshot         nettraffic.Snapshot
+		available, ended time.Time
 	}
+	prepared := make([]preparedSource, 0, len(all))
 	for _, source := range all {
 		snapshot, err := readNetwork(ctx, tx, scope, source.generation)
 		if err != nil {
@@ -130,50 +165,86 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		snapshot.Interface = source.iface
 		snapshot.CreatedAt = time.Unix(source.created, 0).UTC()
 		snapshot.UpdatedAt = time.Unix(source.updated, 0).UTC()
+		baseline, err := readNetworkRows(ctx, tx, scope, source.generation, true)
+		if err != nil {
+			return result, err
+		}
+		snapshot = networkSince(snapshot, time.Unix(source.available, 0), baseline.Buckets)
 		if snapshot.UpdatedAt.After(result.UpdatedAt) {
 			result.UpdatedAt = snapshot.UpdatedAt
 		}
-		available := time.Unix(source.available, 0)
-		if available.Before(result.StartedAt) {
-			result.StartedAt = available
+		prepared = append(prepared, preparedSource{snapshot, time.Unix(source.available, 0), time.Unix(source.ended, 0)})
+	}
+	buckets := map[string]Usage{}
+	firstKey := result.StartedAt.In(h.location).Format(time.DateOnly)
+	if granularity == "month" {
+		firstKey = firstKey[:7]
+	}
+	for _, row := range result.Rows {
+		if row.Date < firstKey {
+			continue
 		}
-		for at := start; at.Before(end); at = at.AddDate(0, 0, 1) {
-			next := at.AddDate(0, 0, 1)
-			left, right := at, next
-			if left.Before(available) {
-				left = available
+		row.ProxyAvailable = true
+		buckets[row.Date] = row
+	}
+	// Visit every recorded day, including days outside all source intervals.
+	// Checking each source separately would hide gaps between generations.
+	for at := start; at.Before(end); at = at.AddDate(0, 0, 1) {
+		next := at.AddDate(0, 0, 1)
+		left, right := at, next
+		if left.Before(result.StartedAt) {
+			left = result.StartedAt
+		}
+		if right.After(t.now()) {
+			right = t.now()
+		}
+		if !right.After(left) {
+			continue
+		}
+		key := at.Format(time.DateOnly)
+		if granularity == "month" {
+			key = key[:7]
+		}
+		row := buckets[key]
+		row.Date = key
+		row.NetworkPartial = row.NetworkPartial || left.After(at) || right.Before(next)
+		type interval struct{ left, right time.Time }
+		var coverage []interval
+		for _, source := range prepared {
+			a, z := left, right
+			if a.Before(source.available) {
+				a = source.available
 			}
-			if source.ended > 0 && right.After(time.Unix(source.ended, 0)) {
-				right = time.Unix(source.ended, 0)
+			if source.ended.Unix() > 0 && z.After(source.ended) {
+				z = source.ended
 			}
-			if right.After(snapshot.UpdatedAt) {
-				right = snapshot.UpdatedAt
+			if z.After(source.snapshot.UpdatedAt) {
+				z = source.snapshot.UpdatedAt
 			}
-			if !right.After(left) {
+			if !z.After(a) || !nettraffic.HasCoverage(source.snapshot, a, z) {
 				continue
 			}
-			key := at.Format(time.DateOnly)
-			if granularity == "month" {
-				key = key[:7]
-			}
-			if !nettraffic.HasCoverage(snapshot, left, right) {
-				// Keep missing dates visible and propagate gaps to a monthly total.
-				// A month with other valid days must not look fully recorded.
-				row := buckets[key]
-				row.Date = key
-				row.NetworkPartial = true
-				buckets[key] = row
-				continue
-			}
-			rx, txBytes, partial := nettraffic.Sum(snapshot, left, right)
-			row := buckets[key]
-			row.Date = key
+			rx, txBytes, partial := nettraffic.Sum(source.snapshot, a, z)
 			row.NetworkAvailable = true
 			row.NetworkRX = addSaturating(row.NetworkRX, rx)
 			row.NetworkTX = addSaturating(row.NetworkTX, txBytes)
-			row.NetworkPartial = row.NetworkPartial || partial || left.After(at) || right.Before(next)
-			buckets[key] = row
+			row.NetworkPartial = row.NetworkPartial || partial
+			coverage = append(coverage, interval{a, z})
 		}
+		sort.Slice(coverage, func(i, j int) bool { return coverage[i].left.Before(coverage[j].left) })
+		covered := left
+		for _, interval := range coverage {
+			if interval.left.After(covered) {
+				row.NetworkPartial = true
+			}
+			if interval.right.After(covered) {
+				covered = interval.right
+			}
+		}
+		if covered.Before(right) {
+			row.NetworkPartial = true
+		}
+		buckets[key] = row
 	}
 	result.Rows = nil
 	for _, row := range buckets {

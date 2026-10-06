@@ -58,11 +58,36 @@ func main() {
 		runConfig(os.Args[2:])
 	case "admin":
 		runAdmin(os.Args[2:])
+	case "vnstat-check":
+		runVnStatCheck(os.Args[2:])
 	case "version", "--version", "-version":
 		fmt.Println(version)
 	default:
-		fatal("未知命令；可用命令：serve、init、config apply、admin reset|lock|unlock、version")
+		fatal("未知命令；可用命令：serve、init、config apply、admin reset|lock|unlock、vnstat-check、version")
 	}
+}
+
+func runVnStatCheck(args []string) {
+	set := flag.NewFlagSet("vnstat-check", flag.ExitOnError)
+	config := set.String("config", defaultConfig, "业务配置路径（可尚未初始化）")
+	iface := set.String("interface", "", "公网网卡；留空读取配置或默认路由")
+	sourceConfig := set.String("vnstat-config", "/etc/vnstat.conf", "vnStat 配置路径")
+	_ = set.Parse(args)
+	if *iface == "" {
+		if _, err := os.Stat(*config); err == nil {
+			cfg, err := store.NewJSONFile[model.Config](*config).Load()
+			must(err)
+			*iface = cfg.VnStatInterface
+		} else if !errors.Is(err, os.ErrNotExist) {
+			must(err)
+		}
+	}
+	snapshot, err := (nettraffic.Collector{ConfigPath: *sourceConfig}).Read(context.Background(), nettraffic.Request{Interface: *iface})
+	must(err)
+	if time.Since(snapshot.UpdatedAt) > 3*time.Minute {
+		fatal("vnStat 数据未更新，请检查 vnstat 服务和所选网卡")
+	}
+	fmt.Printf("vnStat source ready: %s\n", snapshot.Interface)
 }
 
 func pathFlags(set *flag.FlagSet) *paths {

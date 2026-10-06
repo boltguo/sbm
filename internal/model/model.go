@@ -202,6 +202,8 @@ type NetworkTrafficState struct {
 	NextResetAt     time.Time   `json:"nextResetAt,omitempty"`
 	UpdatedAt       time.Time   `json:"updatedAt"`
 	CreatedAt       time.Time   `json:"createdAt"`
+	RecordedFrom    time.Time   `json:"recordedFrom"`
+	SourceStartedAt time.Time   `json:"sourceStartedAt"`
 	Status          string      `json:"status"`
 	Reason          string      `json:"reason,omitempty"`
 	Partial         bool        `json:"partial"`

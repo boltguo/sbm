@@ -49,6 +49,16 @@ func newNetworkTest(t *testing.T, now *time.Time) (*Tracker, *networkFake, strin
 	}
 	reader := &networkFake{snapshots: map[string]nettraffic.Snapshot{"entry": networkFixture(*now), "exit-one": networkFixture(*now)}, fail: map[string]bool{}}
 	tracker.NetworkReader = reader
+	// These fixtures represent an installation recording since September 1.
+	// Fresh-install behavior is covered separately with an existing source DB.
+	current := *now
+	*now = reader.snapshots["entry"].CreatedAt
+	reader.snapshots["entry"] = networkFixture(*now)
+	if err := tracker.SampleNetwork(context.Background(), "entry"); err != nil {
+		t.Fatal(err)
+	}
+	*now = current
+	reader.snapshots["entry"] = networkFixture(current)
 	return tracker, reader, dir
 }
 func TestVnStatEntryPeriodAndGatewayRemainIndependent(t *testing.T) {

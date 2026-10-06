@@ -141,7 +141,7 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version > 3 {
+	if version > 4 {
 		return fail(fmt.Errorf("unsupported traffic database version %d", version))
 	}
 	if _, err := db.Exec(`
@@ -168,7 +168,11 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
  scope TEXT NOT NULL, generation TEXT NOT NULL, start INTEGER NOT NULL,
  seconds INTEGER NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
  PRIMARY KEY(scope,generation,start,seconds));
- PRAGMA user_version=3;`); err != nil {
+ CREATE TABLE IF NOT EXISTS network_baseline (
+ scope TEXT NOT NULL, generation TEXT NOT NULL, start INTEGER NOT NULL,
+ seconds INTEGER NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
+ PRIMARY KEY(scope,generation,start,seconds));
+ PRAGMA user_version=4;`); err != nil {
 		return fail(err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO metadata VALUES ('timezone', ?), ('started_at', ?)`, zone, now.UTC().Format(time.RFC3339Nano)); err != nil {

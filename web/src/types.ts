@@ -148,8 +148,6 @@ export interface HealthReport {
 export interface EgressNode { gatewayId: string; name: string; link: string; marker: string; location: string }
 export interface GatewayGeo { ip: string; countryCode: string; country: string; region: string; city: string; updatedAt: string }
 export interface GatewayUsage {
- source: string
- network: { available: boolean; interface: string; generation: string; status: string; reason: string; partial: boolean; rx: number; tx: number; updatedAt: string }
   id: string; name: string; marker: string; location: string; enabled: boolean
   tunnelTX: number; tunnelRX: number; tunnelBytes: number
   trafficQuota: TrafficQuota

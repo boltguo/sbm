@@ -39,9 +39,9 @@ compatible_version="$(compatible_sing_box_version v2.0.2)"
 unset SBM_VERSION SING_BOX_VERSION
 selected_version="$(requested_sbm_version)"
 [[ "$selected_version" == "v${repo_version}" ]]
-SBM_VERSION=2.0.2
+SBM_VERSION=2.1.0
 selected_version="$(requested_sbm_version)"
-[[ "$selected_version" == v2.0.2 ]]
+[[ "$selected_version" == v2.1.0 ]]
 selected_core_version="$(requested_sing_box_version "$selected_version")"
 [[ "$selected_core_version" == v1.13.14 ]]
 unset SBM_VERSION
@@ -58,15 +58,19 @@ if (SBM_VERSION=1.2.3 requested_sbm_version >/dev/null 2>&1); then
   echo "the v2 installer accepted an old SBM release" >&2
   exit 1
 fi
+if (SBM_VERSION=2.0.2 requested_sbm_version >/dev/null 2>&1); then
+  echo 'the current installer accepted a panel without vnstat-check' >&2
+  exit 1
+fi
 
 (
-  github_latest_tag() { printf 'v2.0.2\n'; }
+  github_latest_tag() { printf 'v2.1.0\n'; }
   unset SBM_VERSION
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v2.0.2 ]]
-  SBM_VERSION=2.0.2
+  [[ "$update_target" == v2.1.0 ]]
+  SBM_VERSION=2.1.0
   update_target="$(panel_update_target_version)"
-  [[ "$update_target" == v2.0.2 ]]
+  [[ "$update_target" == v2.1.0 ]]
 )
 
 fresh_config="$(mktemp /tmp/sbm-v4-config.XXXXXX)"
@@ -203,6 +207,7 @@ apt-get() {
 # shellcheck disable=SC2317,SC2329 # Discovered through command -v inside install_deps.
 crontab() { return 0; }
 systemctl() { return 0; }
+vnstat() { printf "vnStat 2.12 by Teemu Toivola\n"; }
 check_required_commands() { return 0; }
 install_deps >/dev/null
 [[ "$installed_cron" == true ]]
@@ -407,4 +412,53 @@ post_install_check node.example.com "$custom_panel_port" >/dev/null
   restore_move_status=1
   if run_restore; then echo 'Failed checkpoint retirement reported success' >&2; exit 1; fi
   if grep -q '^systemctl start' "$restore_trace"; then echo 'Stale checkpoint restarted services' >&2; exit 1; fi
+)
+
+# Installed CLI versions must satisfy the JSON timestamp contract.
+for vnstat_version in 2.10 2.12 2.12.1 3.0; do
+  vnstat() { printf 'vnStat %s by Teemu Toivola\n' "$vnstat_version"; }
+  check_vnstat_version
+done
+for vnstat_version in 1.18 2.9 unknown; do
+  if check_vnstat_version; then echo "unsupported vnStat accepted: $vnstat_version" >&2; exit 1; fi
+done
+
+# Retry source readiness before using a candidate binary. No host services run.
+(
+  preflight_calls=0
+  # shellcheck disable=SC2317,SC2329 # Invoked through wait_vnstat_source's binary argument.
+  candidate_check() {
+    [[ "$*" == "vnstat-check --config $CONFIG_FILE" ]]
+    preflight_calls=$((preflight_calls + 1))
+    (( preflight_calls >= 3 ))
+  }
+  sleep() { :; }
+  wait_vnstat_source candidate_check
+  [[ "$preflight_calls" == 3 ]]
+)
+
+# The downloaded manager executes in a new shell, rather than using old
+# already-loaded repair functions from the interactive menu process.
+(
+  update_fixture="$(mktemp -d /tmp/sbm-manager-unit.XXXXXX)"
+  trap 'rm -rf "$update_fixture"' EXIT
+  update_manager="$update_fixture/sbm"
+  update_function="$(declare -f update_panel)"
+  eval "${update_function//SBM_CMD/update_manager}"
+  export SBM_UPDATE_TRACE="$update_fixture/trace"
+  panel_update_target_version() { printf 'v2.1.0\n'; }
+  assert_panel_config_supported() { :; }
+  install_deps() { :; }
+  configure_vnstat() { :; }
+  # shellcheck disable=SC2317,SC2329 # Regression guard against calling the loaded manager.
+  repair_runtime() { echo 'old manager executed' >&2; exit 1; }
+  install_panel() {
+    cat > "$update_manager" <<'MANAGER'
+#!/usr/bin/env bash
+[[ "$1" == --repair-runtime ]] || exit 2
+printf 'new manager executed\n' > "$SBM_UPDATE_TRACE"
+MANAGER
+  }
+  update_panel
+  [[ "$(cat "$SBM_UPDATE_TRACE")" == 'new manager executed' ]]
 )

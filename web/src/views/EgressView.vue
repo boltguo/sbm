@@ -20,19 +20,25 @@ const editing = ref<EgressGateway | null>(null)
 const publicKey = ref('')
 let timer = 0
 let keyRevision = 0
+let listRevision = 0
 const safe = guard(message => emit('toast', message))
 const billingOptions = computed(() => [{ value: 'single', label: t('settings.billingSingle') }, { value: 'bidirectional', label: t('settings.billingBidirectional') }])
 const resetOptions = computed(() => [{ value: 'none', label: t('settings.noReset') }, { value: 'monthly', label: t('settings.monthly') }])
 const unitOptions = [{ value: 'GB', label: 'GB' }, { value: 'GiB', label: 'GiB' }]
 const amount = (bytes: number, unit: string) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(bytes / (unit === 'GiB' ? 1024 ** 3 : 1000 ** 3))} ${unit}`
 const date = (value?: string) => !value || value.startsWith('0001') ? t('settings.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-async function load() { items.value = await api<EgressGateway[]>('/api/egress'); loaded.value = true }
+async function load() {
+  const revision = ++listRevision
+  const next = await api<EgressGateway[]>('/api/egress')
+  if (revision !== listRevision) return
+  items.value = next; loaded.value = true
+}
 const refresh = safe(load)
 function input(g: GatewayInput): GatewayInput {
   const { enabled, marker, position, server, serverPort, privateKey, peerPublicKey, locationOverride, trafficQuota, reset } = g
   return JSON.parse(JSON.stringify({ enabled, marker, position, server, serverPort, privateKey, peerPublicKey, locationOverride, trafficQuota, reset }))
 }
-function edit(g: EgressGateway) { editing.value = g; form.value = input(g); publicKey.value = g.publicKey; keyRevision++ }
+function edit(g: EgressGateway) { ++listRevision; editing.value = g; form.value = input(g); publicKey.value = g.publicKey; keyRevision++ }
 function close() { form.value = null; editing.value = null; publicKey.value = ''; keyRevision++ }
 const derive = safe(async () => {
   const privateKey = form.value?.privateKey
@@ -48,6 +54,7 @@ const generate = safe(async () => {
   if (form.value && revision === keyRevision) { form.value.privateKey = keys.privateKey; publicKey.value = keys.publicKey }
 })
 const create = safe(async () => {
+  ++listRevision
   editing.value = null; publicKey.value = ''; keyRevision++
   form.value = { enabled: false, marker: '', position: items.value.length ? Math.max(...items.value.map(g => g.position)) + 1 : 0, server: '', serverPort: 51820, privateKey: '', peerPublicKey: '', locationOverride: '', trafficQuota: { amount: 0, unit: 'GB', billingMode: 'single', headroomPercent: 10 }, reset: { mode: 'none', day: 1, timezone: 'UTC' } }
   await generate()
@@ -55,6 +62,7 @@ const create = safe(async () => {
 const run = safe(async (action: () => Promise<unknown>) => {
   if (busy.value) return
   busy.value = true
+  ++listRevision
   try { await action(); await load() } finally { busy.value = false }
 })
 const save = () => run(async () => {
@@ -68,7 +76,7 @@ const detect = (g: EgressGateway) => run(async () => { const result = await post
 const reset = (g: EgressGateway) => run(async () => { await post(`/api/egress/${g.id}/reset`); emit('toast', t('egress.resetDone')) })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('copied')) })
 onMounted(() => { refresh(); timer = window.setInterval(() => { if (!busy.value && !form.value) load().catch(() => {}) }, 5000) })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => { ++listRevision; ++keyRevision; clearInterval(timer) })
 </script>
 
 <template>

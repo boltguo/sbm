@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
@@ -19,6 +20,10 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 	}
 	buildContext := r.BuildContext
 	buildContext.EgressGateways = model.OrderedGateways(cfg.EgressGateways)
+	// Display order must not change authentication, routes, or core bytes.
+	sort.Slice(buildContext.EgressGateways, func(i, j int) bool {
+		return buildContext.EgressGateways[i].ID < buildContext.EgressGateways[j].ID
+	})
 	inbounds := make([]any, 0, len(cfg.Inbounds))
 	for _, inbound := range cfg.Inbounds {
 		if !inbound.Enabled {

@@ -145,6 +145,9 @@ func Parse(raw []byte, iface string, now time.Time) (Snapshot, error) {
 			return Snapshot{}, errors.New("duplicate vnStat interface")
 		}
 		found = true
+		if in.Created.Timestamp == 0 || in.Updated.Timestamp == 0 {
+			return Snapshot{}, errors.New("vnStat >= 2.10 with JSON timestamps is required")
+		}
 		if in.Created.Timestamp <= 0 || in.Updated.Timestamp < in.Created.Timestamp || in.Updated.Timestamp > now.Add(time.Minute).Unix() {
 			return Snapshot{}, errors.New("invalid vnStat timestamps")
 		}

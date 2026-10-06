@@ -61,6 +61,13 @@ func TestVnStatDashboardHistoryGatewayAndSubscription(t *testing.T) {
 	}
 	defer tracker.Close()
 	s.Traffic = tracker
+	initial := now
+	now = now.Add(-time.Hour)
+	tracker.NetworkReader = serverNetworkReader{nettraffic.Snapshot{Interface: "ens5", CreatedAt: now, UpdatedAt: now}}
+	if err := tracker.SampleNetwork(context.Background(), "entry"); err != nil {
+		t.Fatal(err)
+	}
+	now = initial
 	tracker.NetworkReader = serverNetworkReader{nettraffic.Snapshot{Interface: "ens5", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, RX: 100, TX: 200, Buckets: []nettraffic.Bucket{{Start: now.Add(-time.Hour).Unix(), Seconds: 3600, RX: 100, TX: 200}}}}
 	for _, id := range []string{"entry"} {
 		if err := tracker.SampleNetwork(context.Background(), id); err != nil {

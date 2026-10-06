@@ -592,20 +592,18 @@ type inboundView struct {
 func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.Config.Get()
 	result := make([]inboundView, 0, len(cfg.Inbounds))
+	egress := protocol.EgressNodes(cfg)
 	for _, in := range cfg.Inbounds {
 		d, _ := s.Registry.Get(in.Type)
 		link, _ := d.ShareLink(in, protocol.ShareContext{Domain: cfg.Domain})
 		nodes := make([]egressNodeView, 0)
-		if in.Enabled {
-			for _, g := range model.OrderedGateways(cfg.EgressGateways) {
-				if !g.Enabled {
-					continue
-				}
-				if variant, ok := protocol.EgressVariant(in, g); ok {
-					if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
-						nodes = append(nodes, egressNodeView{GatewayID: g.ID, Name: variant.Name, Link: link, Marker: g.Marker, Location: protocol.GatewayLocation(g)})
-					}
-				}
+		for _, node := range egress {
+			if node.Inbound.ID != in.ID {
+				continue
+			}
+			g, variant := node.Gateway, node.Inbound
+			if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+				nodes = append(nodes, egressNodeView{GatewayID: g.ID, Name: variant.Name, Link: link, Marker: g.Marker, Location: protocol.GatewayLocation(g)})
 			}
 		}
 		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network(), EgressNodes: nodes})
@@ -959,20 +957,10 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for _, g := range model.OrderedGateways(cfg.EgressGateways) {
-		if !g.Enabled {
-			continue
-		}
-		for _, in := range cfg.Inbounds {
-			if !in.Enabled {
-				continue
-			}
-			if variant, ok := protocol.EgressVariant(in, g); ok {
-				d, _ := s.Registry.Get(in.Type)
-				if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
-					links = append(links, link)
-				}
-			}
+	for _, node := range protocol.EgressNodes(cfg) {
+		d, _ := s.Registry.Get(node.Inbound.Type)
+		if link, err := d.ShareLink(node.Inbound, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+			links = append(links, link)
 		}
 	}
 	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))

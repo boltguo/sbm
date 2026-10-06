@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
-readonly SBM_RELEASE_VERSION="2.0.2"
+readonly SBM_RELEASE_VERSION="2.1.0"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -269,6 +269,7 @@ install_deps() {
   info "检查最少运行依赖…"
   export DEBIAN_FRONTEND=noninteractive
   for package in "${RUNTIME_PACKAGES[@]}"; do
+    if [[ "$package" == vnstat ]] && command -v vnstat >/dev/null 2>&1; then continue; fi
     status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
     [[ "$status" == "install ok installed" ]] || missing+=("$package")
   done
@@ -279,8 +280,28 @@ install_deps() {
       || die "运行依赖安装失败，请修复 apt 报错后重新运行安装命令。"
   fi
   check_required_commands
+  check_vnstat_version || die "需要 vnStat 2.10 或更新版本；Ubuntu 24.04 可直接使用系统软件源。"
   command -v crontab >/dev/null || die "cron 已安装，但未找到 crontab，无法配置证书自动续期。"
   systemctl enable --now cron.service >/dev/null 2>&1 || die "无法启动 cron 服务，证书将不能自动续期。"
+}
+check_vnstat_version() {
+  local version_text major minor
+  version_text="$(vnstat --version | awk '$1 == "vnStat" { print $2; exit }')" || return 1
+  [[ "$version_text" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]] || return 1
+  major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+  (( 10#$major > 2 || (10#$major == 2 && 10#$minor >= 10) ))
+}
+wait_vnstat_source() {
+  local binary="$1" deadline
+  deadline=$((SECONDS + 90))
+  while ! "$binary" vnstat-check --config "$CONFIG_FILE" >/dev/null 2>&1; do
+    if (( SECONDS >= deadline )); then
+      "$binary" vnstat-check --config "$CONFIG_FILE" || true
+      warn "vnStat 计量源尚不可用，未切换面板版本。请检查 vnstat 服务和公网网卡。"
+      return 1
+    fi
+    sleep 2
+  done
 }
 configure_vnstat() {
   local config="${1:-/etc/vnstat.conf}" staging
@@ -360,7 +381,7 @@ panel_update_target_version() {
   fi
   latest="$(github_latest_tag "$REPO")"
   [[ -n "$latest" ]] || die "无法查询 SBM 最新版本。"
-  normalize_tag "$latest"
+  SBM_VERSION="$latest" requested_sbm_version
 }
 installed_panel_version() {
   "$SBM_BIN" version
@@ -373,16 +394,18 @@ normalize_tag() {
   [[ "$tag" == v* ]] && printf '%s\n' "$tag" || printf 'v%s\n' "$tag"
 }
 requested_sbm_version() {
-  local tag
+  local tag minor
   tag="$(normalize_tag "${SBM_VERSION:-$SBM_RELEASE_VERSION}")"
-  [[ "$tag" == v2.* ]] || die "当前安装器只支持 SBM 2.x 全新安装，不提供旧版安装或降级。"
+  [[ "$tag" =~ ^v2\.([0-9]+)\.[0-9]+$ ]] || die "当前安装器只支持 SBM 2.1 或更新的 2.x 发布，不提供旧版安装或降级。"
+  minor="${BASH_REMATCH[1]}"
+  (( 10#$minor >= 1 )) || die "当前安装器只支持 SBM 2.1 或更新的 2.x 发布，不提供旧版安装或降级。"
   printf '%s\n' "$tag"
 }
 compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v2.0.2) printf 'v1.13.14\n' ;;
+    v2.0.2|v2.1.0) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }
@@ -442,6 +465,7 @@ install_panel() {
   [[ -n "$expected" && "$expected" == "$actual" ]] || { rm -rf "$temp_dir"; die "sbm-panel 下载校验失败。"; }
   tar -xzf "${temp_dir}/${asset}" -C "$temp_dir"
   [[ -x "${temp_dir}/sbm-panel" && "$("${temp_dir}/sbm-panel" version)" == "$release_version" ]] || { rm -rf "$temp_dir"; die "sbm-panel Release 内容或版本无效。"; }
+  wait_vnstat_source "${temp_dir}/sbm-panel" || { rm -rf "$temp_dir"; die "vnStat 计量源检查失败。"; }
   [[ -x "$SBM_BIN" ]] && cp -p "$SBM_BIN" "${SBM_BIN}.bak"
   install -m 0755 "${temp_dir}/sbm-panel" "$SBM_BIN"
   if [[ -f "${temp_dir}/sbm" ]]; then
@@ -773,6 +797,7 @@ repair_runtime() {
   local provider panel_port
   install_deps
   configure_vnstat /etc/vnstat.conf || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
+  wait_vnstat_source "$SBM_BIN" || return 1
   provider="$(detect_cloud_provider)"
   panel_port="$(json_number panelPort "$CONFIG_FILE")"
   [[ -n "$panel_port" ]] || { warn "无法从配置读取面板端口。"; return 1; }
@@ -949,8 +974,11 @@ update_panel() {
 	local target
 	target="$(panel_update_target_version)"
 	assert_panel_config_supported "$target" "$CONFIG_FILE"
+	install_deps
+	configure_vnstat /etc/vnstat.conf || { warn "vnStat 服务配置失败。"; return 1; }
 	install_panel "$target"
-  if repair_runtime; then
+  # The downloaded manager must own dependency/repair logic for this update.
+  if bash "$SBM_CMD" --repair-runtime; then
     info "面板已更新并通过运行检查。"
     return
   fi
@@ -1126,6 +1154,7 @@ menu() {
   done
 }
 main() {
+  if [[ "${1:-}" == --repair-runtime ]]; then need_root; repair_runtime; return; fi
   if [[ -f "$CONFIG_FILE" ]]; then
     menu
     return
