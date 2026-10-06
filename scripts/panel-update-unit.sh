@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329 # Host commands are mocks called by sourced/dynamically redirected functions.
+# shellcheck disable=SC2317,SC2329 # Host mocks are invoked indirectly; ShellCheck versions use different codes.
 set -Eeuo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
