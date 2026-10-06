@@ -499,6 +499,22 @@ select:focus-visible,
   background: var(--red);
 }
 
+.panel-update-content {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+}
+
+.panel-update-content p,
+.panel-update-content small {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.panel-update-content button {
+  justify-self: start;
+}
+
 .status-dot {
   display: inline-block;
   width: 9px;

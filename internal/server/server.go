@@ -30,6 +30,7 @@ import (
 	"github.com/boltguo/sbm/internal/geo"
 	"github.com/boltguo/sbm/internal/health"
 	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/panelupdate"
 	"github.com/boltguo/sbm/internal/protocol"
 	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/store"
@@ -52,6 +53,7 @@ type Server struct {
 	Sessions        auth.Sessions
 	PanelVersion    string
 	Releases        releasecheck.Source
+	Updater         panelupdate.Updater
 	AuditLog        *log.Logger
 	CertificatePath string
 	mutationMu      sync.Mutex
@@ -191,6 +193,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.dashboard(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/update":
 		s.checkUpdate(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/update":
+		s.installUpdate(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/update/status":
+		s.updateProgress(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/server":
 		s.serverStatus(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/core/restart":
@@ -503,6 +509,7 @@ type updateStatus struct {
 	UpdateAvailable bool      `json:"updateAvailable"`
 	ReleaseURL      string    `json:"releaseURL"`
 	CheckedAt       time.Time `json:"checkedAt"`
+	CanInstall      bool      `json:"canInstall"`
 }
 
 func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
@@ -510,27 +517,33 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "版本检查不可用")
 		return
 	}
+	status, err := s.latestUpdate(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) latestUpdate(parent context.Context) (updateStatus, error) {
 	s.releaseMu.Lock()
 	defer s.releaseMu.Unlock()
 	now := time.Now()
 	if s.releaseCache != nil && now.Before(s.releaseUntil) {
-		writeJSON(w, http.StatusOK, *s.releaseCache)
-		return
+		return *s.releaseCache, nil
 	}
 	// GitHub allows 60 unauthenticated calls per hour per address. Without a
 	// backoff, a rate-limited or unreachable API would be retried on every
 	// click and keep the panel pinned at the limit.
 	if now.Before(s.releaseRetryAt) {
-		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
-		return
+		return updateStatus{}, errors.New("release retry backoff")
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
 	defer cancel()
 	info, err := s.Releases.Latest(ctx)
 	if err != nil {
 		s.releaseRetryAt = now.Add(releaseRetryDelay)
-		writeError(w, http.StatusBadGateway, "无法从 GitHub 获取最新版本")
-		return
+		return updateStatus{}, err
 	}
 	status := updateStatus{
 		CurrentVersion:  s.PanelVersion,
@@ -538,10 +551,11 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 		UpdateAvailable: releasecheck.IsNewer(info.TagName, s.PanelVersion),
 		ReleaseURL:      info.URL,
 		CheckedAt:       now.UTC(),
+		CanInstall:      s.Updater != nil && panelupdate.Supports(info.TagName),
 	}
 	s.releaseCache = &status
 	s.releaseUntil = now.Add(15 * time.Minute)
-	writeJSON(w, http.StatusOK, status)
+	return status, nil
 }
 
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
@@ -1157,6 +1171,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 func writeError(w http.ResponseWriter, status int, message string) {
 	english := map[string]string{
+		"当前运行环境不支持面板更新":                "Automatic panel updates are unavailable in this environment.",
+		"当前已是最新版本":                     "SBM is already up to date.",
+		"已有面板更新正在进行":                   "A panel update is already running.",
+		"无法启动面板更新，请查看服务器日志":            "Could not start the panel update. Check the server logs.",
+		"无法读取面板更新状态":                   "Could not read the panel update status.",
 		"sing-box 配置校验失败":              "The sing-box configuration check failed.",
 		"sing-box 启动失败，读取旧配置备份失败":      "sing-box failed to start and the previous configuration backup could not be read.",
 		"sing-box 启动失败，恢复旧配置失败":        "sing-box failed to start and the previous configuration could not be restored.",

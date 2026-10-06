@@ -73,6 +73,15 @@ export interface UpdateStatus {
   updateAvailable: boolean
   releaseURL: string
   checkedAt: string
+  canInstall: boolean
+}
+
+export interface PanelUpdateJob {
+  state: 'idle' | 'running' | 'succeeded' | 'failed'
+  phase: string
+  targetVersion: string
+  rolledBack: boolean
+  updatedAt: string
 }
 
 export interface VLESSOptions { uuid: string; sni: string; privateKey: string; publicKey: string; shortId: string }

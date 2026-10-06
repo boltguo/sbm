@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, guard, post } from '../api'
-import type { Dashboard, UpdateStatus, GatewayUsage } from '../types'
+import type { Dashboard, GatewayUsage } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import TrafficHistory from '../components/TrafficHistory.vue'
+import PanelUpdate from '../components/PanelUpdate.vue'
 import { dateLocale, t } from '../i18n'
 import { createQrCard, downloadQrCard } from '../qr'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
 const activeGateways = computed(() => data.value?.egressGateways?.filter(g => g.enabled) ?? [])
-const update = ref<UpdateStatus | null>(null)
-const checkingUpdate = ref(false)
 const refreshingTraffic = ref(false)
 const qr = ref('')
 let timer = 0
@@ -33,7 +32,6 @@ const providerBytes = (value: number) => {
 const gatewayBytes = (value: number, g: GatewayUsage) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(value / (g.trafficQuota.unit === 'GiB' ? 1024 ** 3 : 1000 ** 3))} ${g.trafficQuota.unit}`
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
-const updateLabel = () => update.value?.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.checkUpdate')
 const sampleAge = (value?: string) => {
   if (!value || value.startsWith('0001')) return ''
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
@@ -91,18 +89,7 @@ const copy = safe(async (value: string) => { await navigator.clipboard.writeText
 const saveQR = () => { if (!data.value || !qr.value) return; downloadQrCard(qr.value, data.value.subscriptionName); emit('toast', t('dashboard.qrSaved')) }
 const restart = safe(async () => { await post('/api/core/restart'); emit('toast', t('dashboard.restartDone')); await load() })
 const reset = safe(async () => { await post('/api/traffic/reset'); emit('toast', t('dashboard.resetDone')); await load() })
-async function checkUpdate(notify = true) {
-  checkingUpdate.value = true
-  try {
-    update.value = await api<UpdateStatus>('/api/update')
-    if (notify) emit('toast', update.value.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.updateCurrent'))
-  } catch {
-    if (notify) emit('toast', t('dashboard.updateFailed'))
-  } finally {
-    checkingUpdate.value = false
-  }
-}
-onMounted(() => { poll(); checkUpdate(false); timer = window.setInterval(poll, 5000) })
+onMounted(() => { poll(); timer = window.setInterval(poll, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 
@@ -115,7 +102,7 @@ onBeforeUnmount(() => clearInterval(timer))
       <div class="version-cell">
         <small>SBM VERSION</small>
         <strong>{{ panelVersion(data.panelVersion) }}</strong>
-        <button class="version-check" :class="{ checking: checkingUpdate }" :disabled="checkingUpdate" :title="updateLabel()" :aria-label="updateLabel()" @click="checkUpdate()"><Icon name="refresh"/><span v-if="update?.updateAvailable" class="version-update-dot"></span></button>
+        <PanelUpdate @toast="message => emit('toast', message)" />
       </div>
       <div><small>SING-BOX VERSION</small><strong>{{ data.coreVersion }}</strong></div>
       <div><small>PERIOD START</small><strong>{{ date(data.periodStartedAt) }}</strong></div>

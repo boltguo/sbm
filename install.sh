@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly REPO="boltguo/sbm"
-readonly SBM_RELEASE_VERSION="2.1.0"
+readonly SBM_RELEASE_VERSION="2.1.1"
 readonly SBM_BIN="/usr/local/bin/sbm-panel"
 readonly SING_BOX_BIN="/usr/local/bin/sing-box"
 readonly SBM_CMD="/usr/local/bin/sbm"
@@ -11,6 +11,8 @@ readonly CONFIG_DIR="/etc/sbm"
 readonly CONFIG_FILE="/etc/sbm/config.json"
 readonly STATE_DIR="/var/lib/sbm"
 readonly STATE_FILE="/var/lib/sbm/state.json"
+readonly UPDATE_STATUS="/var/lib/sbm/panel-update.json"
+readonly UPDATE_LOCK="/var/lib/sbm/panel-update.lock"
 readonly CERT_DIR="/etc/sbm/cert"
 readonly CORE_DIR="/etc/sing-box"
 readonly CORE_CONFIG="/etc/sing-box/config.json"
@@ -24,7 +26,7 @@ readonly CORE_GUARD="/usr/local/lib/sbm/core-start-allowed.sh"
 readonly SELF_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
 readonly -a RUNTIME_PACKAGES=(
   bash ca-certificates coreutils cron curl gawk grep gzip iproute2 iptables
-  libc-bin openssl procps sed socat tar vnstat
+  libc-bin openssl procps sed socat tar util-linux vnstat
 )
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'; RESET=$'\e[0m'
@@ -333,7 +335,7 @@ configure_vnstat() {
 
 check_required_commands() {
   local command_name missing=()
-  for command_name in awk cat chmod cmp cp crontab curl cut date df getent grep gzip head install iptables iptables-save journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr vnstat; do
+  for command_name in awk cat chmod cmp cp crontab curl cut date df flock getent grep gzip head install iptables iptables-save journalctl mktemp mv od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze systemd-run tar touch tr vnstat; do
     command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
   done
   ((${#missing[@]} == 0)) || die "依赖安装后仍缺少命令：${missing[*]}。请检查 apt 软件源后重试。"
@@ -405,7 +407,7 @@ compatible_sing_box_version() {
   local sbm_version
   sbm_version="$(normalize_tag "$1")"
   case "$sbm_version" in
-    v2.0.2|v2.1.0) printf 'v1.13.14\n' ;;
+    v2.0.2|v2.1.0|v2.1.1) printf 'v1.13.14\n' ;;
     *) die "SBM ${sbm_version#v} 没有内置已验证的 sing-box 版本；请同时设置 SING_BOX_VERSION。" ;;
   esac
 }
@@ -465,16 +467,29 @@ install_panel() {
   [[ -n "$expected" && "$expected" == "$actual" ]] || { rm -rf "$temp_dir"; die "sbm-panel 下载校验失败。"; }
   tar -xzf "${temp_dir}/${asset}" -C "$temp_dir"
   [[ -x "${temp_dir}/sbm-panel" && "$("${temp_dir}/sbm-panel" version)" == "$release_version" ]] || { rm -rf "$temp_dir"; die "sbm-panel Release 内容或版本无效。"; }
+  if [[ ! -f "${temp_dir}/sbm" ]] || ! bash -n "${temp_dir}/sbm"; then
+    rm -rf "$temp_dir"
+    die "Release 中的 sbm 管理脚本缺失或校验失败。"
+  fi
   wait_vnstat_source "${temp_dir}/sbm-panel" || { rm -rf "$temp_dir"; die "vnStat 计量源检查失败。"; }
   [[ -x "$SBM_BIN" ]] && cp -p "$SBM_BIN" "${SBM_BIN}.bak"
-  install -m 0755 "${temp_dir}/sbm-panel" "$SBM_BIN"
-  if [[ -f "${temp_dir}/sbm" ]]; then
-    bash -n "${temp_dir}/sbm" || { rm -rf "$temp_dir"; die "Release 中的 sbm 管理脚本校验失败。"; }
-    [[ -f "$SBM_CMD" ]] && cp -p "$SBM_CMD" "${SBM_CMD}.bak"
-    install -m 0755 "${temp_dir}/sbm" "$SBM_CMD"
+  [[ -f "$SBM_CMD" ]] && cp -p "$SBM_CMD" "${SBM_CMD}.bak"
+  if ! atomic_install "${temp_dir}/sbm-panel" "$SBM_BIN" || ! atomic_install "${temp_dir}/sbm" "$SBM_CMD"; then
+    restore_binary "$SBM_BIN" || true
+    restore_binary "$SBM_CMD" || true
+    rm -rf "$temp_dir"
+    die "面板或管理脚本替换失败，已尝试恢复上一版本。"
   fi
   rm -rf "$temp_dir"
   info "已安装 sbm-panel $($SBM_BIN version)。"
+}
+atomic_install() {
+  local source="$1" target="$2" staging
+  staging="$(mktemp "${target}.new.XXXXXX")" || return 1
+  if ! install -m 0755 "$source" "$staging" || ! mv -f "$staging" "$target"; then
+    rm -f "$staging"
+    return 1
+  fi
 }
 # acme.sh refuses to run when it believes sudo was used to launch acme.sh itself,
 # and it decides that by looking for its own name inside SUDO_COMMAND. README asks
@@ -695,6 +710,10 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 EOF
+  write_panel_service
+  systemctl daemon-reload
+}
+write_panel_service() {
   cat > /etc/systemd/system/sbm-panel.service <<EOF
 [Unit]
 Description=SBM sing-box management panel
@@ -722,7 +741,6 @@ LockPersonality=true
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload
 }
 detect_host_firewall_mode() {
   local provider="$1" input_rules
@@ -962,32 +980,116 @@ toggle_web_management() {
 service_healthy_after_restart() {
   local service="$1"
   systemctl restart "$service" || return 1
+  if [[ "$service" == sbm-panel.service ]]; then
+    wait_panel_https
+    return
+  fi
   sleep 1
   systemctl is-active --quiet "$service"
+}
+wait_panel_https() {
+  local domain panel_port expected=401 status=000 deadline=$((SECONDS + 30))
+  domain="$(json_string domain "$CONFIG_FILE")"
+  panel_port="$(json_number panelPort "$CONFIG_FILE")"
+  [[ -n "$domain" && -n "$panel_port" ]] || { warn "无法从配置读取面板域名或端口。"; return 1; }
+  # A deliberately locked management interface returns 404 while remaining healthy.
+  if [[ "$(json_bool webManagementEnabled "$CONFIG_FILE")" == false ]]; then expected=404; fi
+  while true; do
+    if systemctl is-active --quiet sbm-panel.service; then
+      status="$(curl -sS --noproxy '*' --connect-timeout 2 --max-time 3 --resolve "${domain}:${panel_port}:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${domain}:${panel_port}/api/me" 2>/dev/null || true)"
+      [[ "$status" == "$expected" ]] && return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      warn "面板 HTTPS 未就绪（HTTP ${status:-无响应}），请检查 journalctl -u sbm-panel -e。"
+      return 1
+    fi
+    sleep 0.5
+  done
+}
+finish_panel_update() {
+  install_deps
+  wait_vnstat_source "$SBM_BIN" || return 1
+  # Updating the panel must leave the proxy carrying this SSH session running.
+  # Full firewall/core repair is a separate action in menu option 11.
+  write_panel_service || return 1
+  systemctl daemon-reload || return 1
+  systemctl enable sbm-panel.service >/dev/null || return 1
+  service_healthy_after_restart sbm-panel.service
 }
 restore_binary() {
   local target="$1"
   [[ -f "${target}.bak" ]] || return 1
-  install -m 0755 "${target}.bak" "$target"
+  atomic_install "${target}.bak" "$target"
 }
-update_panel() {
+perform_panel_update() {
 	local target
 	target="$(panel_update_target_version)"
 	assert_panel_config_supported "$target" "$CONFIG_FILE"
 	install_deps
 	configure_vnstat /etc/vnstat.conf || { warn "vnStat 服务配置失败。"; return 1; }
+	write_update_status running downloading
 	install_panel "$target"
+  update_installed=true
+  write_update_status running restarting
   # The downloaded manager must own dependency/repair logic for this update.
-  if bash "$SBM_CMD" --repair-runtime; then
+  if bash "$SBM_CMD" --finish-panel-update; then
     info "面板已更新并通过运行检查。"
     return
   fi
   warn "新面板启动失败，正在恢复上一版本。"
+  write_update_status running rollback
   restore_binary "$SBM_BIN" || { warn "没有可恢复的面板版本。"; return 1; }
-  restore_binary "$SBM_CMD" || true
+  restore_binary "$SBM_CMD" || { warn "管理脚本恢复失败。"; return 1; }
   service_healthy_after_restart sbm-panel.service || { warn "恢复后面板仍未正常运行，请查看 journalctl -u sbm-panel -e。"; return 1; }
   warn "已恢复上一版面板。"
+  update_rolled_back=true
   return 1
+}
+write_update_status() {
+  local state="$1" phase="$2" staging
+  install -d -m 0700 "$STATE_DIR"
+  staging="$(mktemp "${UPDATE_STATUS}.new.XXXXXX")" || return 1
+  printf '{"state":"%s","phase":"%s","targetVersion":"%s","rolledBack":%s,"updatedAt":"%s"}\n' \
+    "$state" "$phase" "$update_target" "$update_rolled_back" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$staging"
+  chmod 0600 "$staging"
+  mv -f "$staging" "$UPDATE_STATUS"
+}
+panel_update_exit() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )) && [[ "$update_installed" == true && "$update_rolled_back" == false ]]; then
+    warn "更新未完成，正在恢复上一版面板。"
+    if restore_binary "$SBM_BIN" && restore_binary "$SBM_CMD" && service_healthy_after_restart sbm-panel.service; then
+      update_rolled_back=true
+    fi
+  fi
+  if (( status == 0 )); then
+    write_update_status succeeded "done" || true
+  else
+    write_update_status failed "done" || true
+  fi
+  exit "$status"
+}
+run_panel_update() {
+  need_root
+  # Serialize CLI and web jobs. A web launcher holds this lock briefly while
+  # systemd starts us; wait for that launcher to release it.
+  install -d -m 0700 "$STATE_DIR"
+  exec 9>"$UPDATE_LOCK"
+  flock -w 10 9 || die "已有面板更新正在进行，请稍后重试。"
+  update_rolled_back=false
+  update_installed=false
+  update_target=""
+  trap panel_update_exit EXIT
+  update_target="$(SBM_VERSION="${1:-${SBM_VERSION:-}}" panel_update_target_version)"
+  export SBM_VERSION="$update_target"
+  write_update_status running preparing
+  perform_panel_update
+}
+update_panel() {
+  # A fresh shell keeps errexit effective even inside the interactive menu's
+  # conditional action wrapper, and atomic replacement keeps its source intact.
+  bash "$SBM_CMD" --update-panel
 }
 
 assert_panel_config_supported() {
@@ -1112,7 +1214,7 @@ uninstall() {
   systemctl daemon-reload
   info "已删除面板、sing-box、配置、状态与证书；/root 下的手动备份和 acme.sh 本体仍保留。"
 }
-restart_panel() { systemctl restart sbm-panel.service && info "面板已重启。"; }
+restart_panel() { service_healthy_after_restart sbm-panel.service && info "面板已重启并通过 HTTPS 检查。"; }
 show_logs() { journalctl -u sbm-panel.service -u sing-box.service -n 80 --no-pager; }
 
 # Runs one menu action and always returns success, so a failed action reports
@@ -1154,7 +1256,10 @@ menu() {
   done
 }
 main() {
-  if [[ "${1:-}" == --repair-runtime ]]; then need_root; repair_runtime; return; fi
+  if [[ "${1:-}" == --update-panel ]]; then run_panel_update "${2:-}"; return; fi
+  # 2.1.0 managers use --repair-runtime to finish an update. Keep that internal
+  # entry point panel-only too, so upgrading from 2.1.0 does not restart its proxy.
+  if [[ "${1:-}" == --finish-panel-update || "${1:-}" == --repair-runtime ]]; then need_root; finish_panel_update; return; fi
   if [[ -f "$CONFIG_FILE" ]]; then
     menu
     return

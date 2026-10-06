@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/boltguo/sbm/internal/core"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/nettraffic"
+	"github.com/boltguo/sbm/internal/panelupdate"
 	"github.com/boltguo/sbm/internal/protocol"
 	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/server"
@@ -258,6 +260,10 @@ func runServe(args []string) {
 		System: systemCollector, Assets: assets, Limiter: auth.NewLimiter(),
 		Sessions: auth.Sessions{Secret: []byte(cfg.SessionSecret), Lifetime: 24 * time.Hour}, PanelVersion: version,
 		Releases: releasecheck.NewGitHub("boltguo/sbm"), CertificatePath: p.cert,
+	}
+	// Development/custom-path instances must never replace the system install.
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 && !*plainHTTP && p.config == defaultConfig && p.state == defaultState && p.coreConfig == defaultCoreConfig && p.singBox == defaultSingBox && p.cert == defaultCert && p.key == defaultKey && *historyPath == filepath.Join(filepath.Dir(defaultState), "traffic.db") {
+		app.Updater = panelupdate.New(core.ExecCommander{})
 	}
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.PanelPort), Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

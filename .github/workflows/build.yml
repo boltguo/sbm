@@ -30,6 +30,7 @@ jobs:
         working-directory: web
       - run: bash scripts/frontend-style-unit.sh
       - run: node web/scripts/egress-race-unit.mjs
+      - run: node web/scripts/panel-update-unit.mjs
       # The bundle is committed and embedded by the Go build, so it must match
       # web/src. Releases rebuild it anyway; this keeps the repo copy honest.
       - name: Verify the committed frontend bundle is up to date
@@ -43,6 +44,11 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck iptables iproute2 vnstat
       - run: shellcheck install.sh scripts/*.sh
       - run: bash scripts/install-unit.sh
+      - run: bash scripts/panel-update-unit.sh
+      - name: Verify detached panel update survives panel shutdown
+        run: |
+          go test -c -o /tmp/sbm-panel-update-test ./internal/panelupdate
+          sudo env SBM_SYSTEMD_TEST=1 /tmp/sbm-panel-update-test -test.run '^TestNativeSystemdUpdateSurvivesPanelStop$' -test.v -test.timeout=40s
       - run: bash scripts/vnstat-config-unit.sh
       - run: bash scripts/vnstat-native-test.sh
       - run: bash scripts/sing-box-integration.sh

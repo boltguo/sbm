@@ -21,7 +21,7 @@ See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.m
 
 ## Install
 
-SBM uses v4 configuration. This version starts fresh traffic accounting, without migrating old traffic or reconstructing pre-install usage. Existing v4 business configurations require the new installer to update the panel; do not rely only on an already-loaded old management script. Older 1.x configurations are not migrated or partially loaded; deploy with a fresh v4 configuration.
+SBM uses v4 configuration. This version starts fresh traffic accounting, without migrating old traffic or reconstructing pre-install usage. Existing v4 business configurations can update in place. Versions before 2.1.1 need one CLI update to install the web updater. Reload the page after that first update; future panel updates can be installed from the version card. Older 1.x configurations are not migrated or partially loaded; deploy with a fresh v4 configuration.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -53,7 +53,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer pins both SBM and sing-box to a tested release pair. It does not silently switch to a newer sing-box when upstream publishes one. To install a specific published SBM version, use the current installer with `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The current installer requires SBM 2.1 or later within 2.x and selects the sing-box version tested with that release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. It does not install or downgrade to old panels that lack the vnStat source preflight command.
@@ -112,7 +112,7 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 ## What the panel does
 
 - Chinese and English UI, with a manual language switch
-- SBM and sing-box versions, panel update checks, vnStat public-interface plan usage, reset period, and subscription QR code
+- SBM and sing-box versions, panel updates, vnStat public-interface plan usage, reset period, and subscription QR code
 - Server Health with CPU, load, memory, disk, uptime, service/configuration checks, TLS expiry, TCP/UDP listeners, sampling state, and reset schedule
 - Add, edit, enable, disable, and delete VLESS Reality or Hysteria2 inbounds
 - Copy a single-node URL or display its QR code
@@ -188,7 +188,11 @@ Backups are saved in `/root`. Downloads verify the SHA-256 digest from GitHub Re
 
 Protocol and egress changes are transactional: SBM writes a candidate, runs `sing-box check`, starts the result, and restores the previous business configuration and generated core configuration if validation or startup fails.
 
-The version card on the Overview page checks the latest GitHub Release and shows a red dot when an update is available. To install it, connect over SSH, run `sudo sbm`, and choose option 6.
+The version card on the Overview page checks the latest GitHub Release and shows a red dot when an update is available. Click it, review the available version, then select **Update now**. A detached systemd task downloads and verifies the release, atomically replaces the panel and manager, restarts only the panel, and checks its local HTTPS response. The page shows progress and reloads automatically after success. Configuration, traffic history and vnStat data are retained. If startup fails, the previous panel and manager are restored.
+
+The update task survives panel restarts and browser closure, and a shared lock prevents concurrent CLI and web updates. You can reopen the Overview page to see its status. Failure details are in `journalctl -u sbm-panel-update`. Full firewall and sing-box repair remains menu option 11. Development and custom-path instances cannot update the system install.
+
+Versions before 2.1.1 only check for updates in the browser. Run `sudo sbm` and choose option 6 once to install 2.1.1, then refresh the page. The new manager also makes the 2.1.0 updater’s finalization panel-only, so this first upgrade does not deliberately restart sing-box.
 
 Successful, failed, and rate-limited sign-in attempts are recorded in the systemd journal:
 

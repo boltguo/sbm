@@ -21,7 +21,7 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 ## 安装
 
-SBM 使用 v4 配置。本版按全新流量记录处理，不迁移旧版流量或补算安装前用量。已有 v4 业务配置需要使用新安装器更新面板，不能仅依赖已加载的旧版管理脚本；1.x 旧配置不会迁移或部分读取，请使用全新 v4 配置部署。
+SBM 使用 v4 配置。本版按全新流量记录处理，不迁移旧版流量或补算安装前用量。已有 v4 业务配置可以原地更新；2.1.1 之前的版本需要先通过 CLI 更新一次以安装网页更新功能，之后可以在版本卡片中自动更新。1.x 旧配置不会迁移或部分读取，请使用全新 v4 配置部署。
 
 系统需要是 Debian 或 Ubuntu，架构支持 amd64 和 arm64。安装前先处理域名和安全组：
 
@@ -53,7 +53,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器会同时锁定经过验证的 SBM 与 sing-box 版本组合，不会在上游发布新版后静默换成未经测试的 sing-box。需要安装指定的已发布 SBM 版本时，使用当前安装器并设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=2.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 当前安装器要求 SBM 2.1 或更新的 2.x 发布，会自动选择与该 Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。安装器不安装或降级到缺少 vnStat 源检查命令的旧面板；已有 v4 实例需先使用新安装器再更新。
@@ -112,7 +112,7 @@ https://node.example.com:2096/
 ## 面板能做什么
 
 - 中英文界面，可手动切换语言
-- SBM 与 sing-box 版本、面板更新检测、vnStat 公网网卡套餐用量、重置周期和订阅二维码
+- SBM 与 sing-box 版本、面板自动更新、vnStat 公网网卡套餐用量、重置周期和订阅二维码
 - 服务器健康页：CPU、负载、内存、磁盘、运行时长、服务/配置检查、TLS 到期、TCP/UDP 监听、采样状态和重置计划
 - 新增、修改、启停和删除 VLESS Reality、Hysteria2 入站
 - 复制单节点链接或显示二维码
@@ -188,7 +188,11 @@ sudo sbm
 
 协议与出口修改采用事务式应用：先写候选配置、执行 `sing-box check` 并启动验证；校验或启动失败时，会恢复上一份业务配置和生成的核心配置。
 
-概览页的版本卡片会检查最新 GitHub Release，有新版本时显示红点。需要安装时通过 SSH 运行 `sudo sbm`，选择第 6 项即可。
+概览页的版本卡片会检查最新 GitHub Release，有新版本时显示红点。点击后确认版本，再选择“立即更新”：独立的 systemd 后台任务下载并校验 Release，原子替换面板和管理脚本，只重启面板，等待本机 HTTPS 检查通过后自动刷新页面。业务配置、流量历史和 vnStat 数据会保留。新版启动失败时会恢复上一版面板和管理脚本。
+
+更新任务不依赖面板进程或浏览器页面持续运行，网页和 CLI 使用同一把更新锁。重新打开概览页可以继续查看进度；失败详情查看 `journalctl -u sbm-panel-update`。完整防火墙与 sing-box 修复仍由菜单 11 执行。开发模式和使用自定义配置路径的实例不能通过网页替换系统安装。
+
+2.1.1 之前的面板按钮只有检查版本功能，第一次需要通过 CLI 安装 2.1.1，再刷新页面。2.1.0 管理脚本调用的旧内部更新参数也会由新版脚本按“仅更新面板”处理，避免重启正在承载代理连接的 sing-box。
 
 登录成功、失败和被限流事件会写入 systemd journal，可通过以下命令查看：
 

@@ -437,28 +437,30 @@ done
   [[ "$preflight_calls" == 3 ]]
 )
 
+# shellcheck disable=SC2329 # Mocks are invoked by the sourced updater function.
 # The downloaded manager executes in a new shell, rather than using old
 # already-loaded repair functions from the interactive menu process.
 (
   update_fixture="$(mktemp -d /tmp/sbm-manager-unit.XXXXXX)"
   trap 'rm -rf "$update_fixture"' EXIT
   update_manager="$update_fixture/sbm"
-  update_function="$(declare -f update_panel)"
+  update_function="$(declare -f perform_panel_update)"
   eval "${update_function//SBM_CMD/update_manager}"
   export SBM_UPDATE_TRACE="$update_fixture/trace"
   panel_update_target_version() { printf 'v2.1.0\n'; }
   assert_panel_config_supported() { :; }
   install_deps() { :; }
   configure_vnstat() { :; }
+  write_update_status() { :; }
   # shellcheck disable=SC2317,SC2329 # Regression guard against calling the loaded manager.
   repair_runtime() { echo 'old manager executed' >&2; exit 1; }
   install_panel() {
     cat > "$update_manager" <<'MANAGER'
 #!/usr/bin/env bash
-[[ "$1" == --repair-runtime ]] || exit 2
+[[ "$1" == --finish-panel-update ]] || exit 2
 printf 'new manager executed\n' > "$SBM_UPDATE_TRACE"
 MANAGER
   }
-  update_panel
+  perform_panel_update
   [[ "$(cat "$SBM_UPDATE_TRACE")" == 'new manager executed' ]]
 )
