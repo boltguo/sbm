@@ -53,7 +53,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer uses a tested SBM and sing-box release pair. To install a specific published SBM version, set `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.1.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer supports SBM 2.1 and later 2.x releases and selects the sing-box version tested with that release. Use `SING_BOX_VERSION` to specify a core version for troubleshooting or testing.

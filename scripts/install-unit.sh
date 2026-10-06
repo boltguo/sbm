@@ -39,6 +39,8 @@ compatible_version="$(compatible_sing_box_version v2.0.2)"
 unset SBM_VERSION SING_BOX_VERSION
 selected_version="$(requested_sbm_version)"
 [[ "$selected_version" == "v${repo_version}" ]]
+selected_core_version="$(requested_sing_box_version "$selected_version")"
+[[ "$selected_core_version" == v1.13.14 ]]
 SBM_VERSION=2.1.0
 selected_version="$(requested_sbm_version)"
 [[ "$selected_version" == v2.1.0 ]]

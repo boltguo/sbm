@@ -53,7 +53,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器使用经过验证的 SBM 与 sing-box 版本组合。安装指定的已发布 SBM 版本时，设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=2.1.1 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 当前安装器支持 SBM 2.1 及以上的 2.x 发布，自动选择该 Release 对应的 sing-box 版本。排错或测试时可用 `SING_BOX_VERSION` 指定 core 版本。
