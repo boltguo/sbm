@@ -35,6 +35,7 @@ async function check(notify = true) {
 }
 
 function watchJob() {
+  if (disposed) return
   if (!timer) timer = window.setInterval(() => { void readProgress(true) }, 2000)
 }
 

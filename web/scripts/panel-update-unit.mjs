@@ -8,7 +8,8 @@ const source = readFileSync(new URL('../src/components/PanelUpdate.vue', import.
 const compiled = compileScript(parse(source).descriptor, { id: 'panel-update' })
 const code = ts.transpileModule(compiled.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
 function fixture() {
-  let status = { state: 'idle' }, failPoll = false, lostResponse = false, reloads = 0, posts = 0, intervals = 0, unmount
+  let status = { state: 'idle' }, failPoll = false, lostResponse = false, reloads = 0, posts = 0, intervals = 0, unmount, finishPost
+  let delayedPost = false
   const notices = []
   const context = vm.createContext({
     exports: {}, AbortSignal,
@@ -22,7 +23,7 @@ function fixture() {
           if (failPoll) throw new Error('temporarily disconnected')
           return structuredClone(status)
         },
-        post: async () => { posts++; status = { state: 'running', phase: 'queued', targetVersion: 'v2.1.1' }; if (lostResponse) throw new Error('lost launch response'); return structuredClone(status) },
+        post: async () => { posts++; status = { state: 'running', phase: 'queued', targetVersion: 'v2.1.1' }; if (delayedPost) await new Promise(resolve => { finishPost = resolve }); if (lostResponse) throw new Error('lost launch response'); return structuredClone(status) },
         errorMessage: e => e.message,
       }
       if (name === '../i18n') return { t: key => key }
@@ -31,7 +32,7 @@ function fixture() {
   })
   vm.runInContext(code, context)
   const view = context.exports.default.setup({}, { emit: (_event, text) => notices.push(text), expose() {} })
-  return { view, notices, unmount: () => unmount(), status: s => { status = s }, fail: b => { failPoll = b }, lost: () => { lostResponse = true }, counters: () => ({ reloads, posts, intervals }) }
+  return { view, notices, unmount: () => unmount(), status: s => { status = s }, fail: b => { failPoll = b }, lost: () => { lostResponse = true }, delay: () => { delayedPost = true }, finish: () => finishPost(), counters: () => ({ reloads, posts, intervals }) }
 }
 const f = fixture()
 await f.view.check(); assert.equal(f.view.open.value, true)
@@ -58,4 +59,8 @@ const lost = fixture(); lost.lost(); await lost.view.install()
 assert.equal(lost.view.job.value.state, 'running', 'lost response lost an already launched job')
 assert.equal(lost.notices.length, 0)
 lost.unmount()
+const navigated = fixture(); navigated.delay()
+const pending = navigated.view.install()
+navigated.unmount(); navigated.finish(); await pending
+assert.equal(navigated.counters().intervals, 0, 'late launch response created a timer after leaving the page')
 console.log('Panel update polling, reconnect, resume, rollback and lost response regressions: passed')
