@@ -161,7 +161,9 @@ GB=1000³ bytes; GiB=1024³. Enter the advertised allowance directly rather than
 
 **Estimated from WireGuard tunnel traffic is not a provider invoice. A gateway warning never stops sing-box, Direct, or other gateways.** Existing global local-plan enforcement remains independent.
 
-Period totals, baselines, boot/rule generations, and reset times use the existing JSON state file, with the existing 30-second persistence interval. Missing rules are recreated. Counter rollback or a generation change folds in the new counter. Updating peer IP/port establishes a new baseline while retaining period usage. Resetting a period never clears kernel counters.
+Period totals, baselines, boot/rule generations, and reset times use the complete state checkpoint in `traffic.db`, with a JSON state compatibility mirror and the existing 30-second persistence interval. Missing rules are recreated. Counter rollback or a generation change folds in the new counter. Updating peer IP/port establishes a new baseline while retaining period usage. Resetting a period never clears kernel counters.
+
+The entry and each gateway reset on their own day and timezone. If the entry resets on the 15th and a gateway on the 1st, each reset clears only its own plan usage. A gateway reset neither clears another gateway nor releases an exceeded entry quota. Entry daily/calendar-month history survives these resets. Gateways currently retain only current-plan-period totals, without per-gateway daily history or completed-period archives. A calendar-month summary is not the total for a plan period starting on the 15th.
 
 If an outage spans a reset boundary, cumulative counters cannot split bytes exactly between months; the first recovered sample becomes the new period baseline. Sampling failure retains the last result and displays an interruption. Statistics problems do not prevent saving or running the proxy. Incomplete rule cleanup after deleting the last gateway is recorded and retried.
 

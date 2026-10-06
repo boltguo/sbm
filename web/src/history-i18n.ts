@@ -1,6 +1,6 @@
 export const historyMessages = {
   'zh-CN': {
-    'history.title': '流量历史', 'history.help': '按天记录，按月汇总；重置套餐用量不会清除历史。',
+    'history.title': '流量历史', 'history.help': '入口代理流量按天记录、按自然月汇总；套餐重置不会清除历史。',
     'history.granularity': '统计粒度', 'history.daily': '每日', 'history.monthly': '每月',
     'history.selectMonth': '选择月份', 'history.selectYear': '选择年份', 'history.day': '日期', 'history.month': '月份',
     'history.proxyTotal': '代理流量', 'history.providerTotal': '估算套餐用量', 'history.since': '开始记录：{date} · {timezone}',
@@ -11,7 +11,7 @@ export const historyMessages = {
     'history.footnote': '今天、本月和采样中断的记录可能不完整。中断期间的流量在恢复采样时入账，日归属可能有偏差；套餐用量按采样时的计费方式估算。历史每 30 秒保存一次，页面每分钟自动刷新；也可手动刷新查看最新已保存记录。',
   },
   en: {
-    'history.title': 'Traffic history', 'history.help': 'Daily records and monthly totals survive plan usage resets.',
+    'history.title': 'Traffic history', 'history.help': 'Entry proxy traffic by day and calendar month. Plan usage resets keep history.',
     'history.granularity': 'Summary interval', 'history.daily': 'Daily', 'history.monthly': 'Monthly',
     'history.selectMonth': 'Select month', 'history.selectYear': 'Select year', 'history.day': 'Date', 'history.month': 'Month',
     'history.proxyTotal': 'Proxy traffic', 'history.providerTotal': 'Estimated plan usage', 'history.since': 'Recording since {date} · {timezone}',
