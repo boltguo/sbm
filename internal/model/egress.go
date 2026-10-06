@@ -66,4 +66,5 @@ type GatewayTrafficState struct {
 	Status          string      `json:"status"`
 	LastSuccessAt   time.Time   `json:"lastSuccessAt,omitempty"`
 	FailureSince    time.Time   `json:"failureSince,omitempty"`
+	Partial         bool        `json:"partial,omitempty"`
 }

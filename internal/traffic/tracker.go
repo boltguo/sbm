@@ -28,21 +28,23 @@ type coreGeneration interface {
 }
 
 type Tracker struct {
-	persistMu         sync.Mutex
-	gatewayMu         sync.Mutex
-	Gateways          GatewaySampler
-	mu                sync.RWMutex
-	controlMu         sync.Mutex
-	sampleMu          sync.Mutex
-	state             model.State
-	file              *store.JSONFile[model.State]
-	config            ConfigSource
-	core              CoreControl
-	now               func() time.Time
-	health            SampleHealth
-	history           *historyStore
-	pendingHistory    map[string]Usage
-	historyLastSample time.Time
+	persistMu             sync.Mutex
+	gatewayMu             sync.Mutex
+	Gateways              GatewaySampler
+	mu                    sync.RWMutex
+	controlMu             sync.Mutex
+	sampleMu              sync.Mutex
+	state                 model.State
+	file                  *store.JSONFile[model.State]
+	config                ConfigSource
+	core                  CoreControl
+	now                   func() time.Time
+	health                SampleHealth
+	history               *historyStore
+	pendingHistory        map[string]Usage
+	historyLastSample     time.Time
+	pendingGatewayHistory map[gatewayHistoryKey]gatewayHistoryUsage
+	persistenceHealth     SampleHealth
 }
 
 type SampleHealth struct {
@@ -124,6 +126,16 @@ func (t *Tracker) SampleHealth() SampleHealth {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.health
+}
+
+func (t *Tracker) PersistenceHealth() SampleHealth {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	health := t.persistenceHealth
+	if health.Status == "" {
+		health.Status = SampleStatusWaiting
+	}
+	return health
 }
 
 // Sample reads the core counters and applies them as one atomic step.
@@ -214,7 +226,7 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 		downloadDelta -= t.state.LastCoreDownload
 	}
 	now := t.now()
-	t.recordHistory(now, uploadDelta, downloadDelta, cfg.TrafficQuota.ProviderUsageFactor())
+	t.recordHistory(now, uploadDelta, downloadDelta, cfg.TrafficQuota.ProviderUsageFactor(), restarted)
 	if restarted {
 		t.state.Upload += currentUpload
 		t.state.Download += currentDownload
@@ -354,9 +366,21 @@ func (t *Tracker) CheckScheduledReset(ctx context.Context) error {
 }
 
 func (t *Tracker) Persist() error { return t.persist(t.State()) }
-func (t *Tracker) persist(_ model.State) error {
+func (t *Tracker) persist(_ model.State) (err error) {
 	t.persistMu.Lock()
 	defer t.persistMu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if err != nil {
+			if t.persistenceHealth.FailureSince.IsZero() {
+				t.persistenceHealth.FailureSince = t.now()
+			}
+			t.persistenceHealth.Status = SampleStatusInterrupted
+		} else {
+			t.persistenceHealth = SampleHealth{Status: SampleStatusHealthy, LastSuccessAt: t.now()}
+		}
+	}()
 	// Always take a fresh snapshot so a slow periodic save cannot overwrite a
 	// newer reset or quota transition that completed while it was waiting.
 	t.mu.RLock()
@@ -366,9 +390,13 @@ func (t *Tracker) persist(_ model.State) error {
 	for day, usage := range t.pendingHistory {
 		pending[day] = usage
 	}
+	gatewayPending := make(map[gatewayHistoryKey]gatewayHistoryUsage, len(t.pendingGatewayHistory))
+	for key, usage := range t.pendingGatewayHistory {
+		gatewayPending[key] = usage
+	}
 	t.mu.RUnlock()
 	if t.history != nil {
-		if err := t.history.save(snapshot, pending, sampledAt); err != nil {
+		if err := t.history.save(snapshot, pending, gatewayPending, sampledAt); err != nil {
 			return fmt.Errorf("保存流量历史失败: %w", err)
 		}
 		t.mu.Lock()
@@ -381,6 +409,16 @@ func (t *Tracker) persist(_ model.State) error {
 				delete(t.pendingHistory, day)
 			} else {
 				t.pendingHistory[day] = current
+			}
+		}
+		for key, saved := range gatewayPending {
+			current := t.pendingGatewayHistory[key]
+			current.TX -= saved.TX
+			current.RX -= saved.RX
+			if current.TX == 0 && current.RX == 0 && current.Partial == saved.Partial {
+				delete(t.pendingGatewayHistory, key)
+			} else {
+				t.pendingGatewayHistory[key] = current
 			}
 		}
 		t.mu.Unlock()
@@ -451,7 +489,7 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 	}()
 	poll := time.NewTicker(time.Second)
 	schedule := time.NewTicker(15 * time.Second)
-	persist := time.NewTicker(30 * time.Second)
+	persist := time.NewTicker(5 * time.Second)
 	defer poll.Stop()
 	defer schedule.Stop()
 	defer persist.Stop()
@@ -500,12 +538,20 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 func (t *Tracker) runGatewaySampling(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	failed := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = t.SampleGateways(ctx)
+			if err := t.SampleGateways(ctx); err != nil {
+				if !failed {
+					log.Printf("egress: sampling or persistence failed: %v", err)
+				}
+				failed = true
+			} else {
+				failed = false
+			}
 		}
 	}
 }

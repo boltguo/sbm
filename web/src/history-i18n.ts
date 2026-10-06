@@ -8,7 +8,7 @@ export const historyMessages = {
     'history.imported': '含升级前汇总', 'history.partial': '未完整记录', 'history.tableLabel': '流量记录 · {timezone}',
     'history.empty': '所选时间没有已保存的记录。', 'history.loading': '正在读取流量历史…', 'history.failed': '读取流量历史失败',
     'history.swipe': '左右滑动查看全部列', 'history.invalidPeriod': '请选择有效的月份或年份。',
-    'history.footnote': '今天、本月和采样中断的记录可能不完整。中断期间的流量在恢复采样时入账，日归属可能有偏差；套餐用量按采样时的计费方式估算。历史每 30 秒保存一次，页面每分钟自动刷新；也可手动刷新查看最新已保存记录。',
+    'history.footnote': '今天、本月和采样中断的记录可能不完整。中断期间的流量在恢复采样时入账，日归属可能有偏差；套餐用量按采样时的计费方式估算。历史每 5 秒保存一次，页面每分钟自动刷新；也可手动刷新查看最新已保存记录。',
   },
   en: {
     'history.title': 'Traffic history', 'history.help': 'Entry proxy traffic by day and calendar month. Plan usage resets keep history.',
@@ -19,6 +19,6 @@ export const historyMessages = {
     'history.imported': 'Includes imported usage', 'history.partial': 'Partial record', 'history.tableLabel': 'Traffic records · {timezone}',
     'history.empty': 'No saved records for the selected period.', 'history.loading': 'Reading traffic history…', 'history.failed': 'Could not read traffic history',
     'history.swipe': 'Swipe horizontally to see all columns', 'history.invalidPeriod': 'Select a valid month or year.',
-    'history.footnote': 'Today, this month, and sampling gaps may be incomplete. Traffic accumulated during an outage is recorded when sampling resumes; its daily attribution may be inaccurate. Plan usage uses the billing mode at sampling time. History is saved every 30 seconds and refreshed here every minute. Refresh manually to see the latest saved records.',
+    'history.footnote': 'Today, this month, and sampling gaps may be incomplete. Traffic accumulated during an outage is recorded when sampling resumes; its daily attribution may be inaccurate. Plan usage uses the billing mode at sampling time. History is saved every 5 seconds and refreshed here every minute. Refresh manually to see the latest saved records.',
   },
 }

@@ -90,11 +90,17 @@ func OpenWithHistory(statePath, databasePath string, config ConfigSource, core C
 	}
 	t.history = h
 	t.pendingHistory = make(map[string]Usage)
+	t.pendingGatewayHistory = make(map[gatewayHistoryKey]gatewayHistoryUsage)
+	if err := h.initializeGatewayHistory(t.state, now()); err != nil {
+		h.db.Close()
+		return nil, err
+	}
 	t.historyLastSample, err = h.loadLastSample(t.state.UpdatedAt)
 	if err != nil {
 		h.db.Close()
 		return nil, err
 	}
+	t.persistenceHealth = SampleHealth{Status: SampleStatusHealthy, LastSuccessAt: now()}
 	return t, nil
 }
 
@@ -127,7 +133,7 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version > 1 {
+	if version > 2 {
 		return fail(fmt.Errorf("unsupported traffic database version %d", version))
 	}
 	if _, err := db.Exec(`
@@ -139,7 +145,14 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 		CREATE TABLE IF NOT EXISTS imports (
 			id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
 			upload INTEGER NOT NULL, download INTEGER NOT NULL, provider INTEGER NOT NULL);
-		PRAGMA user_version=1;`); err != nil {
+		CREATE TABLE IF NOT EXISTS gateway_daily (
+			gateway_id TEXT NOT NULL, date TEXT NOT NULL, tx INTEGER NOT NULL,
+			rx INTEGER NOT NULL, partial INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(gateway_id, date));
+		CREATE TABLE IF NOT EXISTS gateway_imports (
+			gateway_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+			ended_at TEXT NOT NULL, tx INTEGER NOT NULL, rx INTEGER NOT NULL);
+		PRAGMA user_version=2;`); err != nil {
 		return fail(err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO metadata VALUES ('timezone', ?), ('started_at', ?)`, zone, now.UTC().Format(time.RFC3339Nano)); err != nil {
@@ -226,7 +239,7 @@ func saveCheckpoint(tx *sql.Tx, state model.State) error {
 	return err
 }
 
-func (h *historyStore) save(state model.State, pending map[string]Usage, sampledAt time.Time) error {
+func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, sampledAt time.Time) error {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return err
@@ -237,6 +250,14 @@ func (h *historyStore) save(state model.State, pending map[string]Usage, sampled
 			ON CONFLICT(date) DO UPDATE SET upload=upload+excluded.upload,
 			download=download+excluded.download, provider=provider+excluded.provider,
 			partial=MAX(partial, excluded.partial)`, day, usage.Upload, usage.Download, usage.EstimatedProviderUsedBytes, usage.Partial)
+		if err != nil {
+			return err
+		}
+	}
+	for key, usage := range gateways {
+		_, err := tx.Exec(`INSERT INTO gateway_daily VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(gateway_id, date) DO UPDATE SET tx=tx+excluded.tx,
+			rx=rx+excluded.rx, partial=MAX(partial, excluded.partial)`, key.ID, key.Day, usage.TX, usage.RX, usage.Partial)
 		if err != nil {
 			return err
 		}
@@ -252,7 +273,7 @@ func (h *historyStore) save(state model.State, pending map[string]Usage, sampled
 
 // Called with t.mu held. Bytes are assigned when sampled, never fabricated for
 // earlier days after an outage. Cross-day gaps are explicitly marked partial.
-func (t *Tracker) recordHistory(now time.Time, upload, download, factor int64) {
+func (t *Tracker) recordHistory(now time.Time, upload, download, factor int64, restarted bool) {
 	if t.history == nil {
 		return
 	}
@@ -262,7 +283,7 @@ func (t *Tracker) recordHistory(now time.Time, upload, download, factor int64) {
 	usage.Download += download
 	usage.EstimatedProviderUsedBytes += (upload + download) * factor
 	gap := !t.historyLastSample.IsZero() && now.Sub(t.historyLastSample) > 5*time.Second
-	usage.Partial = usage.Partial || gap || day == t.history.startedAt.In(t.history.location).Format(time.DateOnly)
+	usage.Partial = usage.Partial || gap || restarted || day == t.history.startedAt.In(t.history.location).Format(time.DateOnly)
 	t.pendingHistory[day] = usage
 	if gap {
 		previousDay := t.historyLastSample.In(t.history.location).Format(time.DateOnly)

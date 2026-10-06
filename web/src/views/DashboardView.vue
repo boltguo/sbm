@@ -133,6 +133,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: providerBytes(data.providerAllowanceBytes), remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
+        <p v-if="data.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p>
       </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
@@ -143,7 +144,7 @@ onBeforeUnmount(() => clearInterval(timer))
       <div class="egress-summary-grid"><article v-for="g in activeGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning }">
         <h3>{{ g.name }}</h3><strong>{{ gatewayBytes(g.estimatedProviderUsedBytes, g) }} <small v-if="g.providerAllowanceBytes">/ {{ gatewayBytes(g.providerAllowanceBytes, g) }}</small></strong>
         <div class="progress-track"><i :style="{ width: `${g.providerProgress}%` }"></i></div>
-        <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
+        <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
       </article></div>
     </section>
     <TrafficHistory :unit="data.trafficQuota.unit" />

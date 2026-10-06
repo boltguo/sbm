@@ -17,6 +17,7 @@ export interface Dashboard {
   nextResetAt?: string
   quotaExceeded: boolean
   sampleHealth: SampleHealth
+  persistenceHealth?: SampleHealth
   subscriptionURL: string
   subscriptionName: string
 }
@@ -138,7 +139,8 @@ export interface GatewayUsage {
   trafficQuota: TrafficQuota
   providerAllowanceBytes: number; estimatedProviderUsedBytes: number; providerRemainingBytes: number; providerProgress: number
   warning: boolean; periodStartedAt: string; nextResetAt?: string
-  sampleHealth: { status: 'waiting' | 'healthy' | 'interrupted' | 'disabled'; lastSuccessAt?: string; failureSince?: string }
+  sampleHealth: { status: 'waiting' | 'healthy' | 'interrupted' | 'disabled'; lastSuccessAt?: string; failureSince?: string; partial?: boolean }
+  persistenceHealth?: SampleHealth
 }
 export interface GatewayInput {
   enabled: boolean; marker: string; position: number; server: string; serverPort: number

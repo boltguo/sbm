@@ -451,7 +451,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"providerStopBytes": providerStop, "providerRemainingBytes": providerRemaining, "providerProgress": progress,
 		"periodStartedAt": state.PeriodStartedAt, "nextResetAt": state.NextResetAt,
 		"quotaExceeded": state.QuotaExceeded, "sampleHealth": sampleHealth,
-		"subscriptionURL": subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
+		"persistenceHealth": s.Traffic.PersistenceHealth(),
+		"subscriptionURL":   subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
 	})
 }
 

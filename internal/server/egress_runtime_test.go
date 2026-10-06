@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -290,6 +291,21 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		if string(got) != string(want) {
 			t.Fatalf("SQLite restart lost gateway %s counters or baselines", g.ID)
 		}
+	}
+	db, err := sql.Open("sqlite", historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range cfg.EgressGateways {
+		var tx, rx int64
+		err := db.QueryRow(`SELECT COALESCE(SUM(tx),0), COALESCE(SUM(rx),0) FROM gateway_daily WHERE gateway_id=?`, g.ID).Scan(&tx, &rx)
+		if err != nil || tx != saved.Egress[g.ID].TX || rx != saved.Egress[g.ID].RX {
+			db.Close()
+			t.Fatalf("real WireGuard traffic was not durably recorded for %s: tx=%d rx=%d err=%v", g.ID, tx, rx, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 	history, err := tracker.History(context.Background(), "day", "", "")
 	if err != nil || len(history.Rows) != 1 || history.Rows[0].Upload != saved.Upload || history.Rows[0].Download != saved.Download {

@@ -69,7 +69,7 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 			s.RX = 0
 			s.PeriodStartedAt = now
 			s.NextResetAt = nextGatewayReset(now, g)
-			s.Initialized = false
+			s.Partial = false
 		}
 		if !g.Enabled {
 			s.Status = "disabled"
@@ -85,12 +85,22 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 			t.state.Egress[g.ID] = s
 			continue
 		}
-		// Following a missed reset boundary, baseline the first available
-		// sample: cumulative counters cannot split the offline interval.
-		if s.Initialized && s.Peer == gatewayPeer(g) && !due {
-			s.TX = addSaturating(s.TX, counterDelta(c.TX, s.LastTX, c.TXGeneration, s.TXGeneration))
-			s.RX = addSaturating(s.RX, counterDelta(c.RX, s.LastRX, c.RXGeneration, s.RXGeneration))
+		var tx, rx int64
+		partial := !s.Initialized || s.Peer != gatewayPeer(g)
+		if !partial {
+			tx = counterDelta(c.TX, s.LastTX, c.TXGeneration, s.TXGeneration)
+			rx = counterDelta(c.RX, s.LastRX, c.RXGeneration, s.RXGeneration)
+			// Keep recoverable bytes even across an allowance reset. The exact
+			// split is unavailable, so assign them when observed and flag it.
+			partial = c.TXGeneration != s.TXGeneration || c.RXGeneration != s.RXGeneration || c.TX < s.LastTX || c.RX < s.LastRX
+			crossedReset := !s.LastSuccessAt.IsZero() && s.LastSuccessAt.Before(s.PeriodStartedAt) && (tx > 0 || rx > 0)
+			missedReset := crossedReset && (!s.FailureSince.IsZero() || now.Sub(s.LastSuccessAt) > 15*time.Second)
+			s.Partial = s.Partial || partial || missedReset
+			partial = partial || crossedReset
+			s.TX = addSaturating(s.TX, tx)
+			s.RX = addSaturating(s.RX, rx)
 		}
+		t.recordGatewayHistory(g.ID, now, s.LastSuccessAt, tx, rx, partial)
 		s.Initialized = true
 		s.Peer = gatewayPeer(g)
 		s.LastTX = c.TX
@@ -121,7 +131,9 @@ func (t *Tracker) SampleGateways(ctx context.Context) error {
 	if len(gateways) == 0 && !t.State().EgressAccountingPending {
 		return nil
 	}
-	return t.sampleGateways(ctx, gateways)
+	// Commit each read with its baseline. A panel crash can then resume from
+	// the same kernel counters without losing or repeating the delta.
+	return errors.Join(t.sampleGateways(ctx, gateways), t.Persist())
 }
 
 // Hold the accounting lock across the core transaction. A periodic sampler
@@ -202,9 +214,7 @@ func (t *Tracker) ResetGateway(ctx context.Context, id string) error {
 	s.RX = 0
 	s.PeriodStartedAt = now
 	s.NextResetAt = nextGatewayReset(now, *gateway)
-	if s.Status == SampleStatusInterrupted {
-		s.Initialized = false
-	}
+	s.Partial = false
 	t.state.Egress[id] = s
 	t.mu.Unlock()
 	return t.Persist()

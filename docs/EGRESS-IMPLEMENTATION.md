@@ -28,7 +28,7 @@ Client → VLESS Reality / Hysteria2 → A / SBM
 | Geo | `internal/geo/lookup.go`、`internal/geo/lookup_test.go` |
 | 核心渲染和事务 | `internal/core/render.go`、`internal/core/manager.go`、`internal/core/manager_test.go`、`internal/core/egress_test.go` |
 | 流量计数 | `internal/traffic/tracker.go`、`internal/traffic/accounting.go`、`internal/traffic/accounting_test.go`、`internal/traffic/egress.go`、`internal/traffic/egress_test.go` |
-| 流量历史 | `internal/traffic/history.go`、`internal/traffic/history_test.go`、`internal/server/traffic_history.go`、`internal/server/traffic_history_test.go`、`web/src/components/TrafficHistory.vue`、`web/src/history-i18n.ts` |
+| 流量历史 | `internal/traffic/history.go`、`internal/traffic/history_test.go`、`internal/traffic/gateway_history.go`、`internal/traffic/gateway_history_test.go`、`internal/server/traffic_history.go`、`internal/server/traffic_history_test.go`、`web/src/components/TrafficHistory.vue`、`web/src/history-i18n.ts` |
 | API、订阅与启动 | `internal/server/server.go`、`internal/server/egress.go`、`internal/server/egress_test.go`、`internal/server/egress_runtime_test.go`、`cmd/sbm-panel/main.go` |
 | UI | `web/src/App.vue`、`web/src/types.ts`、`web/src/i18n.ts`、`web/src/egress-i18n.ts`、`web/src/style.css`、`web/src/components/EgressGuide.vue`、`web/src/views/EgressView.vue`、`web/src/views/ProtocolsView.vue`、`web/src/views/DashboardView.vue` |
 | 验证与 CI | `scripts/egress-linux-test.sh`、`scripts/sing-box-integration.sh`、`scripts/frontend-style-unit.sh`、`web/scripts/check-i18n.mjs`、`.github/workflows/build.yml` |
@@ -49,7 +49,7 @@ Inbound.EgressCredentials []EgressCredential
 
 `GatewayGeo` 保存 IP、国家代码、国家、地区、城市及更新时间。`EgressCredential` 使用 `GatewayID` 关联；VLESS 只保存 UUID，HY2 只保存 password。UUID/password 由服务器生成，修改入站时保留服务器持有的衍生凭据。校验阻止重复 ID、地址槽、认证用户、同入站凭据及 IPv4+UDP 端口组合。
 
-State 的 `egress` map 以 Gateway ID 为键，保存独立 TX/RX 累计、基线、每方向规则代次、peer、初始化状态、采样健康和周期。`egressAccountingPending` 记录需要重试的规则协调，包括最后一个出口删除后的清理。
+State 的 `egress` map 以 Gateway ID 为键，保存独立 TX/RX 累计、基线、每方向规则代次、peer、初始化状态、采样健康、周期和归属可能有偏差的 partial 标记。`egressAccountingPending` 记录需要重试的规则协调，包括最后一个出口删除后的清理。
 
 | API | 行为 |
 | --- | --- |
@@ -115,7 +115,7 @@ A 的 `SBM_EGRESS_TX` / `SBM_EGRESS_RX` filter chain 仅使用无 target 的计�
 
 每次协调保证 INPUT/OUTPUT 各有一个位于首位的自有 jump；防火墙 reload 把它移到 terminal verdict 后面或产生重复 jump 时，只修复自有入口，保留计数规则的累计和代次。全部关闭并清理成功后停止调用 iptables；关闭出口的月度周期仍推进，失败的最后一次清理仍会重试。
 
-读取 `iptables-save -c -t filter` 原始字节 counter，不解析 locale 展示文本。每方向保存 boot ID + 随机规则代次，处理 reboot、规则重建和 counter 回退。改 peer 后重新基线但保留周期累计；删除只移除该出口的自有规则。5 秒采样、30 秒持久化，手动和月度重置更新基线而不清空内核计数。
+读取 `iptables-save -c -t filter` 原始字节 counter，不解析 locale 展示文本。每方向保存 boot ID + 随机规则代次，处理 reboot、规则重建和 counter 回退。改 peer 后重新基线但保留周期累计；删除只移除该出口的自有规则。5 秒采样后立即提交增量与基线。手动和月度重置只清周期用量，保留内核计数与已有基线，避免恢复采样时漏记。
 
 出口采样使用独立循环。等待 iptables 或配置事务不会阻塞原有 1 秒核心采样及全局配额检查；正常关闭会等待采样循环退出再保存状态。入口全局用量继续统计该入口服务的全部代理流量，出口用量独立估算 B 的套餐，两者不相加。
 
@@ -127,11 +127,13 @@ single: factor=1; bidirectional: factor=2
 
 套餐复用 GB/GiB、计费方式、预留比例及月度日期/时区。Gateway 只统计和预警，永不因单个 Gateway 达限调用全局 Stop。本机全局配额及其停机/恢复逻辑继续独立运行。
 
-后来加入的流量历史使用 SQLite：默认保存于 state 同目录的 `traffic.db`，JSON 配置与 v1 state 兼容副本继续保留。每秒采样核心代理流量，每 30 秒把每日增量、完整全局／Gateway 计数基线以及最后成功采样时间放在同一个事务中提交；重置与正常退出也保存。重启以数据库 checkpoint 为准，JSON 兼容副本失败后重试不会重复提交已保存的历史增量。备份和恢复需把数据库一并处理。
+后来加入的流量历史使用 SQLite：默认保存于 state 同目录的 `traffic.db`，JSON 配置与 v1 state 兼容副本继续保留。每秒采样核心代理流量，每 5 秒把每日增量、完整全局／Gateway 计数基线以及最后成功采样时间放在同一个事务中提交；重置与正常退出也保存。重启以数据库 checkpoint 为准，JSON 兼容副本失败后重试不会重复提交已保存的历史增量。备份和恢复需把数据库一并处理。
 
-历史记录的是入口代理流量，Gateway TX/RX 独立保存周期用量，两者不相加。每日归属使用数据库首次创建时固定的时区，每月按日历月汇总；修改计费方式不会重算旧历史。旧版本仅有周期累计，首次升级保留为导入汇总，不伪造每日明细；整个汇总在同一月时才加入该月。采样中断跨天时标注未完整记录，即使期间重置了套餐并重启也保留真实采样时间。重置任何一个 Gateway 不清除全局历史或其他 Gateway 用量。
+历史记录的是入口代理流量，Gateway TX/RX 独立保存周期用量，两者不相加。每日归属使用数据库首次创建时固定的时区，每月按日历月汇总；修改计费方式不会重算旧历史。旧版本仅有周期累计，首次升级保留为导入汇总，不伪造每日明细；整个汇总在同一月时才加入该月。采样中断跨天时标注未完整记录，即使期间重置了套餐并重启也保留真实采样时间。重置任何一个 Gateway 不清除全局历史或其他 Gateway 用量。每个出口的原始 TX/RX 每日增量另存 gateway_daily，旧周期总量一次性导入 gateway_imports；增量、基线与全局历史在同一事务提交，停用、删除和清零不会删除这些后台记录。保存失败保留待写入增量并重试，API 与页面单独显示 persistenceHealth，避免把采样成功误认为记录已保存。
 
 入口 15 日、出口 1 日／18 日的重置场景已增加专项回归，覆盖 UTC 同时区和入口 Asia/Shanghai／出口 Asia/Tokyo 的不同时区。出口 1 日重置、数据库重开、入口 15 日重置和第二出口 18 日重置均只影响自己的周期；全局历史保存全部样本而不把隧道流量叠加进去。入口超额停机时，出口月度／手动重置不会启动核心；入口自己的周期重置会解除该配额。
+
+可靠保存专项回归覆盖出口采样后未执行定期保存就关闭数据库、JSON 损坏恢复、跨重置时间中断后重开数据库、数据库／JSON 保存失败重试、手动清零期间采样失败、计数规则代次变更、删除后保留每日记录、旧 SQLite v1 一次性迁移及入口／出口并发采样保存。Linux 隔离运行测试同时核对 gateway_daily 与两条实际 WireGuard 隧道的 TX/RX，数据库重开后结果一致。页面已验证保存失败和账期归属提示在 1440／390／320 像素、中英文下显示正常，保存恢复后清除错误提示。
 
 ## 6. 命名与凭据生命周期
 
@@ -194,13 +196,13 @@ Linux 测试经授权通过 SSH alias `anya` 执行，所有网络操作位于�
 - Gateway 第一版只支持公网 IPv4 和 IPv4 出口；客户端直接传来 IPv6 目的地址时不能经这些出口访问。
 - 固定地址池最多 254 个 Gateway；系统仍定位个人单入口实例。
 - 主机计数包含隧道封装、握手、keepalive 和其他程序向同一 peer 地址端口发的流量，不能等同云账单；INPUT 计数也可能包含最终被防火墙丢弃的数据包。
-- 启动、采样中断、规则重建、防火墙 reload 后到入口修复之前、周期边界附近可能少计；跨重置边界的离线累计无法精确拆到两个周期，恢复后的首个样本作为新周期基线。异常退出可能丢失最近 30 秒未持久化的数据。
+- 启动、采样中断、规则重建、防火墙 reload 后到入口修复之前、周期边界附近可能少计；跨重置边界的离线累计无法精确拆到两个周期，可恢复增量在恢复时入账并标注归属偏差。面板单独重启且内核 counter 保留时可补回未提交增量；若主机重启或规则被清除，正常采样情况下仍可能丢失最近约 5 秒及故障期间无法读取的字节。记录能防止已采集数据丢失，无法恢复从未读到且已被内核清掉的计数。
 - 依赖 root/CAP_NET_ADMIN 及主机当前活跃的 iptables backend；统计不可用时保留最后用量并显示中断，代理可继续运行。
-- 当前逐日／自然月历史只覆盖入口代理流量。Gateway 只保留当前套餐周期累计，已结束的周期没有单独归档；入口自然月历史也不是从 15 日开始的套餐账期汇总。
+- 当前逐日／自然月历史只覆盖入口代理流量。Gateway 已有后台逐日 TX/RX 记录，前端仍仅显示当前周期用量；已结束的周期没有单独归档；入口自然月历史也不是从 15 日开始的套餐账期汇总。
 - 尚未完成真实 AWS/GCP/普通 VPS B 的 kernel WireGuard、NAT 和云防火墙联网验证，也未做长期压力与故障注入测试。
 
 ## 10. 后续增强
 
 优先补充真实两台云 B 的部署验证、长时间采样与防火墙 reload 测试，再考虑每 Gateway 独立暂停、握手/连通性状态、B 配置导出、IPv6、多后端计数及账单对账。任何 Gateway hard limit 都应只暂停对应出口，不停止全局 sing-box。
 
-流量历史建议进一步区分入口与每个 Gateway：复用现有隧道采样，在同一个 SQLite 事务中保存各出口的 TX/RX 每日明细与各自套餐重置前的周期汇总。每日／自然月用于观察趋势，套餐周期按各对象自己的重置日与时区归档；使用稳定 Gateway ID，改名或停用后保留历史。出口历史仍属隧道用量估算，不等同 B 全机或云账单。此项为后续方案，当前版本尚未实现。
+每个 Gateway 的后台每日 TX/RX 记录已经实现，主要用于可靠保存和故障核对，没有在 B 上增加采集器。后续可按需要增加出口历史查询页面及已结束套餐周期归档；账期应按各对象自己的重置日与时区计算。出口记录仍属隧道用量估算，不等同 B 全机或云账单。
