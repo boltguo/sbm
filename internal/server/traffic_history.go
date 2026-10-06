@@ -13,7 +13,19 @@ func (s *Server) trafficHistory(w http.ResponseWriter, r *http.Request) {
 	if granularity == "" {
 		granularity = "day"
 	}
-	result, err := s.Traffic.History(r.Context(), granularity, query.Get("from"), query.Get("to"))
+	var result traffic.HistoryResponse
+	var err error
+	scope := query.Get("scope")
+	if s.Traffic.UsesVnStat() {
+		if scope != "" && scope != traffic.EntryNetworkScope {
+			writeError(w, 400, "vnStat 历史仅统计 SBM 入口")
+			return
+		}
+		result, err = s.Traffic.NetworkHistory(r.Context(), traffic.EntryNetworkScope, granularity, query.Get("from"), query.Get("to"))
+	} else {
+		result, err = s.Traffic.History(r.Context(), granularity, query.Get("from"), query.Get("to"))
+	}
+
 	switch {
 	case errors.Is(err, traffic.ErrHistoryRange):
 		writeError(w, http.StatusBadRequest, "流量历史查询范围无效")

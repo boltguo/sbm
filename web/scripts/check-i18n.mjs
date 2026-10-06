@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import ts from 'typescript'
 const root = fileURLToPath(new URL('../src/', import.meta.url))
-for (const [prefix, fileName] of [['egress', 'egress-i18n.ts'], ['history', 'history-i18n.ts']]) {
+for (const [prefix, fileName] of [['egress', 'egress-i18n.ts'], ['history', 'history-i18n.ts'], ['network', 'network-i18n.ts']]) {
   const source = readFileSync(`${root}${fileName}`, 'utf8')
   const js = ts.transpile(source.replace(/export const \w+\s*=/, 'globalThis.messages ='), { target: ts.ScriptTarget.ES2022 })
   const ctx = vm.createContext({})

@@ -1,4 +1,9 @@
 export interface Dashboard {
+  trafficSource: string
+  networkInterface: string
+  networkReason: string
+  networkAvailable: boolean
+  networkPartial: boolean
   egressGateways: GatewayUsage[]
   coreStatus: 'running' | 'stopped' | 'unknown'
   coreVersion: string
@@ -25,15 +30,23 @@ export interface Dashboard {
 export type TrafficBillingMode = 'bidirectional' | 'single'
 
 export interface TrafficUsage {
+  networkRX: number
+  networkTX: number
+  networkTotal: number
+  networkAvailable: boolean
+  networkPartial: boolean
   date: string
   upload: number
   download: number
   proxyUsedBytes: number
+  proxyAvailable: boolean
   estimatedProviderUsedBytes: number
   partial: boolean
   imported: boolean
 }
 export interface TrafficHistory {
+  source?: string
+  scope?: string
   granularity: 'day' | 'month'
   timezone: string
   startedAt: string
@@ -80,6 +93,7 @@ export interface Inbound {
 export interface ResetConfig { mode: 'none' | 'monthly'; day: number; timezone: string }
 export type OutboundStrategy = 'auto' | 'prefer_ipv4' | 'prefer_ipv6' | 'ipv4_only' | 'ipv6_only'
 export interface Settings {
+ vnstatInterface: string
   domain: string
   panelPort: number
   trafficQuota: TrafficQuota
@@ -134,6 +148,8 @@ export interface HealthReport {
 export interface EgressNode { gatewayId: string; name: string; link: string; marker: string; location: string }
 export interface GatewayGeo { ip: string; countryCode: string; country: string; region: string; city: string; updatedAt: string }
 export interface GatewayUsage {
+ source: string
+ network: { available: boolean; interface: string; generation: string; status: string; reason: string; partial: boolean; rx: number; tx: number; updatedAt: string }
   id: string; name: string; marker: string; location: string; enabled: boolean
   tunnelTX: number; tunnelRX: number; tunnelBytes: number
   trafficQuota: TrafficQuota

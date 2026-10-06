@@ -10,6 +10,13 @@ import (
 )
 
 func cloneState(state model.State) model.State {
+	if state.Network != nil {
+		result := make(map[string]model.NetworkTrafficState, len(state.Network))
+		for k, v := range state.Network {
+			result[k] = v
+		}
+		state.Network = result
+	}
 	if state.Egress != nil {
 		result := make(map[string]model.GatewayTrafficState, len(state.Egress))
 		for id, s := range state.Egress {

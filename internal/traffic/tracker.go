@@ -13,6 +13,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/nettraffic"
 	"github.com/boltguo/sbm/internal/store"
 )
 
@@ -28,6 +29,11 @@ type coreGeneration interface {
 }
 
 type Tracker struct {
+	NetworkReader         nettraffic.Reader
+	networkLocksMu        sync.Mutex
+	networkLocks          map[string]*sync.Mutex
+	pendingNetwork        map[string]networkRecord
+	networkRevision       uint64
 	persistMu             sync.Mutex
 	gatewayMu             sync.Mutex
 	Gateways              GatewaySampler
@@ -125,6 +131,14 @@ func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); retu
 func (t *Tracker) SampleHealth() SampleHealth {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	if t.UsesVnStat() {
+		st := t.state.Network[EntryNetworkScope]
+		status := st.Status
+		if status == "" {
+			status = SampleStatusWaiting
+		}
+		return SampleHealth{Status: status, LastSuccessAt: st.UpdatedAt}
+	}
 	return t.health
 }
 
@@ -240,7 +254,7 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 		t.state.CoreGeneration = generation
 	}
 	t.state.UpdatedAt = now
-	shouldExceed := limit > 0 && t.state.Total() >= limit
+	shouldExceed := t.NetworkReader == nil && limit > 0 && t.state.Total() >= limit
 	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {
 		t.state.QuotaExceeded = true
@@ -257,6 +271,9 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 }
 
 func (t *Tracker) Reset(ctx context.Context) error {
+	if t.UsesVnStat() {
+		return t.resetNetwork(ctx, EntryNetworkScope)
+	}
 	now := t.now()
 	next := time.Time{}
 	if cfg := t.config.Get(); cfg.Reset.Mode == "monthly" {
@@ -288,6 +305,9 @@ func (t *Tracker) Reset(ctx context.Context) error {
 
 // ReconcileQuota updates the desired quota state and makes the core converge on it.
 func (t *Tracker) ReconcileQuota(ctx context.Context) error {
+	if t.UsesVnStat() {
+		return t.reconcileNetworkQuota(ctx)
+	}
 	limit, err := t.config.Get().EffectiveTrafficLimitBytes()
 	if err != nil {
 		return fmt.Errorf("计算流量限额: %w", err)
@@ -341,6 +361,9 @@ func (t *Tracker) reconcileCore(ctx context.Context) error {
 }
 
 func (t *Tracker) CheckScheduledReset(ctx context.Context) error {
+	if t.UsesVnStat() {
+		return nil
+	} // vnStat periods are rebuilt from timestamped buckets.
 	cfg := t.config.Get()
 	if cfg.Reset.Mode != "monthly" {
 		return nil
@@ -394,12 +417,21 @@ func (t *Tracker) persist(_ model.State) (err error) {
 	for key, usage := range t.pendingGatewayHistory {
 		gatewayPending[key] = usage
 	}
+	networkPending := make(map[string]networkRecord, len(t.pendingNetwork))
+	for id, record := range t.pendingNetwork {
+		networkPending[id] = record
+	}
 	t.mu.RUnlock()
 	if t.history != nil {
-		if err := t.history.save(snapshot, pending, gatewayPending, sampledAt); err != nil {
+		if err := t.history.save(snapshot, pending, gatewayPending, sampledAt, networkPending); err != nil {
 			return fmt.Errorf("保存流量历史失败: %w", err)
 		}
 		t.mu.Lock()
+		for id, saved := range networkPending {
+			if current, ok := t.pendingNetwork[id]; ok && current.Revision == saved.Revision {
+				delete(t.pendingNetwork, id)
+			}
+		}
 		for day, saved := range pending {
 			current := t.pendingHistory[day]
 			current.Upload -= saved.Upload
@@ -482,6 +514,17 @@ func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
 func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 	// Accounting may wait for iptables or an in-flight configuration apply.
 	// It must never delay the original core counters or quota enforcement.
+	networkCtx, networkCancel := context.WithCancel(ctx)
+	defer networkCancel()
+	var networkWorkers sync.WaitGroup
+	if t.UsesVnStat() {
+		start := func(id string) {
+			networkWorkers.Add(1)
+			go func() { defer networkWorkers.Done(); t.runNetworkSource(networkCtx, id) }()
+		}
+		start(EntryNetworkScope)
+
+	}
 	egressDone := make(chan struct{})
 	go func() {
 		defer close(egressDone)
@@ -498,6 +541,8 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 		select {
 		case <-ctx.Done():
 			<-egressDone
+			networkCancel()
+			networkWorkers.Wait()
 			if err := t.Persist(); err != nil {
 				log.Printf("traffic: final state save failed: %v", err)
 			}

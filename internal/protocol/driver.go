@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/nettraffic"
 )
 
 const (
@@ -66,6 +67,9 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 	}
 	if len(cfg.SessionSecret) < 43 || len(cfg.ClashAPISecret) < 43 || len(cfg.SubscriptionToken) < 43 {
 		return errors.New("安全密钥长度不足")
+	}
+	if cfg.VnStatInterface != "" && !nettraffic.ValidInterface(cfg.VnStatInterface) {
+		return errors.New("vnStat 公网网卡名称无效")
 	}
 	if err := cfg.TrafficQuota.Validate(); err != nil {
 		return err

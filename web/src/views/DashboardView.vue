@@ -50,6 +50,7 @@ const elapsed = (value?: string) => {
 const sampleLabel = () => {
   if (!data.value) return t('dashboard.sampleWaiting')
   const health = data.value.sampleHealth
+  if (data.value.trafficSource === 'vnstat') return health.status === 'healthy' ? t('network.source', { interface: data.value.networkInterface }) + ' · ' + sampleAge(health.lastSuccessAt) : data.value.networkAvailable ? t('network.interrupted') : t('network.waiting')
   if (health.status === 'paused') return t('dashboard.samplePaused')
   if (health.status === 'interrupted') return `${t('dashboard.sampleInterrupted')} · ${elapsed(health.failureSince)}`
   if (health.status === 'waiting') return t('dashboard.sampleWaiting')
@@ -58,6 +59,7 @@ const sampleLabel = () => {
 const sampleDetail = () => {
   if (!data.value) return ''
   const health = data.value.sampleHealth
+  if (data.value.trafficSource === 'vnstat') return data.value.networkReason || t('network.guideDelay')
   if (health.status === 'interrupted') return t('dashboard.sampleInterruptedHelp', { time: date(health.failureSince) })
   if (health.status === 'paused') return t('dashboard.samplePausedHelp')
   return t('dashboard.sampleHelp')
@@ -126,17 +128,18 @@ onBeforeUnmount(() => clearInterval(timer))
     <section class="traffic-panel">
       <div class="traffic-copy">
         <div class="traffic-kicker">
-          <span class="eyebrow">ESTIMATED PROVIDER USAGE</span>
+          <span class="eyebrow">VNSTAT / PLAN USAGE</span>
           <button class="traffic-refresh" :class="{ refreshing: refreshingTraffic }" :disabled="refreshingTraffic" :title="t('dashboard.refreshHelp')" @click="refreshTraffic"><Icon name="refresh"/>{{ t('dashboard.refresh') }}</button>
         </div>
-        <h2>{{ providerBytes(data.estimatedProviderUsedBytes) }}</h2>
+        <h2>{{ data.networkAvailable ? providerBytes(data.estimatedProviderUsedBytes) : '—' }}</h2>
         <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: providerBytes(data.providerAllowanceBytes), remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
+        <p v-if="data.networkPartial" class="traffic-source warning">{{ t('network.partial') }}</p>
         <p v-if="data.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p>
       </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
-      <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
+      <div class="traffic-split"><div><span>↑</span><p>{{ t('network.tx') }}</p><strong>{{ data.networkAvailable ? bytes(data.upload) : '—' }}</strong></div><div><span>↓</span><p>{{ t('network.rx') }}</p><strong>{{ data.networkAvailable ? bytes(data.download) : '—' }}</strong></div></div>
       <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
     </section>
     <section v-if="activeGateways.length" class="egress-overview">

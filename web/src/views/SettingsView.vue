@@ -31,12 +31,11 @@ const unitOptions = [
 ]
 const quotaPreview = computed(() => {
   const quota = settings.value?.trafficQuota
-  if (!quota) return { providerStop: 0, proxyStop: 0 }
+  if (!quota) return { providerStop: 0 }
   const amount = Number.isFinite(quota.amount) ? Math.max(0, quota.amount) : 0
   const headroom = Math.min(50, Math.max(0, quota.headroomPercent || 0))
   const providerStop = amount * (100 - headroom) / 100
-  const proxyStop = providerStop / (quota.billingMode === 'bidirectional' ? 2 : 1)
-  return { providerStop, proxyStop }
+  return { providerStop }
 })
 const quotaAmount = (value: number) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(value)} ${settings.value?.trafficQuota.unit || 'GB'}`
 const safe = guard(message => emit('toast', message))
@@ -45,6 +44,7 @@ const saveTraffic = safe(async () => {
   if (!settings.value) return
   await put('/api/settings/traffic', {
     trafficQuota: settings.value.trafficQuota,
+    vnstatInterface: settings.value.vnstatInterface,
     reset: settings.value.reset,
   })
   emit('toast', t('settings.trafficSaved'))
@@ -71,12 +71,13 @@ onMounted(load)
         <div class="settings-fields">
           <label>{{ t('settings.quotaAmount') }}<input v-model.number="settings.trafficQuota.amount" type="number" min="0" step="0.01" required></label>
           <label>{{ t('settings.quotaUnit') }}<SelectControl v-model="settings.trafficQuota.unit" :options="unitOptions" /></label>
+          <label class="span-two">{{ t('network.interface') }}<input v-model.trim="settings.vnstatInterface" maxlength="64" :placeholder="t('network.autoInterface')"><small>{{ t('network.autoInterface') }}</small></label>
           <label>{{ t('settings.billingMode') }}<SelectControl v-model="settings.trafficQuota.billingMode" :options="billingOptions" /></label>
           <label>{{ t('settings.headroom') }}<span class="input-suffix"><input v-model.number="settings.trafficQuota.headroomPercent" type="number" min="0" max="50" step="1" required><b>%</b></span></label>
           <aside class="quota-preview">
             <div><small>{{ t('settings.planAllowance') }}</small><strong>{{ quotaAmount(settings.trafficQuota.amount) }}</strong></div>
             <div><small>{{ t('settings.estimatedProviderStop') }}</small><strong>{{ quotaAmount(quotaPreview.providerStop) }}</strong></div>
-            <div><small>{{ t('settings.proxyStop') }}</small><strong>{{ settings.trafficQuota.amount ? quotaAmount(quotaPreview.proxyStop) : t('settings.unlimited') }}</strong></div>
+
           </aside>
           <label>{{ t('settings.autoReset') }}<SelectControl v-model="settings.reset.mode" :options="resetOptions" /></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="28"></label>

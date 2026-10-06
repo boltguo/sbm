@@ -37,6 +37,7 @@ type Config struct {
 	ClashAPISecret       string             `json:"clashAPISecret"`
 	SubscriptionToken    string             `json:"subscriptionToken"`
 	TrafficQuota         TrafficQuotaConfig `json:"trafficQuota"`
+	VnStatInterface      string             `json:"vnstatInterface,omitempty"`
 	Reset                ResetConfig        `json:"reset"`
 	OutboundStrategy     string             `json:"outboundStrategy,omitempty"`
 	Inbounds             []Inbound          `json:"inbounds"`
@@ -182,7 +183,55 @@ type State struct {
 	QuotaExceeded           bool                           `json:"quotaExceeded"`
 	UpdatedAt               time.Time                      `json:"updatedAt"`
 	Egress                  map[string]GatewayTrafficState `json:"egress,omitempty"`
+	Network                 map[string]NetworkTrafficState `json:"network,omitempty"`
 	EgressAccountingPending bool                           `json:"egressAccountingPending,omitempty"`
+}
+
+// NetworkTrafficState is independent of the sing-box reference counters.
+// vnStat owns the source database; SBM resets only its billing-period view.
+type NetworkTrafficState struct {
+	Available       bool        `json:"available"`
+	Origin          string      `json:"origin"`
+	Interface       string      `json:"interface"`
+	Generation      string      `json:"generation"`
+	RX              int64       `json:"rx"`
+	TX              int64       `json:"tx"`
+	LastRX          int64       `json:"lastRX"`
+	LastTX          int64       `json:"lastTX"`
+	PeriodStartedAt time.Time   `json:"periodStartedAt"`
+	NextResetAt     time.Time   `json:"nextResetAt,omitempty"`
+	UpdatedAt       time.Time   `json:"updatedAt"`
+	CreatedAt       time.Time   `json:"createdAt"`
+	Status          string      `json:"status"`
+	Reason          string      `json:"reason,omitempty"`
+	Partial         bool        `json:"partial"`
+	Manual          bool        `json:"manual"`
+	BaselineRX      int64       `json:"baselineRX"`
+	BaselineTX      int64       `json:"baselineTX"`
+	CarryRX         int64       `json:"carryRX"`
+	CarryTX         int64       `json:"carryTX"`
+	Reset           ResetConfig `json:"reset"`
+}
+
+// NetworkStopBytes applies reserve once to actual NIC bytes.
+func (q TrafficQuotaConfig) NetworkStopBytes() (int64, error) {
+	if err := q.Validate(); err != nil {
+		return 0, err
+	}
+	unit, err := q.unitBytes()
+	if err != nil {
+		return 0, err
+	}
+	return trafficBytes(q.Amount, unit, int64(100-q.HeadroomPercent), 100)
+}
+func (q TrafficQuotaConfig) NetworkUsage(rx, tx int64) int64 {
+	if q.BillingMode == TrafficBillingSingle {
+		return tx
+	}
+	if rx > (1<<63-1)-tx {
+		return 1<<63 - 1
+	}
+	return rx + tx
 }
 
 func (s State) Total() int64 { return s.Upload + s.Download }

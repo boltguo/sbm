@@ -19,10 +19,16 @@ import (
 var ErrHistoryDisabled = errors.New("流量历史记录未启用")
 
 type Usage struct {
+	NetworkRX                  int64  `json:"networkRX"`
+	NetworkTX                  int64  `json:"networkTX"`
+	NetworkTotal               int64  `json:"networkTotal"`
+	NetworkAvailable           bool   `json:"networkAvailable"`
+	NetworkPartial             bool   `json:"networkPartial"`
 	Date                       string `json:"date"`
 	Upload                     int64  `json:"upload"`
 	Download                   int64  `json:"download"`
 	ProxyUsedBytes             int64  `json:"proxyUsedBytes"`
+	ProxyAvailable             bool   `json:"proxyAvailable"`
 	EstimatedProviderUsedBytes int64  `json:"estimatedProviderUsedBytes"`
 	Partial                    bool   `json:"partial"`
 	Imported                   bool   `json:"imported"`
@@ -38,6 +44,8 @@ type ImportedUsage struct {
 }
 
 type HistoryResponse struct {
+	Source      string          `json:"source,omitempty"`
+	Scope       string          `json:"scope,omitempty"`
 	Granularity string          `json:"granularity"`
 	Timezone    string          `json:"timezone"`
 	StartedAt   time.Time       `json:"startedAt"`
@@ -133,7 +141,7 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version > 2 {
+	if version > 3 {
 		return fail(fmt.Errorf("unsupported traffic database version %d", version))
 	}
 	if _, err := db.Exec(`
@@ -152,7 +160,15 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 		CREATE TABLE IF NOT EXISTS gateway_imports (
 			gateway_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
 			ended_at TEXT NOT NULL, tx INTEGER NOT NULL, rx INTEGER NOT NULL);
-		PRAGMA user_version=2;`); err != nil {
+ CREATE TABLE IF NOT EXISTS network_source (
+ scope TEXT NOT NULL, generation TEXT NOT NULL, interface TEXT NOT NULL,
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, available_from INTEGER NOT NULL, ended_at INTEGER NOT NULL,
+ PRIMARY KEY(scope,generation));
+ CREATE TABLE IF NOT EXISTS network_bucket (
+ scope TEXT NOT NULL, generation TEXT NOT NULL, start INTEGER NOT NULL,
+ seconds INTEGER NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
+ PRIMARY KEY(scope,generation,start,seconds));
+ PRAGMA user_version=3;`); err != nil {
 		return fail(err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO metadata VALUES ('timezone', ?), ('started_at', ?)`, zone, now.UTC().Format(time.RFC3339Nano)); err != nil {
@@ -239,7 +255,7 @@ func saveCheckpoint(tx *sql.Tx, state model.State) error {
 	return err
 }
 
-func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, sampledAt time.Time) error {
+func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, sampledAt time.Time, networks ...map[string]networkRecord) error {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return err
@@ -259,6 +275,11 @@ func (h *historyStore) save(state model.State, pending map[string]Usage, gateway
 			ON CONFLICT(gateway_id, date) DO UPDATE SET tx=tx+excluded.tx,
 			rx=rx+excluded.rx, partial=MAX(partial, excluded.partial)`, key.ID, key.Day, usage.TX, usage.RX, usage.Partial)
 		if err != nil {
+			return err
+		}
+	}
+	for _, pending := range networks {
+		if err := saveNetworks(tx, pending); err != nil {
 			return err
 		}
 	}

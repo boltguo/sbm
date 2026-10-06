@@ -20,8 +20,6 @@ const validSelection = computed(() => mode.value === 'day'
   ? /^(?:19[7-9]\d|[2-9]\d{3})-(?:0[1-9]|1[0-2])$/.test(month.value)
   : /^(?:19[7-9]\d|[2-9]\d{3})$/.test(year.value))
 const rows = computed(() => [...(history.value?.rows ?? [])].reverse())
-const total = computed(() => rows.value.reduce((sum, row) => sum + row.proxyUsedBytes, 0))
-const peak = computed(() => Math.max(1, ...rows.value.map(row => row.proxyUsedBytes)))
 const imported = computed(() => (history.value?.imports ?? []).reduce((sum, item) => sum + item.upload + item.download, 0))
 const bytes = (value: number) => {
   const base = props.unit === 'GiB' ? 1024 : 1000
@@ -29,7 +27,6 @@ const bytes = (value: number) => {
   const index = value > 0 ? Math.min(4, Math.floor(Math.log(value) / Math.log(base))) : 0
   return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(value / base ** index)} ${units[index]}`
 }
-const started = computed(() => history.value ? new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short', timeZone: history.value.timezone }).format(new Date(history.value.startedAt)) : '')
 
 async function load(background = false) {
   const id = ++request
@@ -92,17 +89,15 @@ onBeforeUnmount(() => { ++request; clearInterval(timer) })
     <span v-if="loading && history" class="history-loading" role="status">{{ t('history.loading') }}</span>
     <p v-if="!history && !error" class="history-empty">{{ t('history.loading') }}</p>
     <template v-if="history">
-      <div class="history-summary"><strong>{{ bytes(total) }} <small>{{ t('history.proxyTotal') }}</small></strong><span>{{ t('history.since', { date: started, timezone: history.timezone }) }}</span></div>
       <p v-if="imported" class="history-note">{{ t('history.importedHelp', { amount: bytes(imported) }) }}</p>
       <div v-if="rows.length" class="history-table-scroll">
         <table class="history-table">
           <caption class="history-caption">{{ t('history.tableLabel', { timezone: history.timezone }) }}</caption>
-          <thead><tr><th scope="col">{{ history.granularity === 'day' ? t('history.day') : t('history.month') }}</th><th scope="col">{{ t('dashboard.upload') }}</th><th scope="col">{{ t('dashboard.download') }}</th><th scope="col">{{ t('history.proxyTotal') }}</th><th scope="col">{{ t('history.providerTotal') }}</th></tr></thead>
+          <thead><tr><th scope="col">{{ history.granularity === 'day' ? t('history.day') : t('history.month') }}</th><th scope="col">{{ t('network.rx') }}</th><th scope="col">{{ t('network.tx') }}</th><th scope="col">{{ t('network.total') }}</th></tr></thead>
           <tbody><tr v-for="row in rows" :key="row.date">
-            <th scope="row"><span>{{ row.date }}</span><small v-if="row.imported">{{ t('history.imported') }}</small><small v-else-if="row.partial">{{ t('history.partial') }}</small></th>
-            <td>{{ bytes(row.upload) }}</td><td>{{ bytes(row.download) }}</td>
-            <td class="history-usage"><b>{{ bytes(row.proxyUsedBytes) }}</b><i aria-hidden="true" :style="{ width: `${row.proxyUsedBytes / peak * 100}%` }"></i></td>
-            <td>{{ bytes(row.estimatedProviderUsedBytes) }}</td>
+            <th scope="row"><span>{{ row.date }}</span><small v-if="row.imported">{{ t('history.imported') }}</small><small v-else-if="row.networkPartial">{{ t('history.partial') }}</small></th>
+            <td>{{ row.networkAvailable ? bytes(row.networkRX) : '—' }}</td><td>{{ row.networkAvailable ? bytes(row.networkTX) : '—' }}</td>
+            <td class="history-usage"><b>{{ row.networkAvailable ? bytes(row.networkTotal) : t('network.missing') }}</b><small v-if="history.scope === 'entry'" class="history-reference">{{ t('network.reference') }} {{ row.proxyAvailable ? bytes(row.proxyUsedBytes) : '—' }}<span v-if="row.proxyAvailable && row.partial"> · {{ t('history.partial') }}</span></small></td>
           </tr></tbody>
         </table>
       </div>

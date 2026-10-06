@@ -319,11 +319,18 @@ func (s *Server) resetHealth(now time.Time) health.Check {
 	if cfg.Reset.Mode != "monthly" {
 		return check
 	}
-	if s.Traffic == nil || s.Traffic.State().NextResetAt.IsZero() {
+	next := time.Time{}
+	if s.Traffic != nil {
+		next = s.Traffic.State().NextResetAt
+		if s.Traffic.UsesVnStat() {
+			next = s.Traffic.NetworkState(traffic.EntryNetworkScope).NextResetAt
+		}
+	}
+	if next.IsZero() {
 		check.Status, check.Reason = health.StatusError, "reset_schedule_missing"
 		return check
 	}
-	check.Reason, check.NextResetAt = "reset_scheduled", timePointer(s.Traffic.State().NextResetAt)
+	check.Reason, check.NextResetAt = "reset_scheduled", timePointer(next)
 	return check
 }
 
@@ -438,18 +445,42 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		providerRemaining = max(0, allowance-estimatedProviderUsed)
 		progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
 	}
+	upload, download := state.Upload, state.Download
+	source, networkInterface, networkReason := "sing-box", "", ""
+	networkAvailable, networkPartial := false, false
+	periodStarted, nextReset := state.PeriodStartedAt, state.NextResetAt
 	sampleHealth := s.Traffic.SampleHealth()
-	if state.QuotaExceeded {
+	if s.Traffic.UsesVnStat() {
+		st := state.Network[traffic.EntryNetworkScope]
+		source, networkInterface, networkReason = "vnstat", st.Interface, st.Reason
+		networkAvailable, networkPartial = st.Available, st.Partial
+		upload, download = st.TX, st.RX
+		limit, _ = cfg.TrafficQuota.NetworkStopBytes()
+		providerStop = limit
+		estimatedProviderUsed = cfg.TrafficQuota.NetworkUsage(st.RX, st.TX)
+		providerRemaining = max(0, allowance-estimatedProviderUsed)
+		progress = 0
+		if allowance > 0 {
+			progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
+		}
+		periodStarted, nextReset = st.PeriodStartedAt, st.NextResetAt
+		sampleHealth = traffic.SampleHealth{Status: st.Status, LastSuccessAt: st.UpdatedAt}
+		if sampleHealth.Status == "" {
+			sampleHealth.Status = "waiting"
+		}
+	}
+	if state.QuotaExceeded && !s.Traffic.UsesVnStat() {
 		sampleHealth.Status = "paused"
 	}
 	writeJSON(w, 200, map[string]any{
 		"egressGateways": s.gatewayUsage(cfg),
 		"coreStatus":     coreStatus, "coreVersion": coreVersion, "panelVersion": s.PanelVersion,
-		"upload": state.Upload, "download": state.Download, "proxyUsedBytes": state.Total(),
+		"upload": upload, "download": download, "proxyUsedBytes": state.Total(),
+		"trafficSource": source, "networkInterface": networkInterface, "networkReason": networkReason, "networkAvailable": networkAvailable, "networkPartial": networkPartial,
 		"trafficQuota": cfg.TrafficQuota, "effectiveLimitBytes": limit,
 		"providerAllowanceBytes": allowance, "estimatedProviderUsedBytes": estimatedProviderUsed,
 		"providerStopBytes": providerStop, "providerRemainingBytes": providerRemaining, "providerProgress": progress,
-		"periodStartedAt": state.PeriodStartedAt, "nextResetAt": state.NextResetAt,
+		"periodStartedAt": periodStarted, "nextResetAt": nextReset,
 		"quotaExceeded": state.QuotaExceeded, "sampleHealth": sampleHealth,
 		"persistenceHealth": s.Traffic.PersistenceHealth(),
 		"subscriptionURL":   subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
@@ -789,7 +820,7 @@ func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 		outboundStrategy = model.OutboundStrategyAuto
 	}
 	writeJSON(w, 200, map[string]any{
-		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "trafficQuota": cfg.TrafficQuota, "reset": cfg.Reset,
+		"domain": cfg.Domain, "panelPort": cfg.PanelPort, "trafficQuota": cfg.TrafficQuota, "reset": cfg.Reset, "vnstatInterface": cfg.VnStatInterface,
 		"outboundStrategy": outboundStrategy,
 		"subscriptionURL":  subscriptionURL(cfg),
 	})
@@ -797,8 +828,9 @@ func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		TrafficQuota model.TrafficQuotaConfig `json:"trafficQuota"`
-		Reset        model.ResetConfig        `json:"reset"`
+		TrafficQuota    model.TrafficQuotaConfig `json:"trafficQuota"`
+		VnStatInterface *string                  `json:"vnstatInterface"`
+		Reset           model.ResetConfig        `json:"reset"`
 	}
 	if decodeJSON(r, &input) != nil {
 		writeError(w, 400, "请求格式无效")
@@ -806,6 +838,9 @@ func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.saveConfig(func(cfg *model.Config) {
 		cfg.TrafficQuota = input.TrafficQuota
+		if input.VnStatInterface != nil {
+			cfg.VnStatInterface = strings.TrimSpace(*input.VnStatInterface)
+		}
 		cfg.Reset = input.Reset
 	}); err != nil {
 		writeError(w, 400, err.Error())
@@ -815,11 +850,17 @@ func (s *Server) updateTrafficSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "更新重置周期失败")
 		return
 	}
+	if s.Traffic.UsesVnStat() {
+		_ = s.Traffic.SampleNetwork(r.Context(), traffic.EntryNetworkScope)
+	}
 	if err := s.Traffic.ReconcileQuota(r.Context()); err != nil {
 		writeError(w, 500, "应用流量限额失败")
 		return
 	}
 	limit, _ := input.TrafficQuota.EffectiveBytes()
+	if s.Traffic.UsesVnStat() {
+		limit, _ = input.TrafficQuota.NetworkStopBytes()
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "effectiveLimitBytes": limit, "trafficQuota": input.TrafficQuota})
 }
 
@@ -940,7 +981,16 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "计算流量限额失败")
 		return
 	}
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", state.Upload, state.Download, effectiveLimit))
+	upload, download := state.Upload, state.Download
+	if s.Traffic.UsesVnStat() {
+		st := state.Network[traffic.EntryNetworkScope]
+		upload, download = st.TX, st.RX
+		if cfg.TrafficQuota.BillingMode == model.TrafficBillingSingle {
+			download = 0
+		}
+		effectiveLimit, _ = cfg.TrafficQuota.NetworkStopBytes()
+	}
+	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", upload, download, effectiveLimit))
 	w.Header().Set("Profile-Update-Interval", "12")
 	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(subscriptionName(cfg))))
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {

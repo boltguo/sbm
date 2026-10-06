@@ -19,6 +19,7 @@ import (
 	"github.com/boltguo/sbm/internal/auth"
 	"github.com/boltguo/sbm/internal/core"
 	"github.com/boltguo/sbm/internal/model"
+	"github.com/boltguo/sbm/internal/nettraffic"
 	"github.com/boltguo/sbm/internal/protocol"
 	"github.com/boltguo/sbm/internal/releasecheck"
 	"github.com/boltguo/sbm/internal/server"
@@ -218,6 +219,7 @@ func runServe(args []string) {
 	}
 	defer tracker.Close()
 	tracker.Gateways = &traffic.Accounting{}
+	tracker.NetworkReader = nettraffic.Collector{}
 	assets, err := fs.Sub(webembed.Assets, "dist")
 	if err != nil {
 		fatal("读取前端资源失败")
@@ -240,6 +242,9 @@ func runServe(args []string) {
 	// only clear it when the scheduler next ticks — a pointless outage.
 	if err := tracker.CheckScheduledReset(ctx); err != nil {
 		log.Printf("启动时检查流量重置失败：%v", err)
+	}
+	if err := tracker.SampleNetwork(ctx, traffic.EntryNetworkScope); err != nil {
+		log.Printf("启动时读取 vnStat 失败：%v", err)
 	}
 	if err := tracker.ReconcileQuota(ctx); err != nil {
 		log.Printf("启动时校正流量限额失败：%v", err)

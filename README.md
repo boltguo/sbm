@@ -15,9 +15,9 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Original Direct nodes remain available.
 
-For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; the existing global local quota enforcement is unchanged.
+For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; entry quota enforcement uses the entry public interface’s vnStat counters. Exit cards retain WireGuard tunnel estimates without installing collectors on B.
 
-See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). This extension retains v4 config / v1 state and directly loads existing 2.0.2 configurations. With no gateways, behavior is unchanged. Build this development code to deploy the new feature; the published 2.0.2 archive does not contain these changes.
+See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). This extension retains v4 config / v1 state and directly loads existing 2.0.2 configurations. With no gateways, Direct proxy and subscription behavior is unchanged; entry traffic accounting uses vnStat in either case. Build this development code to deploy the new feature; the published 2.0.2 archive does not contain these changes.
 
 ## Install
 
@@ -112,7 +112,7 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 ## What the panel does
 
 - Chinese and English UI, with a manual language switch
-- SBM and sing-box versions, panel update checks, provider-plan traffic estimates, reset period, and subscription QR code
+- SBM and sing-box versions, panel update checks, vnStat public-interface plan usage, reset period, and subscription QR code
 - Server Health with CPU, load, memory, disk, uptime, service/configuration checks, TLS expiry, TCP/UDP listeners, sampling state, and reset schedule
 - Add, edit, enable, disable, and delete VLESS Reality or Hysteria2 inbounds
 - Copy a single-node URL or display its QR code
@@ -125,7 +125,9 @@ An operating-system `reboot` normally keeps the public IP. Provider-console Stop
 
 Under `Settings → Plan traffic and period`, choose GB or GiB exactly as shown by the provider: GB uses 1000³ bytes and GiB uses 1024³ bytes. Enter DMIT `1000 GB` as `1000 GB`, or GCP `200 GiB` as `200 GiB`.
 
-Select two-way for a two-way plan; do not divide the allowance yourself.
+Traffic accounting uses **vnStat 2 on the selected public network interface**. One-way plans use transmitted bytes (TX); two-way plans use received plus transmitted bytes (RX + TX). NIC counters are already measured in both directions and are never multiplied by two. The safety stop is the advertised allowance minus the configured reserve. SSH, system updates, WireGuard overhead and other traffic on that interface are included. Provider accounting may still differ; the provider dashboard remains authoritative.
+
+The installer enables vnStat, uses UTC source buckets, saves every minute, and retains at least 90 days of daily records, 40 days of hourly records and 48 hours of five-minute records. Existing longer or unlimited retention and the source database are preserved. Set `Settings → vnStat public interface` explicitly when the default-route interface is not the billing interface, or when there are multiple public interfaces. A blank setting selects the Linux default-route interface. Select two-way for a two-way plan; do not divide the allowance yourself.
 
 A subscription client may display `G` as GiB; this does not change SBM's enforced limit.
 
@@ -133,15 +135,19 @@ Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box sto
 
 ### Daily and monthly traffic history
 
-The Overview page shows daily upload, download, proxy traffic, and estimated plan usage for a selected month, or monthly totals for a selected year. Plan resets and panel restarts preserve these records. Today, the current month, and sampling interruptions are marked as partial.
+The Overview page shows vnStat RX, TX and total bytes by day or calendar month. sing-box proxy traffic appears in small text as a reference in entry history; it is not added to NIC traffic and does not enforce quotas. Legacy sing-box records stay readable as references. Dates without vnStat data show “No vnStat record”, not fabricated zero usage.
 
-History currently covers all proxy traffic served by the entry, including Direct and gateway nodes. Gateway cards show current WireGuard plan-period usage. Per-gateway daily TX/RX records are retained in the database for recovery and auditing; a gateway-history page and completed-period archives are not provided yet. An entry reset on the 15th and a gateway reset on the 1st clear only their respective plan totals, without adding tunnel counters to entry history. Calendar-month history and plan periods are distinct: an October summary runs from October 1 up to November 1, while the entry's plan period can run from October 15 up to November 15. Set each machine's reset day and timezone according to its own plan.
+Exit cards retain the existing per-peer WireGuard estimates and independent reset schedules. They are explicitly labelled as estimates; vnStat runs only on the SBM entry. A tunnel peer’s sent bytes are approximately the other peer’s received bytes, but whole-interface totals also include the other network leg, Direct traffic, other exits and host services. Entry NIC totals are not attributed to individual exits. Exit warnings never stop the entry’s Direct nodes.
 
-History lives in `/var/lib/sbm/traffic.db`, using SQLite. Samples accumulate every second; daily deltas and the core-counter checkpoint commit together every 5 seconds, on reset, and on normal shutdown. Every gateway sample also commits its deltas and baseline immediately. Failed database writes retain pending deltas for retry and display a save warning; a failed JSON mirror does not duplicate committed records. The database is authoritative on restart, preventing duplicate accounting; `state.json` remains a compatibility mirror for installer commands. A custom state path places `traffic.db` in the same directory; override it with `sbm-panel serve --traffic-db /path/to/traffic.db`.
+An entry reset on the 15th and an exit reset on the 1st use separate plan periods. Calendar-month history remains October 1–November 1 even if a plan runs October 15–November 15. The panel uses absolute source timestamps and fine-grained boundary records for the chosen billing timezone. Changes to vnStat’s `MonthRotate` are not needed. Manual resets establish a new baseline at the latest saved vnStat snapshot; they do not clear vnStat or history. A fresh source snapshot is required before a manual reset.
 
-The first upgrade preserves existing period totals without inventing daily details. An imported total joins a monthly summary only when its entire period belongs to that calendar month, with an explicit imported-usage label. History already erased by an older version cannot be recovered. The recording timezone comes from the explicit reset timezone when the database is created, defaults to UTC for an unset or `Local` timezone, and stays fixed thereafter. Monthly history uses calendar months independently of the plan's reset day. Estimated plan usage retains the billing mode in effect at each sample.
+The panel reads the entry source every 30 seconds and stores copies in `/var/lib/sbm/traffic.db`. vnStat saves its own cache separately, so dashboard updates and safety stops have a delay of roughly the configured source save interval plus the panel read interval. Keep an appropriate reserve for the host’s transfer rate. Do not reset or delete vnStat’s database at billing boundaries.
 
-Traffic accumulated during an outage is assigned when sampling resumes; cross-day gaps can affect daily attribution and are marked partial. A missing date is not evidence of zero traffic. The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, with inclusive `from` and `to` values in `YYYY-MM-DD` or `YYYY-MM` format respectively.
+Source buckets replace earlier versions of the same timestamp instead of accumulating every response. Raw history and the state checkpoint commit in one SQLite transaction. A failed write retains pending records; retries and panel restarts do not double-count. A failed JSON mirror does not discard the committed database. Records already copied into SBM survive vnStat retention expiry and period resets. A custom state path places `traffic.db` in the same directory; override it with `sbm-panel serve --traffic-db /path/to/traffic.db`.
+
+After a connection outage, retained vnStat records restore their original dates. Data from before vnStat was installed, expired source records never copied into SBM, unresolved timezone boundaries and external database recreation can leave gaps; these are marked partial rather than estimated. Changing a database timezone does not repartition older source rows. The fixed history timezone is selected when SBM creates its history database and remains independent of later plan-schedule changes.
+
+The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, and inclusive `from` / `to` values in `YYYY-MM-DD` or `YYYY-MM` format. It returns NIC counters separately from proxy references and coverage flags. Internal legacy sing-box and WireGuard checkpoints remain available for auditing and compatibility, but entry dashboard, subscription usage and global quota enforcement use vnStat; exit cards retain their tunnel estimates.
 
 The `sudo sbm` backup command briefly pauses the panel for a consistent SQLite archive while sing-box continues forwarding. For manual backups, stop the panel first or use SQLite's online backup facility instead of copying an actively written database. Restoring a pre-SQLite archive saves any current database as `traffic.db.before-restore-*` and imports the restored JSON.
 

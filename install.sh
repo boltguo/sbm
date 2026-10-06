@@ -24,7 +24,7 @@ readonly CORE_GUARD="/usr/local/lib/sbm/core-start-allowed.sh"
 readonly SELF_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
 readonly -a RUNTIME_PACKAGES=(
   bash ca-certificates coreutils cron curl gawk grep gzip iproute2 iptables
-  libc-bin openssl procps sed socat tar
+  libc-bin openssl procps sed socat tar vnstat
 )
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'; RESET=$'\e[0m'
@@ -282,9 +282,37 @@ install_deps() {
   command -v crontab >/dev/null || die "cron 已安装，但未找到 crontab，无法配置证书自动续期。"
   systemctl enable --now cron.service >/dev/null 2>&1 || die "无法启动 cron 服务，证书将不能自动续期。"
 }
+configure_vnstat() {
+  local config="${1:-/etc/vnstat.conf}" staging
+  [[ -f "$config" ]] || { warn "缺少 vnStat 配置：$config"; return 1; }
+  staging="$(mktemp "${config}.sbm.XXXXXX")" || return 1
+  # Keep longer / unlimited retention. Never delete or reset the source DB.
+  awk '
+    BEGIN {want["UseUTC"]=1;want["SaveInterval"]=1;want["UpdateInterval"]=10;want["DailyDays"]=90;want["HourlyDays"]=40;want["5MinuteHours"]=48;want["TrafficlessEntries"]=1}
+    $1 in want {
+      key=$1;value=want[key];old=$2;gsub(/"/, "", old)
+      if (key=="DailyDays" || key=="HourlyDays" || key=="5MinuteHours") {
+        if (old==-1 || old+0>value) value=old
+      }
+      if (!seen[key]++) print key " " value
+      next
+    }
+    {print}
+    END {for(key in want) if(!seen[key]) print key " " want[key]}
+  ' "$config" > "$staging" || { rm -f "$staging"; return 1; }
+  if ! cmp -s "$config" "$staging"; then
+    [[ -f "${config}.before-sbm" ]] || cp -p "$config" "${config}.before-sbm" || { rm -f "$staging"; return 1; }
+    # Write through the existing file to preserve ownership and permissions.
+    cat "$staging" > "$config" || { rm -f "$staging"; return 1; }
+  fi
+  rm -f "$staging"
+  systemctl enable --now vnstat.service >/dev/null 2>&1 || return 1
+  systemctl restart vnstat.service || return 1
+}
+
 check_required_commands() {
   local command_name missing=()
-  for command_name in awk chmod cp crontab curl cut date df getent grep gzip head install iptables iptables-save journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr; do
+  for command_name in awk cat chmod cmp cp crontab curl cut date df getent grep gzip head install iptables iptables-save journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr vnstat; do
     command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
   done
   ((${#missing[@]} == 0)) || die "依赖安装后仍缺少命令：${missing[*]}。请检查 apt 软件源后重试。"
@@ -744,6 +772,7 @@ open_firewall() {
 repair_runtime() {
   local provider panel_port
   install_deps
+  configure_vnstat || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
   provider="$(detect_cloud_provider)"
   panel_port="$(json_number panelPort "$CONFIG_FILE")"
   [[ -n "$panel_port" ]] || { warn "无法从配置读取面板端口。"; return 1; }
@@ -794,6 +823,7 @@ do_install() {
   read -r -p "面板端口 [2096]: " panel_port
   panel_port="${panel_port:-2096}"; validate_panel_port "$panel_port"
   install_deps
+  configure_vnstat || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
   check_ports "$panel_port"
   cloud_provider="$(detect_cloud_provider)"
   info "云平台识别：$(cloud_provider_name "$cloud_provider")"
