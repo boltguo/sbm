@@ -11,7 +11,7 @@ const { messages } = ctx
 const chinese = Object.keys(messages['zh-CN']).sort()
 const english = Object.keys(messages.en).sort()
 if (JSON.stringify(chinese) !== JSON.stringify(english)) throw new Error('Egress translations differ between languages')
-for (const file of ['App.vue', ...readdirSync(`${root}views`).map(n => `views/${n}`)]) {
+for (const file of ['App.vue', ...['views', 'components'].flatMap(dir => readdirSync(`${root}${dir}`).filter(n => n.endsWith('.vue')).map(n => `${dir}/${n}`))]) {
   const text = readFileSync(`${root}${file}`, 'utf8')
   for (const [, key] of text.matchAll(/['"](egress\.[a-zA-Z]+(?:\.[a-zA-Z]+)?)['"]/g)) {
     if (!messages.en[key]) throw new Error(`Missing Egress translation: ${key}`)

@@ -29,7 +29,7 @@ Client → VLESS Reality / Hysteria2 → A / SBM
 | 核心渲染和事务 | `internal/core/render.go`、`internal/core/manager.go`、`internal/core/manager_test.go`、`internal/core/egress_test.go` |
 | 流量计数 | `internal/traffic/tracker.go`、`internal/traffic/accounting.go`、`internal/traffic/accounting_test.go`、`internal/traffic/egress.go`、`internal/traffic/egress_test.go` |
 | API、订阅与启动 | `internal/server/server.go`、`internal/server/egress.go`、`internal/server/egress_test.go`、`internal/server/egress_runtime_test.go`、`cmd/sbm-panel/main.go` |
-| UI | `web/src/App.vue`、`web/src/types.ts`、`web/src/i18n.ts`、`web/src/egress-i18n.ts`、`web/src/style.css`、`web/src/views/EgressView.vue`、`web/src/views/ProtocolsView.vue`、`web/src/views/DashboardView.vue` |
+| UI | `web/src/App.vue`、`web/src/types.ts`、`web/src/i18n.ts`、`web/src/egress-i18n.ts`、`web/src/style.css`、`web/src/components/EgressGuide.vue`、`web/src/views/EgressView.vue`、`web/src/views/ProtocolsView.vue`、`web/src/views/DashboardView.vue` |
 | 验证与 CI | `scripts/egress-linux-test.sh`、`scripts/sing-box-integration.sh`、`scripts/frontend-style-unit.sh`、`web/scripts/check-i18n.mjs`、`.github/workflows/build.yml` |
 | 安装与文档 | `install.sh`、`README.md`、`README.zh-CN.md`、`docs/WIREGUARD-EXIT.md`、`docs/WIREGUARD-EXIT.en.md`、本文 |
 
@@ -142,6 +142,8 @@ Geo 查询仅发生在创建、修改 IP 和主动重检，最多 3 秒。失败
 
 Gateway 禁用时从 core、衍生卡片和订阅隐藏，UUID/password 保留；重新启用、改名、重排及修改套餐不会旋转凭据。删除才清理。衍生链接保留原入站 Reality/TLS/obfs 参数，仅替换凭据和显示名。
 
+“中继出口”页面提供可展开的五步文档教程，覆盖 Ubuntu/Debian 安装、B 密钥生成、面板字段对应关系、B forwarding/NAT/服务启动和出口 IP 验证。教程只展示步骤与命令示例；公钥、地址槽 X、UDP 端口及网卡按文档说明手动替换。B 私钥保存在 B 的文件中，示例通过 PostUp 读取。教程的接口与服务名为 `sbm-egress`，与手动文档中的 `wg0` 示例择一使用。
+
 ## 7. 安装与升级兼容
 
 保持 v4 config / v1 state，新增字段省略时默认没有 Gateway。现有 2.0.2 v4 实例可以直接加载，不恢复 1.x migration。安装器增加 `iptables-save` 依赖检查，A 无需安装 wireguard 包。官方核心继续使用 1.13.14。
@@ -160,7 +162,7 @@ B 的安装、公钥交换、forwarding、NAT、云防火墙和排障步骤见 [
 | `go test -race ./...` | 通过 |
 | `go vet ./...`、gofmt、`git diff --check` | 通过 |
 | `npm run build` | Vue 类型检查与 Vite 构建通过 |
-| 中英文类型、API、静态 i18n 引用及占位符 | 57 个新增文案键校验通过 |
+| 中英文类型、API、静态 i18n 引用及占位符 | 82 个中继文案键校验通过；检查覆盖页面与组件 |
 | 安装测试、bash syntax、shellcheck | 通过 |
 | 官方 sing-box 1.13.14 `check` | 0/1/2/3 Gateway × 5 个 Direct 地址族策略，共 20 个组合通过 |
 | 对比原始 `main` 的 Direct 配置 | 独立构建 `ef33404` 与当前二进制；五种地址族策略的无 Gateway 配置逐字节相同 |

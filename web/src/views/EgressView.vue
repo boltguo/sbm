@@ -8,6 +8,7 @@ import Modal from '../components/Modal.vue'
 import PasswordInput from '../components/PasswordInput.vue'
 import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
+import EgressGuide from '../components/EgressGuide.vue'
 import { dateLocale, t } from '../i18n'
 
 const emit = defineEmits<{ toast: [message: string] }>()
@@ -75,6 +76,7 @@ onBeforeUnmount(() => clearInterval(timer))
     <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></header>
     <div class="egress-flow"><span>{{ t('egress.client') }}</span><b>→</b><span>{{ t('egress.entry') }}</span><b>→</b><strong>{{ t('egress.gateway') }}</strong><b>→</b><span>Internet</span></div>
     <p class="egress-source">{{ t('egress.estimate') }} · {{ t('egress.warningOnly') }}</p>
+    <EgressGuide/>
     <div v-if="!loaded" class="loading">{{ t('egress.loading') }}</div>
     <div v-else-if="!items.length" class="egress-empty"><Icon name="route"/><h2>{{ t('egress.empty') }}</h2><p>{{ t('egress.emptyHelp') }}</p><button class="secondary" @click="create">{{ t('egress.add') }}</button></div>
     <div v-else class="protocol-grid egress-grid">
