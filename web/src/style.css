@@ -2340,7 +2340,7 @@ label small {
 .gateway-card .endpoint { flex-wrap:wrap; gap:8px; }
 .gateway-card .endpoint code { font-size:18px; }
 .gateway-card .endpoint b { display:block; margin-left:auto; }
-.gateway-usage { padding:20px 22px; border-top:1px solid var(--line); }
+.gateway-usage { padding:20px 0; border-top:1px solid var(--line); }
 .gateway-usage > strong { font-family:var(--display); font-size:24px; }
 .gateway-usage > small { display:block; margin-top:8px; color:var(--muted); }
 .gateway-usage p { margin:8px 0; font-size:12px; }
