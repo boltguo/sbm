@@ -28,18 +28,21 @@ type coreGeneration interface {
 }
 
 type Tracker struct {
-	persistMu sync.Mutex
-	gatewayMu sync.Mutex
-	Gateways  GatewaySampler
-	mu        sync.RWMutex
-	controlMu sync.Mutex
-	sampleMu  sync.Mutex
-	state     model.State
-	file      *store.JSONFile[model.State]
-	config    ConfigSource
-	core      CoreControl
-	now       func() time.Time
-	health    SampleHealth
+	persistMu         sync.Mutex
+	gatewayMu         sync.Mutex
+	Gateways          GatewaySampler
+	mu                sync.RWMutex
+	controlMu         sync.Mutex
+	sampleMu          sync.Mutex
+	state             model.State
+	file              *store.JSONFile[model.State]
+	config            ConfigSource
+	core              CoreControl
+	now               func() time.Time
+	health            SampleHealth
+	history           *historyStore
+	pendingHistory    map[string]Usage
+	historyLastSample time.Time
 }
 
 type SampleHealth struct {
@@ -195,7 +198,8 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 	if currentUpload < 0 || currentDownload < 0 {
 		return false, errors.New("核心流量计数不能为负数")
 	}
-	limit, err := t.config.Get().EffectiveTrafficLimitBytes()
+	cfg := t.config.Get()
+	limit, err := cfg.EffectiveTrafficLimitBytes()
 	if err != nil {
 		return false, fmt.Errorf("计算流量限额: %w", err)
 	}
@@ -204,6 +208,13 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 	if generation != "" && t.state.CoreGeneration != "" && generation != t.state.CoreGeneration {
 		restarted = true
 	}
+	uploadDelta, downloadDelta := currentUpload, currentDownload
+	if !restarted {
+		uploadDelta -= t.state.LastCoreUpload
+		downloadDelta -= t.state.LastCoreDownload
+	}
+	now := t.now()
+	t.recordHistory(now, uploadDelta, downloadDelta, cfg.TrafficQuota.ProviderUsageFactor())
 	if restarted {
 		t.state.Upload += currentUpload
 		t.state.Download += currentDownload
@@ -216,7 +227,7 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 	if generation != "" {
 		t.state.CoreGeneration = generation
 	}
-	t.state.UpdatedAt = t.now()
+	t.state.UpdatedAt = now
 	shouldExceed := limit > 0 && t.state.Total() >= limit
 	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {
@@ -346,12 +357,38 @@ func (t *Tracker) Persist() error { return t.persist(t.State()) }
 func (t *Tracker) persist(_ model.State) error {
 	t.persistMu.Lock()
 	defer t.persistMu.Unlock()
-	if t.file == nil {
-		return nil
-	}
 	// Always take a fresh snapshot so a slow periodic save cannot overwrite a
 	// newer reset or quota transition that completed while it was waiting.
-	return t.file.Save(t.State())
+	t.mu.RLock()
+	snapshot := cloneState(t.state)
+	sampledAt := t.historyLastSample
+	pending := make(map[string]Usage, len(t.pendingHistory))
+	for day, usage := range t.pendingHistory {
+		pending[day] = usage
+	}
+	t.mu.RUnlock()
+	if t.history != nil {
+		if err := t.history.save(snapshot, pending, sampledAt); err != nil {
+			return fmt.Errorf("保存流量历史失败: %w", err)
+		}
+		t.mu.Lock()
+		for day, saved := range pending {
+			current := t.pendingHistory[day]
+			current.Upload -= saved.Upload
+			current.Download -= saved.Download
+			current.EstimatedProviderUsedBytes -= saved.EstimatedProviderUsedBytes
+			if current.Upload == 0 && current.Download == 0 && current.EstimatedProviderUsedBytes == 0 && current.Partial == saved.Partial {
+				delete(t.pendingHistory, day)
+			} else {
+				t.pendingHistory[day] = current
+			}
+		}
+		t.mu.Unlock()
+	}
+	if t.file != nil {
+		return t.file.Save(snapshot)
+	}
+	return nil
 }
 
 func NextMonthlyReset(after time.Time, reset model.ResetConfig) (time.Time, error) {

@@ -197,6 +197,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.restart(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/traffic/reset":
 		s.resetTraffic(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/traffic/history":
+		s.trafficHistory(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/inbounds":
 		s.listInbounds(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/inbounds":
@@ -1157,6 +1159,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"接口不存在":                        "API endpoint not found.",
 		"已达到代理安全阈值，请先重置流量或提高限额":        "The proxy safety threshold has been reached. Reset traffic or increase the quota first.",
 		"保存流量状态失败":                     "Could not save traffic state.",
+		"流量历史查询范围无效":                   "Invalid traffic history range.",
+		"流量历史记录未启用":                    "Traffic history is not enabled.",
+		"读取流量历史失败":                     "Could not read traffic history.",
 		"重启 sing-box 失败":               "Could not restart sing-box.",
 		"重置流量失败":                       "Could not reset traffic.",
 		"无法读取核心流量，请稍后重试":               "Could not read current core traffic. Try again shortly.",

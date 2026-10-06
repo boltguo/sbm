@@ -302,3 +302,109 @@ check_ports "$custom_panel_port" >/dev/null
 ss() { printf '%s\n' 'LISTEN 0 4096 *:443 *:*'; }
 curl() { printf '401'; }
 post_install_check node.example.com "$custom_panel_port" >/dev/null
+
+# SQLite backups must pause only the panel and restore it even if tar fails.
+(
+  backup_trace="$(mktemp /tmp/sbm-backup-test.XXXXXX)"
+  trap 'command rm -f "$backup_trace"' EXIT
+  backup_tar_status=0
+  backup_stop_status=0
+  systemctl() {
+    printf 'systemctl %s\n' "$*" >> "$backup_trace"
+    if [[ "$1" == stop ]]; then return "$backup_stop_status"; fi
+    return 0
+  }
+  tar() { printf 'tar\n' >> "$backup_trace"; return "$backup_tar_status"; }
+  chmod() { return 0; }
+  rm() { return 0; }
+  backup_config >/dev/null
+  [[ "$(cat "$backup_trace")" == $'systemctl is-active --quiet sbm-panel.service\nsystemctl stop sbm-panel.service\ntar\nsystemctl start sbm-panel.service' ]]
+  : > "$backup_trace"
+  backup_tar_status=1
+  if backup_config >/dev/null; then echo 'Failed archive reported success' >&2; exit 1; fi
+  grep -Fxq 'systemctl start sbm-panel.service' "$backup_trace"
+  : > "$backup_trace"
+  backup_stop_status=1
+  if backup_config >/dev/null; then echo 'Backup proceeded after failed stop' >&2; exit 1; fi
+  if grep -Fxq tar "$backup_trace"; then echo 'SQLite archived while panel was running' >&2; exit 1; fi
+)
+
+# Restore exercises private fixture files and mocked services, including legacy
+# archives that must retire the authoritative checkpoint before restarting.
+(
+  restore_test_state_dir="$(mktemp -d /tmp/sbm-restore-test.XXXXXX)"
+  trap 'command rm -rf "$restore_test_state_dir"' EXIT
+  restore_trace="$restore_test_state_dir/trace"
+  archive="$restore_test_state_dir/backup.tar.gz"
+  touch "$archive"
+  restore_stop_status=0
+  restore_list_status=0
+  restore_extract_status=0
+  restore_has_database=0
+  restore_move_status=0
+  # Redirect just this function's DB path, leaving installer constants intact.
+  restore_function="$(declare -f restore_config)"
+  eval "${restore_function//STATE_DIR/restore_test_state_dir}"
+  systemctl() {
+    printf 'systemctl %s\n' "$*" >> "$restore_trace"
+    if [[ "$1" == stop ]]; then return "$restore_stop_status"; fi
+    return 0
+  }
+  tar() {
+    printf 'tar %s\n' "$1" >> "$restore_trace"
+    case "$1" in
+      -tzf)
+        (( restore_list_status == 0 )) || return "$restore_list_status"
+        printf 'etc/sbm/config.json\nvar/lib/sbm/state.json\n'
+        if (( restore_has_database )); then printf 'var/lib/sbm/traffic.db\n'; fi
+        ;;
+      -xzf) return "$restore_extract_status" ;;
+      *) return 1 ;;
+    esac
+  }
+  chmod() { return 0; }
+  mv() {
+    printf 'mv\n' >> "$restore_trace"
+    (( restore_move_status == 0 )) || return "$restore_move_status"
+    command mv "$@"
+  }
+  quota_exceeded() { return 1; }
+  run_restore() { restore_config <<< "$archive"$'\ny' >/dev/null; }
+
+  printf 'current checkpoint' > "$restore_test_state_dir/traffic.db"
+  run_restore
+  [[ ! -f "$restore_test_state_dir/traffic.db" ]]
+  [[ "$(cat "$restore_test_state_dir"/traffic.db.before-restore-*)" == 'current checkpoint' ]]
+  grep -Fxq 'systemctl start sbm-firewall.service sbm-panel.service' "$restore_trace"
+
+  : > "$restore_trace"
+  restore_has_database=1
+  printf 'restored checkpoint' > "$restore_test_state_dir/traffic.db"
+  run_restore
+  [[ "$(cat "$restore_test_state_dir/traffic.db")" == 'restored checkpoint' ]]
+  if grep -Fxq mv "$restore_trace"; then echo 'New backup lost its restored database' >&2; exit 1; fi
+
+  : > "$restore_trace"
+  restore_stop_status=1
+  if run_restore; then echo 'Restore proceeded after failed service stop' >&2; exit 1; fi
+  if grep -Fxq 'tar -xzf' "$restore_trace"; then echo 'Live database was overwritten' >&2; exit 1; fi
+  restore_stop_status=0
+
+  : > "$restore_trace"
+  restore_list_status=1
+  if run_restore 2>/dev/null; then echo 'Unreadable archive reported success' >&2; exit 1; fi
+  if grep -q '^systemctl' "$restore_trace"; then echo 'Unreadable archive stopped services' >&2; exit 1; fi
+  restore_list_status=0
+
+  : > "$restore_trace"
+  restore_extract_status=1
+  if run_restore; then echo 'Failed extraction reported success' >&2; exit 1; fi
+  if grep -q '^systemctl start' "$restore_trace"; then echo 'Partial restore restarted services' >&2; exit 1; fi
+  restore_extract_status=0
+
+  : > "$restore_trace"
+  restore_has_database=0
+  restore_move_status=1
+  if run_restore; then echo 'Failed checkpoint retirement reported success' >&2; exit 1; fi
+  if grep -q '^systemctl start' "$restore_trace"; then echo 'Stale checkpoint restarted services' >&2; exit 1; fi
+)

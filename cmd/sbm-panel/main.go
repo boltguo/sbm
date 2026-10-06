@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -200,6 +201,7 @@ func runAdmin(args []string) {
 func runServe(args []string) {
 	set := flag.NewFlagSet("serve", flag.ExitOnError)
 	p := pathFlags(set)
+	historyPath := set.String("traffic-db", "", "流量历史 SQLite 路径（默认与状态文件同目录的 traffic.db）")
 	plainHTTP := set.Bool("http", false, "开发模式：使用 HTTP")
 	procRoot := set.String("proc-root", "/proc", "系统状态 /proc 路径")
 	osRelease := set.String("os-release", "/etc/os-release", "系统版本文件路径")
@@ -207,10 +209,14 @@ func runServe(args []string) {
 	_ = set.Parse(args)
 	cfgStore, manager := loadCore(p)
 	cfg := cfgStore.Get()
-	tracker, err := traffic.Open(p.state, cfgStore, manager, time.Now)
-	if err != nil {
-		fatal("读取流量状态失败")
+	if *historyPath == "" {
+		*historyPath = filepath.Join(filepath.Dir(p.state), "traffic.db")
 	}
+	tracker, err := traffic.OpenWithHistory(p.state, *historyPath, cfgStore, manager, time.Now)
+	if err != nil {
+		fatal("读取流量状态或历史数据库失败：" + err.Error())
+	}
+	defer tracker.Close()
 	tracker.Gateways = &traffic.Accounting{}
 	assets, err := fs.Sub(webembed.Assets, "dist")
 	if err != nil {

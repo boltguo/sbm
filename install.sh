@@ -967,31 +967,61 @@ update_core() {
   return 1
 }
 backup_config() {
-  local target
+  local target panel_running=0 backup_failed=0
   target="/root/sbm-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # Close SQLite and flush its checkpoint before archiving the database. The
+  # proxy core keeps running while the management panel is briefly paused.
+  if systemctl is-active --quiet sbm-panel.service; then
+    panel_running=1
+    if ! systemctl stop sbm-panel.service; then
+      warn "无法暂停面板，未生成备份。"
+      return 1
+    fi
+  fi
   if ! tar -czf "$target" -C / etc/sbm var/lib/sbm etc/sing-box/config.json etc/systemd/system/sbm-firewall.service etc/systemd/system/sbm-panel.service etc/systemd/system/sing-box.service usr/local/lib/sbm; then
     rm -f "$target"
-    warn "备份失败，未生成任何文件。"
+    backup_failed=1
+  fi
+  if (( panel_running )) && ! systemctl start sbm-panel.service; then
+    warn "备份后面板未能恢复，请执行 systemctl start sbm-panel.service。"
     return 1
   fi
+  if (( backup_failed )); then warn "备份失败，未生成任何文件。"; return 1; fi
   chmod 0600 "$target"; info "备份已保存：${target}"
 }
 restore_config() {
-  local archive entry
+  local archive entry entries
   read -r -p "备份文件绝对路径: " archive
   [[ "$archive" == /* && -f "$archive" ]] || { warn "备份文件不存在。"; return; }
+  if ! entries="$(tar -tzf "$archive")"; then
+    warn "无法读取备份文件，未恢复任何文件。"
+    return 1
+  fi
   while IFS= read -r entry; do
     [[ "$entry" != /* && "$entry" != *".."* ]] || { warn "备份包含不安全路径，拒绝恢复。"; return; }
     case "$entry" in etc/sbm/*|var/lib/sbm/*|etc/sing-box/config.json|etc/systemd/system/sbm-firewall.service|etc/systemd/system/sbm-panel.service|etc/systemd/system/sing-box.service|usr/local/lib/sbm/*) ;; *) warn "备份包含未知路径：${entry}"; return ;; esac
-  done < <(tar -tzf "$archive")
+  done <<< "$entries"
   read -r -p "恢复会覆盖当前配置，继续？[y/N]: " answer
   case "$answer" in y|Y) ;; *) return ;; esac
-  systemctl stop sbm-panel.service sing-box.service || true
+  if ! systemctl stop sbm-panel.service sing-box.service; then
+    warn "无法停止面板或核心，未恢复任何文件。请检查服务状态后重试。"
+    return 1
+  fi
   # Do not carry on past a failed extraction: the system would be half restored
   # and the services below would come up on a mix of old and new files.
   if ! tar -xzf "$archive" -C /; then
     warn "解包备份失败，配置可能只恢复了一部分；请修复备份文件后重试。"
     return 1
+  fi
+  # A pre-SQLite backup has no database checkpoint. Keep any current database
+  # separately so startup imports the restored JSON rather than ignoring it.
+  if ! grep -Fx 'var/lib/sbm/traffic.db' <<< "$entries" >/dev/null; then
+    if [[ -f "$STATE_DIR/traffic.db" ]]; then
+      if ! mv "$STATE_DIR/traffic.db" "$STATE_DIR/traffic.db.before-restore-$(date +%Y%m%d-%H%M%S)"; then
+        warn "无法另存当前历史数据库，服务保持停止。请处理文件权限后重试。"
+        return 1
+      fi
+    fi
   fi
   chmod 0600 "$CONFIG_FILE" "$STATE_FILE" "$CORE_CONFIG" || true
   systemctl daemon-reload

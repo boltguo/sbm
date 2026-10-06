@@ -28,6 +28,7 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: bash scripts/frontend-style-unit.sh
       # The bundle is committed and embedded by the Go build, so it must match
       # web/src. Releases rebuild it anyway; this keeps the repo copy honest.
       - name: Verify the committed frontend bundle is up to date

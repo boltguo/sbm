@@ -720,11 +720,79 @@ select:focus-visible,
   transform: translateX(-1px);
 }
 
+.traffic-history {
+  margin-top: 20px;
+  padding: 26px 32px;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+
+.history-head, .history-controls, .history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.history-head h2 {
+  margin: 8px 0;
+  font: 800 28px/1.1 var(--display);
+}
+
+.history-head p, .traffic-history footer, .history-note, .history-summary > span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.history-controls { justify-content: flex-start; gap: 10px; }
+.history-switch { display: flex; flex: 0 0 auto; height: 44px; border: 1px solid var(--line); }
+.history-switch button { height: 42px; min-height: 42px; padding: 0 14px; border: 0; background: transparent; font-size: 12px; font-weight: 700; }
+.history-switch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.history-month { display: flex; min-width: 0; align-items: center; gap: 8px; font-size: 12px; }
+.history-month input { width: 160px; max-width: 160px; height: 44px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--line); background: var(--paper); }
+.history-month input[type="number"] { width: 112px; }
+.history-month input:focus-visible { outline: 2px solid var(--signal-dark); outline-offset: 2px; }
+.history-controls .history-refresh { display: inline-grid; flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; place-items: center; padding: 0; }
+.history-refresh.refreshing .icon { animation: version-spin .8s linear infinite; }
+.history-loading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.history-summary { margin: 24px 0 14px; padding-top: 16px; border-top: 1px solid var(--line); }
+.history-summary strong { font: 700 22px/1.3 var(--mono); }
+.history-summary strong small { margin-left: 10px; color: var(--muted); font: 500 12px/1.4 sans-serif; }
+.history-note { margin-bottom: 14px; padding: 10px 12px; border-left: 3px solid var(--signal-dark); background: var(--paper-2); }
+.history-table-scroll { overflow-x: auto; }
+.history-swipe { display: none; }
+.history-table { width: 100%; border-collapse: collapse; text-align: right; font: 12px/1.5 var(--mono); white-space: nowrap; }
+.history-table caption { padding-bottom: 10px; color: var(--muted); text-align: left; font: 12px/1.5 sans-serif; }
+.history-table th, .history-table td { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.history-table thead th { background: var(--paper-2); color: var(--muted); font: 600 11px/1.5 sans-serif; }
+.history-table th:first-child { padding-left: 0; text-align: left; }
+.history-table thead th:first-child { padding-left: 12px; }
+.history-table tbody th { font-weight: 600; }
+.history-table tbody th small { display: block; color: var(--muted); font: 10px/1.6 sans-serif; }
+.history-usage { position: relative; isolation: isolate; }
+.history-usage i { position: absolute; z-index: -1; right: 0; bottom: 0; height: 3px; background: var(--signal); }
+.history-empty, .history-error { margin: 24px 0; font-size: 13px; line-height: 1.6; }
+.history-error { color: var(--red); }
+.traffic-history footer { margin-top: 16px; }
+
+@media (max-width: 600px) {
+  .traffic-history { padding: 20px 16px; }
+  .history-controls { width: 100%; flex-wrap: nowrap; gap: 8px; }
+  .history-switch button { padding: 0 10px; }
+  .history-month { flex: 1; max-width: 160px; }
+  .history-month > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .history-month input, .history-month input[type="number"] { width: 100%; min-width: 0; }
+  .history-swipe { display: block; margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+}
+
 .subscription-card {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) 204px;
-  margin-top: 20px;
+  margin: 20px 0;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, .58);
 }

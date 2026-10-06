@@ -173,7 +173,12 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := store.NewConfigStore(filepath.Join(dir, "business.json"), cfg)
-	tracker := traffic.NewForTest(model.DefaultState(time.Now()), config, nil, time.Now)
+	statePath, historyPath := filepath.Join(dir, "state.json"), filepath.Join(dir, "traffic.db")
+	tracker, err := traffic.OpenWithHistory(statePath, historyPath, config, nil, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tracker.Close() })
 	tracker.Gateways = &traffic.Accounting{}
 	if err := tracker.ReconcileGateways(context.Background()); err != nil {
 		t.Fatal(err)
@@ -253,6 +258,44 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		}
 		t.Logf("%s tunnel bytes: tx=%d rx=%d", g.ID, state.TX, state.RX)
 	}
+	// Read the real core's global proxy counters and persist them with the
+	// independently sampled tunnel baselines in the same SQLite checkpoint.
+	clash := traffic.ClashClient{URL: "http://127.0.0.1:9090/connections", Secret: cfg.ClashAPISecret}
+	if _, err := tracker.Sample(context.Background(), clash); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	saved := tracker.State()
+	if saved.Total() == 0 {
+		t.Fatal("the core did not record real proxy traffic")
+	}
+	if err := tracker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tracker, err = traffic.OpenWithHistory(statePath, historyPath, config, nil, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := tracker.State()
+	if restored.Upload != saved.Upload || restored.Download != saved.Download {
+		t.Fatal("SQLite restart lost the global counter checkpoint")
+	}
+	for _, g := range cfg.EgressGateways {
+		// JSON drops time.Time's process-local monotonic clock; compare the
+		// persisted representation, including all counters and generations.
+		want, _ := json.Marshal(saved.Egress[g.ID])
+		got, _ := json.Marshal(restored.Egress[g.ID])
+		if string(got) != string(want) {
+			t.Fatalf("SQLite restart lost gateway %s counters or baselines", g.ID)
+		}
+	}
+	history, err := tracker.History(context.Background(), "day", "", "")
+	if err != nil || len(history.Rows) != 1 || history.Rows[0].Upload != saved.Upload || history.Rows[0].Download != saved.Download {
+		t.Fatalf("actual proxy traffic did not match the history checkpoint: %+v, %v", history.Rows, err)
+	}
+	t.Logf("SQLite restart retained both gateways; daily history matches actual core upload=%d download=%d", saved.Upload, saved.Download)
 	// A failed optional peer must not disturb Direct or another gateway, and
 	// its credentials must never silently fall back to the entry's Direct IP.
 	peers["aws"]()

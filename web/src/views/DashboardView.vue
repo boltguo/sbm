@@ -4,6 +4,7 @@ import { api, guard, post } from '../api'
 import type { Dashboard, UpdateStatus, GatewayUsage } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
+import TrafficHistory from '../components/TrafficHistory.vue'
 import { dateLocale, t } from '../i18n'
 import { createQrCard, downloadQrCard } from '../qr'
 
@@ -118,6 +119,10 @@ onBeforeUnmount(() => clearInterval(timer))
       <div><small>PERIOD START</small><strong>{{ date(data.periodStartedAt) }}</strong></div>
       <div><small>NEXT RESET</small><strong>{{ date(data.nextResetAt) }}</strong></div>
     </section>
+    <section class="subscription-card">
+      <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>
+      <div class="qr-frame"><img :src="qr" :alt="t('dashboard.qrAlt', { name: data.subscriptionName })"><button class="qr-download" type="button" @click="saveQR"><Icon name="download"/>{{ t('dashboard.qrDownload') }}</button></div>
+    </section>
     <section class="traffic-panel">
       <div class="traffic-copy">
         <div class="traffic-kicker">
@@ -141,10 +146,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
       </article></div>
     </section>
-    <section class="subscription-card">
-      <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>
-      <div class="qr-frame"><img :src="qr" :alt="t('dashboard.qrAlt', { name: data.subscriptionName })"><button class="qr-download" type="button" @click="saveQR"><Icon name="download"/>{{ t('dashboard.qrDownload') }}</button></div>
-    </section>
+    <TrafficHistory :unit="data.trafficQuota.unit" />
   </div>
   <div v-else class="loading">{{ t('dashboard.loading') }}</div>
 </template>

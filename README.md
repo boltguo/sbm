@@ -131,6 +131,18 @@ A subscription client may display `G` as GiB; this does not change SBM's enforce
 
 Set the allowance to `0` for unlimited traffic. For a limited plan, sing-box stops when the configured safety threshold is reached and resumes after a manual or scheduled traffic reset, or after the plan is increased.
 
+### Daily and monthly traffic history
+
+The Overview page shows daily upload, download, proxy traffic, and estimated plan usage for a selected month, or monthly totals for a selected year. Plan resets and panel restarts preserve these records. Today, the current month, and sampling interruptions are marked as partial.
+
+History lives in `/var/lib/sbm/traffic.db`, using SQLite. Samples accumulate every second; daily deltas and the core-counter checkpoint commit together every 30 seconds, on reset, and on normal shutdown. The database is authoritative on restart, preventing duplicate accounting; `state.json` remains a compatibility mirror for installer commands. A custom state path places `traffic.db` in the same directory; override it with `sbm-panel serve --traffic-db /path/to/traffic.db`.
+
+The first upgrade preserves existing period totals without inventing daily details. An imported total joins a monthly summary only when its entire period belongs to that calendar month, with an explicit imported-usage label. History already erased by an older version cannot be recovered. The recording timezone comes from the explicit reset timezone when the database is created, defaults to UTC for an unset or `Local` timezone, and stays fixed thereafter. Monthly history uses calendar months independently of the plan's reset day. Estimated plan usage retains the billing mode in effect at each sample.
+
+Traffic accumulated during an outage is assigned when sampling resumes; cross-day gaps can affect daily attribution and are marked partial. A missing date is not evidence of zero traffic. The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, with inclusive `from` and `to` values in `YYYY-MM-DD` or `YYYY-MM` format respectively.
+
+The `sudo sbm` backup command briefly pauses the panel for a consistent SQLite archive while sing-box continues forwarding. For manual backups, stop the panel first or use SQLite's online backup facility instead of copying an actively written database. Restoring a pre-SQLite archive saves any current database as `traffic.db.before-restore-*` and imports the restored JSON.
+
 ### IPv4 / IPv6 egress
 
 Choose an address-family strategy under `Settings → Proxy egress network`. If IPv6 has more accurate geolocation, use **Prefer IPv6**: sing-box prefers IPv6 for destinations with AAAA records and falls back to IPv4 when needed. IPv6-only makes IPv4-only destinations unreachable.

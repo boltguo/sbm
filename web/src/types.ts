@@ -22,6 +22,24 @@ export interface Dashboard {
 }
 
 export type TrafficBillingMode = 'bidirectional' | 'single'
+
+export interface TrafficUsage {
+  date: string
+  upload: number
+  download: number
+  proxyUsedBytes: number
+  estimatedProviderUsedBytes: number
+  partial: boolean
+  imported: boolean
+}
+export interface TrafficHistory {
+  granularity: 'day' | 'month'
+  timezone: string
+  startedAt: string
+  updatedAt: string
+  rows: TrafficUsage[]
+  imports: { startedAt: string; endedAt: string; upload: number; download: number; estimatedProviderUsedBytes: number }[]
+}
 export type TrafficUnit = 'GB' | 'GiB'
 export interface TrafficQuota {
   amount: number
