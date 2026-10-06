@@ -127,7 +127,7 @@ func TestGatewayLifecycleAPIAndSubscription(t *testing.T) {
 	aws, jp := cfg.EgressGateways[0], cfg.EgressGateways[1]
 	credentials := append([]model.EgressCredential(nil), cfg.Inbounds[0].EgressCredentials...)
 	links, newTitle := gatewaySubscription(t, s)
-	if len(links) != 6 || title != newTitle || links[2].Fragment != "US-Boardman-AWS-VLESS" || links[3].Fragment != "US-Boardman-AWS-HY2" || links[4].Fragment != "JP-Tokyo-JP1-VLESS" {
+	if len(links) != 6 || title != newTitle || links[2].Fragment != "US-Boardman-VLESS-AWS" || links[3].Fragment != "US-Boardman-HY2-AWS" || links[4].Fragment != "JP-Tokyo-VLESS-JP1" {
 		t.Fatal("subscription order/naming/title incorrect")
 	}
 	requests := geo.calls

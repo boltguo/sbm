@@ -15,7 +15,7 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 “中继出口”页面可管理多个可选 Gateway。客户端仍使用一个总订阅，通过同域名、同端口的独立 VLESS UUID / HY2 password 选择 Direct 或某个 Gateway。原 Direct 节点始终保留。
 
-例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-AWS-VLESS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐仅预警，本机全局套餐的停机逻辑不变。
+例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-VLESS-AWS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐仅预警，本机全局套餐的停机逻辑不变。
 
 参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。这项扩展仍使用 v4 config / v1 state，现有 2.0.2 配置可以直接加载；没有 Gateway 时行为不变。新增功能尚需通过源码构建部署，已发布的 2.0.2 安装包不包含本次修改。
 

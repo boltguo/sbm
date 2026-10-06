@@ -30,15 +30,22 @@ func GatewayLocation(g model.EgressGateway) string {
 	return ""
 }
 func GatewayName(g model.EgressGateway) string {
+	return gatewayName(g, "")
+}
+func gatewayName(g model.EgressGateway, protocolName string) string {
+	location, marker := GatewayLocation(g), strings.TrimSpace(g.Marker)
+	if location == "" && marker == "" {
+		location = "Gateway-" + g.ID
+	}
 	parts := []string{}
-	if location := GatewayLocation(g); location != "" {
+	if location != "" {
 		parts = append(parts, location)
 	}
-	if marker := strings.TrimSpace(g.Marker); marker != "" {
-		parts = append(parts, marker)
+	if protocolName != "" {
+		parts = append(parts, protocolName)
 	}
-	if len(parts) == 0 {
-		parts = append(parts, "Gateway-"+g.ID)
+	if marker != "" {
+		parts = append(parts, marker)
 	}
 	return strings.Join(parts, "-")
 }
@@ -56,7 +63,7 @@ func EgressVariant(in model.Inbound, g model.EgressGateway) (model.Inbound, bool
 			v := *in.VLESS
 			v.UUID = c.UUID
 			variant.VLESS = &v
-			variant.Name = GatewayName(g) + "-VLESS"
+			variant.Name = gatewayName(g, "VLESS")
 		case TypeHysteria2:
 			if in.Hysteria2 == nil || c.Password == "" {
 				return model.Inbound{}, false
@@ -64,7 +71,7 @@ func EgressVariant(in model.Inbound, g model.EgressGateway) (model.Inbound, bool
 			h := *in.Hysteria2
 			h.Password = c.Password
 			variant.Hysteria2 = &h
-			variant.Name = GatewayName(g) + "-HY2"
+			variant.Name = gatewayName(g, "HY2")
 		default:
 			return model.Inbound{}, false
 		}

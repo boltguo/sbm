@@ -13,7 +13,7 @@ Client → VLESS Reality / Hysteria2 → A / SBM
 
 一个入口、一个管理员、一个 sing-box。每个入口协议保留 Direct 凭据，并为每个 Gateway 保存一组独立凭据；同域名、同协议端口，以稳定 `auth_user` 选择出口。每个 Gateway 对应独立的 userspace endpoint，A 不安装系统 WireGuard 接口。
 
-不配置或全部停用 Gateway 时，核心只渲染原有 Direct 配置。订阅仍使用一个 URL，先输出 Direct，再按 Gateway 的 `position` 分组，位置相同时保持保存顺序。Profile Title 继续使用入口名称。
+不配置或全部停用 Gateway 时，核心只渲染原有 Direct 配置。订阅仍使用一个 URL，先输出 Direct，再按 Gateway 的 `position` 分组，位置相同时保持保存顺序。Profile Title 继续使用入口名称。概览页只显示已启用的 Gateway；全部关闭时隐藏整个中继出口区域。
 
 ## 2. 修改文件
 
@@ -124,11 +124,11 @@ single: factor=1; bidirectional: factor=2
 优先手动位置，其次与当前 IP 一致的缓存 Geo；自动命名沿用安装器的两位大写国家代码与去空白城市，例如 `SG-Singapore`。
 
 ```text
-<位置>-<可选 Marker>-VLESS/HY2
-US-Boardman-AWS-VLESS
-JP-Tokyo-JP1-HY2
+<位置>-VLESS/HY2-<可选 Marker>
+US-Boardman-VLESS-AWS
+JP-Tokyo-HY2-JP1
 JP-Tokyo-VLESS          # Marker 为空
-AWS-VLESS               # 无位置，有 Marker
+VLESS-AWS               # 无位置，有 Marker
 Gateway-<ID>-HY2        # 位置、Marker 均为空
 ```
 

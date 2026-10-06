@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, guard, post } from '../api'
 import type { Dashboard, UpdateStatus, GatewayUsage } from '../types'
 import Icon from '../components/Icon.vue'
@@ -9,6 +9,7 @@ import { createQrCard, downloadQrCard } from '../qr'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
+const activeGateways = computed(() => data.value?.egressGateways?.filter(g => g.enabled) ?? [])
 const update = ref<UpdateStatus | null>(null)
 const checkingUpdate = ref(false)
 const refreshingTraffic = ref(false)
@@ -132,9 +133,9 @@ onBeforeUnmount(() => clearInterval(timer))
       <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
       <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
     </section>
-    <section v-if="data.egressGateways?.length" class="egress-overview">
+    <section v-if="activeGateways.length" class="egress-overview">
       <div class="egress-overview-head"><h2>{{ t('egress.title') }}</h2><small>{{ t('egress.estimate') }}</small></div>
-      <div class="egress-summary-grid"><article v-for="g in data.egressGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning, disabled: !g.enabled }">
+      <div class="egress-summary-grid"><article v-for="g in activeGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning }">
         <h3>{{ g.name }}</h3><strong>{{ gatewayBytes(g.estimatedProviderUsedBytes, g) }} <small v-if="g.providerAllowanceBytes">/ {{ gatewayBytes(g.providerAllowanceBytes, g) }}</small></strong>
         <div class="progress-track"><i :style="{ width: `${g.providerProgress}%` }"></i></div>
         <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>

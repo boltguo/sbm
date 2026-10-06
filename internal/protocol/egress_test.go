@@ -17,17 +17,25 @@ func testGateway(id string, slot int) model.EgressGateway {
 func TestEgressNamingAndVariants(t *testing.T) {
 	g := testGateway("aws", 1)
 	for _, c := range []struct {
-		g    model.EgressGateway
-		want string
+		g        model.EgressGateway
+		want     string
+		vless    string
+		hysteria string
 	}{
-		{g, "US-Boardman-AWS"},
-		{func() model.EgressGateway { v := g; v.Marker = ""; return v }(), "US-Boardman"},
-		{func() model.EgressGateway { v := g; v.LocationOverride = "JP-Tokyo"; return v }(), "JP-Tokyo-AWS"},
-		{func() model.EgressGateway { v := g; v.Geo = model.GatewayGeo{}; return v }(), "AWS"},
-		{func() model.EgressGateway { v := g; v.Geo = model.GatewayGeo{}; v.Marker = ""; return v }(), "Gateway-aws"},
+		{g, "US-Boardman-AWS", "US-Boardman-VLESS-AWS", "US-Boardman-HY2-AWS"},
+		{func() model.EgressGateway { v := g; v.Marker = ""; return v }(), "US-Boardman", "US-Boardman-VLESS", "US-Boardman-HY2"},
+		{func() model.EgressGateway { v := g; v.LocationOverride = "JP-Tokyo"; return v }(), "JP-Tokyo-AWS", "JP-Tokyo-VLESS-AWS", "JP-Tokyo-HY2-AWS"},
+		{func() model.EgressGateway { v := g; v.Geo = model.GatewayGeo{}; return v }(), "AWS", "VLESS-AWS", "HY2-AWS"},
+		{func() model.EgressGateway { v := g; v.Geo = model.GatewayGeo{}; v.Marker = ""; return v }(), "Gateway-aws", "Gateway-aws-VLESS", "Gateway-aws-HY2"},
 	} {
 		if got := GatewayName(c.g); got != c.want {
 			t.Errorf("name=%s want=%s", got, c.want)
+		}
+		if got := gatewayName(c.g, "VLESS"); got != c.vless {
+			t.Errorf("VLESS name=%s want=%s", got, c.vless)
+		}
+		if got := gatewayName(c.g, "HY2"); got != c.hysteria {
+			t.Errorf("HY2 name=%s want=%s", got, c.hysteria)
 		}
 	}
 	cfg := testConfig()
@@ -59,7 +67,11 @@ func TestEgressNamingAndVariants(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if u.Host != "node.example.com:443" || !strings.HasPrefix(u.Fragment, "US-Boardman-AWS-") {
+			wantName := "US-Boardman-VLESS-AWS"
+			if in.Type == TypeHysteria2 {
+				wantName = "US-Boardman-HY2-AWS"
+			}
+			if u.Host != "node.example.com:443" || u.Fragment != wantName {
 				t.Fatal("gateway link endpoint or name incorrect")
 			}
 			if in.VLESS != nil {

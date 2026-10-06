@@ -125,14 +125,14 @@ Direct names remain as configured, such as `US-LosAngeles-VLESS` and `US-LosAnge
 Gateway names describe the **final exit**:
 
 ```text
-US-Boardman-AWS-VLESS
-US-Boardman-AWS-HY2
-JP-Tokyo-JP1-VLESS
-JP-Tokyo-JP1-HY2
-SG-Singapore-SG1-VLESS
+US-Boardman-VLESS-AWS
+US-Boardman-HY2-AWS
+JP-Tokyo-VLESS-JP1
+JP-Tokyo-HY2-JP1
+SG-Singapore-VLESS-SG1
 ```
 
-The optional marker precedes the protocol suffix. Automatic location follows the installer: uppercase country code, a hyphen before the city, whitespace removed, and no emoji. `SG + Singapore` remains `SG-Singapore`.
+The optional marker follows the protocol at the end of the node name. Automatic location follows the installer: uppercase country code, a hyphen before the city, whitespace removed, and no emoji. `SG + Singapore` remains `SG-Singapore`.
 
 Adding or changing an IPv4 queries `https://ipwho.is/<IPv4>` with a maximum three-second timeout and stores country, region, and city. Subscription and Dashboard reads never query Geo. Failure still allows saving; changing an IP discards the old IP's location. Detect location refreshes the cache; failure for the same IP retains the previous result.
 

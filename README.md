@@ -15,7 +15,7 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Original Direct nodes remain available.
 
-For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-AWS-VLESS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; the existing global local quota enforcement is unchanged.
+For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; the existing global local quota enforcement is unchanged.
 
 See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). This extension retains v4 config / v1 state and directly loads existing 2.0.2 configurations. With no gateways, behavior is unchanged. Build this development code to deploy the new feature; the published 2.0.2 archive does not contain these changes.
 

@@ -125,14 +125,14 @@ Direct 名称保留，例如 `US-LosAngeles-VLESS`、`US-LosAngeles-HY2`。
 Gateway 使用 **最终出口位置**：
 
 ```text
-US-Boardman-AWS-VLESS
-US-Boardman-AWS-HY2
-JP-Tokyo-JP1-VLESS
-JP-Tokyo-JP1-HY2
-SG-Singapore-SG1-VLESS
+US-Boardman-VLESS-AWS
+US-Boardman-HY2-AWS
+JP-Tokyo-VLESS-JP1
+JP-Tokyo-HY2-JP1
+SG-Singapore-VLESS-SG1
 ```
 
-标记放在协议后缀之前，可为空。位置规则与安装器一致：国家代码大写，国家代码与城市用 `-` 连接，删除空白；`SG + Singapore` 保留为 `SG-Singapore`，不加入 emoji。
+标记放在名称最后，位于协议之后，可为空。位置规则与安装器一致：国家代码大写，国家代码与城市用 `-` 连接，删除空白；`SG + Singapore` 保留为 `SG-Singapore`，不加入 emoji。
 
 新增或修改 IPv4 时，后端最多用 3 秒向 `https://ipwho.is/<IPv4>` 查询并缓存国家、地区、城市。订阅和 Dashboard 不实时查 Geo。查询失败仍可保存；IP 更换失败时丢弃旧 IP 的位置。可点击“重新检测位置”，同一 IP 重查失败则保留上次结果。
 
