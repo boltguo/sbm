@@ -31,7 +31,10 @@ type Driver interface {
 	ShareLink(model.Inbound, ShareContext) (string, error)
 }
 
-type BuildContext struct{ CertificatePath, KeyPath string }
+type BuildContext struct {
+	CertificatePath, KeyPath string
+	EgressGateways           []model.EgressGateway
+}
 type ShareContext struct{ Domain string }
 
 type Registry struct{ drivers map[string]Driver }
@@ -115,7 +118,7 @@ func (r *Registry) ValidateConfig(cfg model.Config) error {
 			return fmt.Errorf("TCP/%d 与面板端口冲突", cfg.PanelPort)
 		}
 	}
-	return nil
+	return ValidateEgress(cfg)
 }
 
 func ValidateOutboundStrategy(strategy string) error {
@@ -187,14 +190,23 @@ func (VLESSDriver) Validate(in model.Inbound) error {
 	}
 	return nil
 }
-func (VLESSDriver) Build(in model.Inbound, _ BuildContext) (map[string]any, error) {
+func (VLESSDriver) Build(in model.Inbound, ctx BuildContext) (map[string]any, error) {
 	if err := (VLESSDriver{}).Validate(in); err != nil {
 		return nil, err
 	}
 	v := in.VLESS
+	users := []any{map[string]any{"name": DirectAuthUser(in), "uuid": v.UUID, "flow": "xtls-rprx-vision"}}
+	for _, g := range ctx.EgressGateways {
+		if !g.Enabled {
+			continue
+		}
+		if variant, ok := EgressVariant(in, g); ok {
+			users = append(users, map[string]any{"name": EgressAuthUser(in, g.ID), "uuid": variant.VLESS.UUID, "flow": "xtls-rprx-vision"})
+		}
+	}
 	return map[string]any{
 		"type": "vless", "tag": "in-" + in.ID, "listen": "::", "listen_port": in.Port,
-		"users": []any{map[string]any{"name": DirectAuthUser(in), "uuid": v.UUID, "flow": "xtls-rprx-vision"}},
+		"users": users,
 		"tls": map[string]any{"enabled": true, "server_name": v.SNI, "reality": map[string]any{
 			"enabled": true, "handshake": map[string]any{"server": v.SNI, "server_port": 443},
 			"private_key": v.PrivateKey, "short_id": []string{v.ShortID},
@@ -239,9 +251,18 @@ func (Hysteria2Driver) Build(in model.Inbound, ctx BuildContext) (map[string]any
 		return nil, err
 	}
 	h := in.Hysteria2
+	users := []any{map[string]any{"name": DirectAuthUser(in), "password": h.Password}}
+	for _, g := range ctx.EgressGateways {
+		if !g.Enabled {
+			continue
+		}
+		if variant, ok := EgressVariant(in, g); ok {
+			users = append(users, map[string]any{"name": EgressAuthUser(in, g.ID), "password": variant.Hysteria2.Password})
+		}
+	}
 	result := map[string]any{
 		"type": "hysteria2", "tag": "in-" + in.ID, "listen": "::", "listen_port": in.Port,
-		"users": []any{map[string]any{"name": DirectAuthUser(in), "password": h.Password}},
+		"users": users,
 		"tls":   map[string]any{"enabled": true, "alpn": []string{"h3"}, "certificate_path": ctx.CertificatePath, "key_path": ctx.KeyPath},
 	}
 	if h.Obfs != "" {

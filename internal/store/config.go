@@ -70,8 +70,10 @@ func (s *ConfigStore) Replace(cfg model.Config) error {
 
 func cloneConfig(cfg model.Config) model.Config {
 	copyCfg := cfg
+	copyCfg.EgressGateways = append([]model.EgressGateway(nil), cfg.EgressGateways...)
 	copyCfg.Inbounds = append([]model.Inbound(nil), cfg.Inbounds...)
 	for i := range copyCfg.Inbounds {
+		copyCfg.Inbounds[i].EgressCredentials = append([]model.EgressCredential(nil), cfg.Inbounds[i].EgressCredentials...)
 		if cfg.Inbounds[i].VLESS != nil {
 			v := *cfg.Inbounds[i].VLESS
 			copyCfg.Inbounds[i].VLESS = &v

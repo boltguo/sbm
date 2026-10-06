@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, guard, post } from '../api'
-import type { Dashboard, UpdateStatus } from '../types'
+import type { Dashboard, UpdateStatus, GatewayUsage } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import { dateLocale, t } from '../i18n'
@@ -28,6 +28,7 @@ const providerBytes = (value: number) => {
   const amount = value / (unit === 'GiB' ? 1024 ** 3 : 1000 ** 3)
   return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: amount < 10 ? 2 : 1 }).format(amount)} ${unit}`
 }
+const gatewayBytes = (value: number, g: GatewayUsage) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(value / (g.trafficQuota.unit === 'GiB' ? 1024 ** 3 : 1000 ** 3))} ${g.trafficQuota.unit}`
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
 const updateLabel = () => update.value?.updateAvailable ? t('dashboard.updateFound', { version: panelVersion(update.value.latestVersion) }) : t('dashboard.checkUpdate')
@@ -130,6 +131,14 @@ onBeforeUnmount(() => clearInterval(timer))
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('dashboard.upload') }}</p><strong>{{ bytes(data.upload) }}</strong></div><div><span>↓</span><p>{{ t('dashboard.download') }}</p><strong>{{ bytes(data.download) }}</strong></div></div>
       <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
+    </section>
+    <section v-if="data.egressGateways?.length" class="egress-overview">
+      <div class="egress-overview-head"><h2>{{ t('egress.title') }}</h2><small>{{ t('egress.estimate') }}</small></div>
+      <div class="egress-summary-grid"><article v-for="g in data.egressGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning, disabled: !g.enabled }">
+        <h3>{{ g.name }}</h3><strong>{{ gatewayBytes(g.estimatedProviderUsedBytes, g) }} <small v-if="g.providerAllowanceBytes">/ {{ gatewayBytes(g.providerAllowanceBytes, g) }}</small></strong>
+        <div class="progress-track"><i :style="{ width: `${g.providerProgress}%` }"></i></div>
+        <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
+      </article></div>
     </section>
     <section class="subscription-card">
       <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>

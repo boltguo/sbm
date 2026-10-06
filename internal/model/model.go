@@ -40,6 +40,7 @@ type Config struct {
 	Reset                ResetConfig        `json:"reset"`
 	OutboundStrategy     string             `json:"outboundStrategy,omitempty"`
 	Inbounds             []Inbound          `json:"inbounds"`
+	EgressGateways       []EgressGateway    `json:"egressGateways,omitempty"`
 }
 
 // TrafficQuotaConfig stores the provider's advertised allowance and unit.
@@ -145,13 +146,14 @@ type ResetConfig struct {
 }
 
 type Inbound struct {
-	ID        string            `json:"id"`
-	Type      string            `json:"type"`
-	Name      string            `json:"name"`
-	Enabled   bool              `json:"enabled"`
-	Port      int               `json:"port"`
-	VLESS     *VLESSOptions     `json:"vless,omitempty"`
-	Hysteria2 *Hysteria2Options `json:"hysteria2,omitempty"`
+	ID                string             `json:"id"`
+	Type              string             `json:"type"`
+	Name              string             `json:"name"`
+	Enabled           bool               `json:"enabled"`
+	Port              int                `json:"port"`
+	VLESS             *VLESSOptions      `json:"vless,omitempty"`
+	Hysteria2         *Hysteria2Options  `json:"hysteria2,omitempty"`
+	EgressCredentials []EgressCredential `json:"egressCredentials,omitempty"`
 }
 
 type VLESSOptions struct {
@@ -169,16 +171,18 @@ type Hysteria2Options struct {
 }
 
 type State struct {
-	Version          int       `json:"version"`
-	Upload           int64     `json:"upload"`
-	Download         int64     `json:"download"`
-	LastCoreUpload   int64     `json:"lastCoreUpload"`
-	LastCoreDownload int64     `json:"lastCoreDownload"`
-	CoreGeneration   string    `json:"coreGeneration,omitempty"`
-	PeriodStartedAt  time.Time `json:"periodStartedAt"`
-	NextResetAt      time.Time `json:"nextResetAt,omitempty"`
-	QuotaExceeded    bool      `json:"quotaExceeded"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	Version                 int                            `json:"version"`
+	Upload                  int64                          `json:"upload"`
+	Download                int64                          `json:"download"`
+	LastCoreUpload          int64                          `json:"lastCoreUpload"`
+	LastCoreDownload        int64                          `json:"lastCoreDownload"`
+	CoreGeneration          string                         `json:"coreGeneration,omitempty"`
+	PeriodStartedAt         time.Time                      `json:"periodStartedAt"`
+	NextResetAt             time.Time                      `json:"nextResetAt,omitempty"`
+	QuotaExceeded           bool                           `json:"quotaExceeded"`
+	UpdatedAt               time.Time                      `json:"updatedAt"`
+	Egress                  map[string]GatewayTrafficState `json:"egress,omitempty"`
+	EgressAccountingPending bool                           `json:"egressAccountingPending,omitempty"`
 }
 
 func (s State) Total() int64 { return s.Upload + s.Download }

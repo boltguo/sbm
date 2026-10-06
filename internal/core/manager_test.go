@@ -184,3 +184,71 @@ func TestActiveSeparatesUnreadableStateFromInactive(t *testing.T) {
 		})
 	}
 }
+
+type restartFailureCommander struct {
+	restarts       int
+	onFirstRestart func()
+}
+
+func (c *restartFailureCommander) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && len(args) > 0 {
+		if args[0] == "restart" {
+			c.restarts++
+			if c.restarts == 1 {
+				if c.onFirstRestart != nil {
+					c.onFirstRestart()
+				}
+				return []byte("private-key raw-output"), errors.New("restart failed")
+			}
+		}
+		if args[0] == "is-active" {
+			return []byte("active"), nil
+		}
+	}
+	return nil, nil
+}
+func TestApplyStartupFailureRestoresCoreConfig(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "config.json")
+	old := []byte("previous checked configuration\n")
+	if err := os.WriteFile(target, old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	commands := &restartFailureCommander{}
+	manager := &Manager{Binary: "sing-box", ConfigPath: target, Service: "sing-box.service", Commands: commands, Renderer: Renderer{Registry: protocol.DefaultRegistry()}}
+	err := manager.Apply(context.Background(), validConfig(), false)
+	if err == nil || strings.Contains(err.Error(), "private-key") {
+		t.Fatal("startup failure missing or leaked output")
+	}
+	restored, readErr := os.ReadFile(target)
+	if readErr != nil || string(restored) != string(old) || commands.restarts != 2 {
+		t.Fatal("startup rollback did not restore/restart previous core")
+	}
+}
+
+func TestApplyCannotClaimRecoveryWhenBackupDisappears(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(target, []byte("previous configuration"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	commands := &restartFailureCommander{onFirstRestart: func() {
+		if err := os.Remove(target + ".bak"); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	manager := &Manager{Binary: "sing-box", ConfigPath: target, Service: "sing-box.service", Commands: commands, Renderer: Renderer{Registry: protocol.DefaultRegistry()}}
+	err := manager.Apply(context.Background(), validConfig(), false)
+	if err == nil || !strings.Contains(err.Error(), "读取旧配置备份失败") || commands.restarts != 1 {
+		t.Fatalf("missing backup should report failed recovery: %v", err)
+	}
+}
+
+func TestInitialStartupFailureRemovesCandidate(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "config.json")
+	manager := &Manager{Binary: "sing-box", ConfigPath: target, Service: "sing-box.service", Commands: &restartFailureCommander{}, Renderer: Renderer{Registry: protocol.DefaultRegistry()}}
+	if err := manager.Apply(context.Background(), validConfig(), false); err == nil {
+		t.Fatal("initial startup failure was not reported")
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed initial candidate was left installed")
+	}
+}

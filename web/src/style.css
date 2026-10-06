@@ -2260,3 +2260,50 @@ label small {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Egress follows the existing paper/ink console, with tunnel addresses kept
+   close to the gateway they configure and estimates separated from controls. */
+.egress-flow { display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding:18px 22px; border:1px solid var(--line); background:var(--ink); color:var(--paper); }
+.egress-flow strong { color:var(--signal); }
+.egress-source, .egress-managed { color:var(--muted); font-size:12px; line-height:1.6; }
+.egress-source { margin:14px 0 26px; }
+.egress-empty { padding:50px 24px; text-align:center; border:1px dashed var(--line); }
+.egress-empty > .icon { width:34px; height:34px; margin-bottom:16px; }
+.egress-empty p { color:var(--muted); max-width:580px; margin:14px auto 24px; line-height:1.7; }
+.egress-node-card { border-top:3px solid var(--signal); }
+.egress-managed { padding:0 22px; }
+.gateway-card h2, .egress-summary h3 { overflow-wrap:anywhere; }
+.gateway-card dl dd { max-width:72%; overflow-wrap:anywhere; }
+.gateway-card .endpoint { flex-wrap:wrap; gap:8px; }
+.gateway-card .endpoint code { font-size:18px; }
+.gateway-card .endpoint b { display:block; margin-left:auto; }
+.gateway-usage { padding:20px 22px; border-top:1px solid var(--line); }
+.gateway-usage > strong { font-family:var(--display); font-size:24px; }
+.gateway-usage > small { display:block; margin-top:8px; color:var(--muted); }
+.gateway-usage p { margin:8px 0; font-size:12px; }
+.gateway-usage .progress-track, .egress-summary .progress-track { position:relative; margin:14px 0 8px; height:5px; }
+.gateway-actions { flex-wrap:wrap; }
+.gateway-actions button { min-height:44px; }
+.gateway-key-actions { display:flex; flex-wrap:wrap; align-items:center; gap:14px; }
+.gateway-key-actions small { flex:1; min-width:180px; color:var(--muted); }
+.gateway-form .copy-field code { white-space:normal; overflow-wrap:anywhere; }
+.gateway-addresses { display:flex; flex-wrap:wrap; gap:16px; padding:14px; background:var(--paper-2); font-size:12px; }
+.gateway-enabled { display:flex; align-items:center; gap:10px; }
+.gateway-enabled input { width:18px; min-height:18px; height:18px; accent-color:var(--ink); }
+.egress-overview { margin:24px 0; }
+.egress-overview-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:16px; }
+.egress-overview-head h2 { font-size:24px; }
+.egress-overview-head small { color:var(--muted); }
+.egress-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:16px; }
+.egress-summary { padding:20px; border:1px solid var(--line); background:var(--paper); }
+.egress-summary h3 { margin-bottom:14px; font-size:18px; }
+.egress-summary strong { font-family:var(--display); font-size:23px; }
+.egress-summary strong small { font-family:inherit; font-size:13px; color:var(--muted); font-weight:400; }
+.egress-summary p, .egress-summary > small { font-size:12px; color:var(--muted); line-height:1.65; }
+.gateway-usage.warning .progress-track i, .egress-summary.warning .progress-track i { background:var(--red); }
+.egress-summary.disabled { opacity:.65; }
+@media (max-width:600px) {
+  .egress-flow { gap:9px; padding:14px; font-size:12px; }
+  .gateway-form .copy-field { flex-wrap:wrap; }
+  .gateway-form .copy-field code { flex-basis:100%; }
+}

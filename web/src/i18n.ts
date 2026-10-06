@@ -1,10 +1,12 @@
 import { ref } from 'vue'
+import { egressMessages } from './egress-i18n'
 
 export type Locale = 'zh-CN' | 'en'
 type Params = Record<string, string | number>
 
 const messages: Record<Locale, Record<string, string>> = {
   'zh-CN': {
+    ...egressMessages['zh-CN'],
     'dashboard.durationSeconds': '{count} 秒', 'dashboard.durationMinutes': '{count} 分钟', 'dashboard.durationUnknown': '一段时间',
     'settings.trafficHelp': '按云厂商套餐标注选择 GB 或 GiB。', 'settings.quotaUnit': '单位',
     'dashboard.qrDownload': '保存二维码', 'dashboard.qrSaved': '二维码图片已保存', 'protocol.qrDownload': '保存二维码', 'protocol.qrSaved': '二维码图片已保存',
@@ -29,6 +31,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'api.failed': '请求失败 ({status})', 'api.unreachable': '无法连接面板，请检查网络后重试',
   },
   en: {
+    ...egressMessages.en,
     'dashboard.durationSeconds': '{count}s', 'dashboard.durationMinutes': '{count}m', 'dashboard.durationUnknown': 'a while',
     'settings.trafficHelp': 'Choose GB or GiB exactly as shown by the provider.', 'settings.quotaUnit': 'Unit',
     'dashboard.qrDownload': 'Save QR code', 'dashboard.qrSaved': 'QR code image saved', 'protocol.qrDownload': 'Save QR code', 'protocol.qrSaved': 'QR code image saved',

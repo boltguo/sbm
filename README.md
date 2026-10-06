@@ -11,9 +11,17 @@ A fresh install starts two inbounds:
 
 The panel gives you one subscription URL for all enabled inbounds.
 
+## Multiple WireGuard egress gateways
+
+The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Original Direct nodes remain available.
+
+For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-AWS-VLESS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; the existing global local quota enforcement is unchanged.
+
+See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). This extension retains v4 config / v1 state and directly loads existing 2.0.2 configurations. With no gateways, behavior is unchanged. Build this development code to deploy the new feature; the published 2.0.2 archive does not contain these changes.
+
 ## Install
 
-The current SBM build uses a new v4 configuration and supports fresh installations only. It deliberately does not migrate or partially read older configuration files; back up the old installation and deploy with a new configuration.
+SBM uses v4 configuration. Existing 2.0.2 v4 installations can upgrade directly. Older 1.x configurations are not migrated or partially loaded; back up those installations and deploy with a fresh v4 configuration.
 
 You need a Debian or Ubuntu VPS running on amd64 or arm64. Before you install:
 
@@ -48,7 +56,7 @@ The installer pins both SBM and sing-box to a tested release pair. It does not s
 SBM_VERSION=2.0.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x is fresh-install only and does not provide old-config migration or old SBM release mappings.
+The installer selects the sing-box version tested with that SBM release. `SING_BOX_VERSION` can override the core version for troubleshooting or testing, but an untested combination can fail configuration validation. SBM 2.x does not provide 1.x configuration migration or old SBM release mappings.
 
 The installer asks for:
 

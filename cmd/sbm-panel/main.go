@@ -211,6 +211,7 @@ func runServe(args []string) {
 	if err != nil {
 		fatal("读取流量状态失败")
 	}
+	tracker.Gateways = &traffic.Accounting{}
 	assets, err := fs.Sub(webembed.Assets, "dist")
 	if err != nil {
 		fatal("读取前端资源失败")
@@ -236,6 +237,9 @@ func runServe(args []string) {
 	}
 	if err := tracker.ReconcileQuota(ctx); err != nil {
 		log.Printf("启动时校正流量限额失败：%v", err)
+	}
+	if err := tracker.ReconcileGateways(ctx); err != nil {
+		log.Print("出口流量计数暂不可用，代理核心不受影响")
 	}
 	go tracker.Run(ctx, clashClient)
 	errCh := make(chan error, 1)

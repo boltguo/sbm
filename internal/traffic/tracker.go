@@ -28,6 +28,9 @@ type coreGeneration interface {
 }
 
 type Tracker struct {
+	persistMu sync.Mutex
+	gatewayMu sync.Mutex
+	Gateways  GatewaySampler
 	mu        sync.RWMutex
 	controlMu sync.Mutex
 	sampleMu  sync.Mutex
@@ -113,7 +116,7 @@ func NewForTest(state model.State, config ConfigSource, core CoreControl, now fu
 	return &Tracker{state: state, config: config, core: core, now: now, health: SampleHealth{Status: SampleStatusWaiting}}
 }
 
-func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); return t.state }
+func (t *Tracker) State() model.State { t.mu.RLock(); defer t.mu.RUnlock(); return cloneState(t.state) }
 func (t *Tracker) SampleHealth() SampleHealth {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -341,6 +344,8 @@ func (t *Tracker) CheckScheduledReset(ctx context.Context) error {
 
 func (t *Tracker) Persist() error { return t.persist(t.State()) }
 func (t *Tracker) persist(_ model.State) error {
+	t.persistMu.Lock()
+	defer t.persistMu.Unlock()
 	if t.file == nil {
 		return nil
 	}
@@ -403,6 +408,8 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 	poll := time.NewTicker(time.Second)
 	schedule := time.NewTicker(15 * time.Second)
 	persist := time.NewTicker(30 * time.Second)
+	egress := time.NewTicker(5 * time.Second)
+	defer egress.Stop()
 	defer poll.Stop()
 	defer schedule.Stop()
 	defer persist.Stop()
@@ -439,6 +446,8 @@ func (t *Tracker) Run(ctx context.Context, client ClashClient) {
 			if err := t.ReconcileQuota(ctx); err != nil {
 				log.Printf("traffic: periodic quota reconciliation failed: %v", err)
 			}
+		case <-egress.C:
+			_ = t.SampleGateways(ctx)
 		case <-persist.C:
 			if err := t.Persist(); err != nil {
 				log.Printf("traffic: periodic state save failed: %v", err)

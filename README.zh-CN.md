@@ -11,9 +11,17 @@ SBM 是给单台 sing-box 服务器用的小面板，适合自用 VPS，不做�
 
 面板会生成一个总订阅地址，包含所有已启用的入站。
 
+## 多 WireGuard 中继出口
+
+“中继出口”页面可管理多个可选 Gateway。客户端仍使用一个总订阅，通过同域名、同端口的独立 VLESS UUID / HY2 password 选择 Direct 或某个 Gateway。原 Direct 节点始终保留。
+
+例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-AWS-VLESS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐仅预警，本机全局套餐的停机逻辑不变。
+
+参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。这项扩展仍使用 v4 config / v1 state，现有 2.0.2 配置可以直接加载；没有 Gateway 时行为不变。新增功能尚需通过源码构建部署，已发布的 2.0.2 安装包不包含本次修改。
+
 ## 安装
 
-当前 SBM 使用全新的 v4 配置，只支持全新安装。它不会迁移或部分读取旧配置；请先备份旧实例，再使用新配置部署。
+SBM 使用 v4 配置。已有 2.0.2 v4 实例可以直接升级；1.x 旧配置不会迁移或部分读取，请先备份旧实例，再使用全新 v4 配置部署。
 
 系统需要是 Debian 或 Ubuntu，架构支持 amd64 和 arm64。安装前先处理域名和安全组：
 
@@ -48,7 +56,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 SBM_VERSION=2.0.2 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
-安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。2.x 只支持全新安装，不提供旧版配置迁移或旧版 SBM 安装映射。
+安装器会自动选择与该 SBM Release 对应的 sing-box 版本。排错或测试时仍可用 `SING_BOX_VERSION` 手动覆盖 core 版本，但未经验证的组合可能无法通过配置校验。2.x 不提供 1.x 配置迁移或 1.x 安装映射；已有 v4 实例通过面板更新流程升级。
 
 安装脚本会询问：
 

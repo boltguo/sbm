@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/boltguo/sbm/internal/auth"
 	"github.com/boltguo/sbm/internal/core"
+	"github.com/boltguo/sbm/internal/geo"
 	"github.com/boltguo/sbm/internal/health"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
@@ -36,6 +39,7 @@ import (
 )
 
 type Server struct {
+	Geo             geo.Lookup
 	Config          *store.ConfigStore
 	Traffic         *traffic.Tracker
 	Core            *core.Manager
@@ -199,6 +203,16 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.createInbound(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/inbounds/"):
 		s.inboundByID(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/egress":
+		s.listGateways(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/egress":
+		s.createGateway(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/egress/keypair":
+		s.generateWireGuardKeypair(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/egress/public-key":
+		s.wireGuardPublicKey(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/egress/"):
+		s.gatewayByID(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/settings":
 		s.getSettings(w, r)
 	case r.Method == "PUT" && r.URL.Path == "/api/settings/traffic":
@@ -427,7 +441,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		sampleHealth.Status = "paused"
 	}
 	writeJSON(w, 200, map[string]any{
-		"coreStatus": coreStatus, "coreVersion": coreVersion, "panelVersion": s.PanelVersion,
+		"egressGateways": s.gatewayUsage(cfg),
+		"coreStatus":     coreStatus, "coreVersion": coreVersion, "panelVersion": s.PanelVersion,
 		"upload": state.Upload, "download": state.Download, "proxyUsedBytes": state.Total(),
 		"trafficQuota": cfg.TrafficQuota, "effectiveLimitBytes": limit,
 		"providerAllowanceBytes": allowance, "estimatedProviderUsedBytes": estimatedProviderUsed,
@@ -535,8 +550,9 @@ func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request) {
 
 type inboundView struct {
 	model.Inbound
-	Link    string `json:"link"`
-	Network string `json:"network"`
+	Link        string           `json:"link"`
+	Network     string           `json:"network"`
+	EgressNodes []egressNodeView `json:"egressNodes"`
 }
 
 func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
@@ -545,7 +561,20 @@ func (s *Server) listInbounds(w http.ResponseWriter, _ *http.Request) {
 	for _, in := range cfg.Inbounds {
 		d, _ := s.Registry.Get(in.Type)
 		link, _ := d.ShareLink(in, protocol.ShareContext{Domain: cfg.Domain})
-		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network()})
+		nodes := make([]egressNodeView, 0)
+		if in.Enabled {
+			for _, g := range model.OrderedGateways(cfg.EgressGateways) {
+				if !g.Enabled {
+					continue
+				}
+				if variant, ok := protocol.EgressVariant(in, g); ok {
+					if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+						nodes = append(nodes, egressNodeView{GatewayID: g.ID, Name: variant.Name, Link: link, Marker: g.Marker, Location: protocol.GatewayLocation(g)})
+					}
+				}
+			}
+		}
+		result = append(result, inboundView{Inbound: in, Link: link, Network: d.Network(), EgressNodes: nodes})
 	}
 	writeJSON(w, 200, result)
 }
@@ -601,6 +630,7 @@ func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
 				if cfg.Inbounds[i].ID == id {
 					oldType = cfg.Inbounds[i].Type
 					input.Type = oldType
+					input.EgressCredentials = cfg.Inbounds[i].EgressCredentials
 					cfg.Inbounds[i] = input
 					return
 				}
@@ -643,15 +673,24 @@ func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mutate(ctx context.Context, change func(*model.Config)) error {
+	return s.mutateChange(ctx, func(cfg *model.Config) error { change(cfg); return nil })
+}
+func (s *Server) mutateChange(ctx context.Context, change func(*model.Config) error) error {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
+	releaseEgress := s.Traffic.BeginEgressChange(ctx)
+	defer releaseEgress()
 	if err := s.captureTraffic(ctx); err != nil {
 		return err
 	}
 	old := s.Config.Get()
-	next := old
-	next.Inbounds = append([]model.Inbound(nil), old.Inbounds...)
-	change(&next)
+	next := s.Config.Get()
+	if err := change(&next); err != nil {
+		return err
+	}
+	if err := protocol.SyncEgressCredentials(&next); err != nil {
+		return err
+	}
 	if err := s.Registry.ValidateConfig(next); err != nil {
 		return err
 	}
@@ -668,10 +707,20 @@ func (s *Server) mutate(ctx context.Context, change func(*model.Config)) error {
 	// its own deadline so a dropped client connection cannot cause a rollback.
 	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := s.Core.Apply(applyCtx, next, s.Traffic.State().QuotaExceeded); err != nil {
-		_ = s.Config.Replace(old)
-		return err
+	before, _ := s.Core.Renderer.Render(old)
+	after, _ := s.Core.Renderer.Render(next)
+	if !bytes.Equal(before, after) || !reflect.DeepEqual(old.Inbounds, next.Inbounds) {
+		if err := s.Core.Apply(applyCtx, next, s.Traffic.State().QuotaExceeded); err != nil {
+			_ = s.Config.Replace(old)
+			return err
+		}
 	}
+	// Accounting failure is a statistics warning, never grounds to undo a
+	// successfully running proxy or stop Direct/other gateways.
+	if err := s.Traffic.CommitEgressChange(applyCtx, old, next); err != nil {
+		log.Print("egress: accounting or state persistence unavailable")
+	}
+
 	s.syncHostFirewall(old, next)
 	s.invalidateHealth()
 	return nil
@@ -845,6 +894,23 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		link, err := d.ShareLink(inbound, protocol.ShareContext{Domain: cfg.Domain})
 		if err == nil {
 			links = append(links, link)
+		}
+	}
+
+	for _, g := range model.OrderedGateways(cfg.EgressGateways) {
+		if !g.Enabled {
+			continue
+		}
+		for _, in := range cfg.Inbounds {
+			if !in.Enabled {
+				continue
+			}
+			if variant, ok := protocol.EgressVariant(in, g); ok {
+				d, _ := s.Registry.Get(in.Type)
+				if link, err := d.ShareLink(variant, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
+					links = append(links, link)
+				}
+			}
 		}
 	}
 	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
@@ -1032,32 +1098,62 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 func writeError(w http.ResponseWriter, status int, message string) {
 	english := map[string]string{
-		"登录尝试过于频繁，请稍后再试": "Too many sign-in attempts. Try again later.",
-		"请求格式无效":         "The request format is invalid.",
-		"用户名或密码错误":       "Incorrect username or password.",
-		"无法创建会话":         "Could not create a session.",
-		"请先登录":           "Sign in first.",
-		"会话已失效，请重新登录":    "Your session has expired. Sign in again.",
-		"凭据已变更，请重新登录":    "Your credentials changed. Sign in again.",
-		"CSRF 校验失败":      "CSRF validation failed.",
-		"接口不存在":          "API endpoint not found.",
-		"已达到代理安全阈值，请先重置流量或提高限额": "The proxy safety threshold has been reached. Reset traffic or increase the quota first.",
-		"保存流量状态失败":              "Could not save traffic state.",
-		"重启 sing-box 失败":        "Could not restart sing-box.",
-		"重置流量失败":                "Could not reset traffic.",
-		"无法读取核心流量，请稍后重试":        "Could not read current core traffic. Try again shortly.",
-		"协议不存在":                 "Protocol not found.",
-		"请求方法不支持":               "Method not allowed.",
-		"更新重置周期失败":              "Could not update the reset schedule.",
-		"应用流量限额失败":              "Could not apply the traffic quota.",
-		"生成 Token 失败":           "Could not generate a token.",
-		"新密码长度必须为 12 到 128 个字符": "The new password must be 12 to 128 characters long.",
-		"当前密码错误":                "The current password is incorrect.",
-		"密码处理失败":                "Could not process the password.",
-		"订阅不存在":                 "Subscription not found.",
-		"已达到代理安全阈值，请等待重置":       "The proxy safety threshold has been reached. Wait for the next reset.",
-		"页面不存在":                 "Page not found.",
-		"服务器状态采集不可用":            "Server status collection is unavailable.",
+		"sing-box 配置校验失败":              "The sing-box configuration check failed.",
+		"sing-box 启动失败，读取旧配置备份失败":      "sing-box failed to start and the previous configuration backup could not be read.",
+		"sing-box 启动失败，恢复旧配置失败":        "sing-box failed to start and the previous configuration could not be restored.",
+		"sing-box 启动失败，旧配置已恢复但服务未恢复":   "The previous configuration was restored, but sing-box could not be restarted.",
+		"sing-box 启动失败，候选配置已撤销":        "sing-box failed to start; the initial candidate configuration was removed.",
+		"sing-box 启动失败，已恢复上一份配置":       "sing-box failed to start; the previous configuration and service were restored.",
+		"保存业务配置失败":                     "Could not save the business configuration.",
+		"中继出口不存在":                      "Gateway not found.",
+		"生成中继出口 ID 失败":                 "Could not generate a gateway ID.",
+		"中继出口地址槽已用完":                   "No free gateway tunnel slots remain.",
+		"中继出口 ID 无效":                   "The gateway ID is invalid.",
+		"中继出口隧道地址槽无效":                  "The gateway tunnel slot is invalid.",
+		"出口标记和位置不得超过 80 字符或包含控制字符":     "Marker and location must be at most 80 characters without control characters.",
+		"中继出口服务器必须是有效的公网 IPv4 地址":      "Enter a valid public IPv4 address for the gateway.",
+		"WireGuard UDP 端口无效":           "The WireGuard UDP port is invalid.",
+		"WireGuard 密钥必须是 32 字节 Base64": "WireGuard keys must be canonical Base64 encoding of 32 bytes.",
+		"WireGuard 私钥格式无效":             "The WireGuard private key is invalid.",
+		"无法生成 WireGuard 密钥":            "Could not generate WireGuard keys.",
+		"中继出口 ID 或隧道地址槽重复":             "Gateway IDs and tunnel slots must be unique.",
+		"中继出口 IPv4 和 UDP 端口组合必须唯一":     "Each gateway must use a unique IPv4 and UDP port pair.",
+		"重置出口流量失败":                     "Could not reset gateway traffic.",
+		"中继出口凭据重复":                     "Duplicate gateway credentials.",
+		"中继出口凭据关联无效或重复":                "Gateway credential references are invalid or duplicated.",
+		"中继出口 UUID 无效":                 "The gateway UUID is invalid.",
+		"中继出口密码无效":                     "The gateway password is invalid.",
+		"入站认证凭据必须唯一":                   "Inbound authentication credentials must be unique.",
+		"认证用户重复":                       "Duplicate authentication users.",
+		"缺少中继出口凭据":                     "Gateway credentials are missing.",
+		"生成中继出口凭据失败":                   "Could not generate gateway credentials.",
+		"不支持中继出口的协议":                   "This protocol does not support egress gateways.",
+		"登录尝试过于频繁，请稍后再试":               "Too many sign-in attempts. Try again later.",
+		"请求格式无效":                       "The request format is invalid.",
+		"用户名或密码错误":                     "Incorrect username or password.",
+		"无法创建会话":                       "Could not create a session.",
+		"请先登录":                         "Sign in first.",
+		"会话已失效，请重新登录":                  "Your session has expired. Sign in again.",
+		"凭据已变更，请重新登录":                  "Your credentials changed. Sign in again.",
+		"CSRF 校验失败":                    "CSRF validation failed.",
+		"接口不存在":                        "API endpoint not found.",
+		"已达到代理安全阈值，请先重置流量或提高限额":        "The proxy safety threshold has been reached. Reset traffic or increase the quota first.",
+		"保存流量状态失败":                     "Could not save traffic state.",
+		"重启 sing-box 失败":               "Could not restart sing-box.",
+		"重置流量失败":                       "Could not reset traffic.",
+		"无法读取核心流量，请稍后重试":               "Could not read current core traffic. Try again shortly.",
+		"协议不存在":                        "Protocol not found.",
+		"请求方法不支持":                      "Method not allowed.",
+		"更新重置周期失败":                     "Could not update the reset schedule.",
+		"应用流量限额失败":                     "Could not apply the traffic quota.",
+		"生成 Token 失败":                  "Could not generate a token.",
+		"新密码长度必须为 12 到 128 个字符":        "The new password must be 12 to 128 characters long.",
+		"当前密码错误":                       "The current password is incorrect.",
+		"密码处理失败":                       "Could not process the password.",
+		"订阅不存在":                        "Subscription not found.",
+		"已达到代理安全阈值，请等待重置":              "The proxy safety threshold has been reached. Wait for the next reset.",
+		"页面不存在":                        "Page not found.",
+		"服务器状态采集不可用":                   "Server status collection is unavailable.",
 	}
 	translated := english[message]
 	if translated == "" {

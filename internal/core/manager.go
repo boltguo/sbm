@@ -135,10 +135,21 @@ func (m *Manager) Apply(ctx context.Context, cfg model.Config, quotaExceeded boo
 	}
 	if hadOld {
 		old, readErr := os.ReadFile(backup)
-		if readErr == nil {
-			_ = writePrivate(m.ConfigPath, old)
-			_ = m.Restart(ctx)
+		if readErr != nil {
+			return errors.New("sing-box 启动失败，读取旧配置备份失败")
 		}
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer rollbackCancel()
+		if err := writePrivate(m.ConfigPath, old); err != nil {
+			return errors.New("sing-box 启动失败，恢复旧配置失败")
+		}
+		if err := m.restartAndCheck(rollbackCtx); err != nil {
+			return errors.New("sing-box 启动失败，旧配置已恢复但服务未恢复")
+		}
+	}
+	if !hadOld {
+		_ = os.Remove(m.ConfigPath)
+		return errors.New("sing-box 启动失败，候选配置已撤销")
 	}
 	return errors.New("sing-box 启动失败，已恢复上一份配置")
 }
@@ -160,23 +171,23 @@ func (m *Manager) restartAndCheck(ctx context.Context) error {
 }
 
 func (m *Manager) Restart(ctx context.Context) error {
-	out, err := m.command(ctx, "systemctl", "restart", m.Service)
+	_, err := m.command(ctx, "systemctl", "restart", m.Service)
 	if err != nil {
-		return fmt.Errorf("重启 sing-box 失败: %s", safeOutput(out))
+		return errors.New("重启 sing-box 失败")
 	}
 	return nil
 }
 func (m *Manager) Start(ctx context.Context) error {
-	out, err := m.command(ctx, "systemctl", "start", m.Service)
+	_, err := m.command(ctx, "systemctl", "start", m.Service)
 	if err != nil {
-		return fmt.Errorf("启动 sing-box 失败: %s", safeOutput(out))
+		return errors.New("启动 sing-box 失败")
 	}
 	return nil
 }
 func (m *Manager) Stop(ctx context.Context) error {
-	out, err := m.command(ctx, "systemctl", "stop", m.Service)
+	_, err := m.command(ctx, "systemctl", "stop", m.Service)
 	if err != nil {
-		return fmt.Errorf("停止 sing-box 失败: %s", safeOutput(out))
+		return errors.New("停止 sing-box 失败")
 	}
 	return nil
 }
@@ -191,9 +202,9 @@ func (m *Manager) serviceState(ctx context.Context) (string, error) {
 		return state, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("查询 sing-box 状态失败: %s", safeOutput(out))
+		return "", errors.New("查询 sing-box 状态失败")
 	}
-	return "", fmt.Errorf("无法识别的 sing-box 状态: %s", safeOutput(out))
+	return "", errors.New("无法识别的 sing-box 状态")
 }
 
 // Active reports whether the service is running. A state systemd did not report
@@ -248,17 +259,6 @@ func (m *Manager) invalidateVersion() {
 	m.versionMu.Lock()
 	m.version, m.versionAt = "", time.Time{}
 	m.versionMu.Unlock()
-}
-
-func safeOutput(out []byte) string {
-	value := strings.TrimSpace(string(out))
-	if value == "" {
-		return "命令未返回详情"
-	}
-	if len(value) > 500 {
-		value = value[:500]
-	}
-	return value
 }
 
 func writePrivate(path string, data []byte) error {

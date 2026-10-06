@@ -1,4 +1,5 @@
 export interface Dashboard {
+  egressGateways: GatewayUsage[]
   coreStatus: 'running' | 'stopped' | 'unknown'
   coreVersion: string
   panelVersion: string
@@ -54,6 +55,7 @@ export interface Inbound {
   link: string
   vless?: VLESSOptions
   hysteria2?: Hysteria2Options
+  egressNodes?: EgressNode[]
 }
 
 export interface ResetConfig { mode: 'none' | 'monthly'; day: number; timezone: string }
@@ -108,4 +110,24 @@ export interface HealthReport {
   overall: HealthStatus
   checks: HealthCheck[]
   checkedAt: string
+}
+
+export interface EgressNode { gatewayId: string; name: string; link: string; marker: string; location: string }
+export interface GatewayGeo { ip: string; countryCode: string; country: string; region: string; city: string; updatedAt: string }
+export interface GatewayUsage {
+  id: string; name: string; marker: string; location: string; enabled: boolean
+  tunnelTX: number; tunnelRX: number; tunnelBytes: number
+  trafficQuota: TrafficQuota
+  providerAllowanceBytes: number; estimatedProviderUsedBytes: number; providerRemainingBytes: number; providerProgress: number
+  warning: boolean; periodStartedAt: string; nextResetAt?: string
+  sampleHealth: { status: 'waiting' | 'healthy' | 'interrupted' | 'disabled'; lastSuccessAt?: string; failureSince?: string }
+}
+export interface GatewayInput {
+  enabled: boolean; marker: string; position: number; server: string; serverPort: number
+  privateKey: string; peerPublicKey: string; locationOverride: string
+  trafficQuota: TrafficQuota; reset: ResetConfig
+}
+export interface EgressGateway extends GatewayInput {
+  id: string; tunnelSlot: number; geo: GatewayGeo; publicKey: string; name: string; location: string
+  tunnelAddress: string; peerAddress: string; usage: GatewayUsage
 }

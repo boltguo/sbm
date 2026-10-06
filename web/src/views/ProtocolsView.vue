@@ -28,12 +28,12 @@ const safe = guard(message => emit('toast', message))
 const load = safe(async () => { items.value = await api<Inbound[]>('/api/inbounds') })
 const create = safe(async () => { await post('/api/inbounds', createForm.value); creating.value = false; emit('toast', t('protocol.created')); await load() })
 const save = safe(async () => { if (!editing.value) return; await put(`/api/inbounds/${editing.value.id}`, editing.value); editing.value = null; emit('toast', t('protocol.saved')); await load() })
-const toggle = safe(async (item: Inbound) => { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() })
+const toggle = safe(async (item: Inbound) => { await put(`/api/inbounds/${item.id}`, { ...item, enabled: !item.enabled, link: undefined, network: undefined, egressNodes: undefined }); emit('toast', item.enabled ? t('protocol.disabled') : t('protocol.enabled')); await load() })
 const remove = safe(async (item: Inbound) => { await del(`/api/inbounds/${item.id}`); emit('toast', t('protocol.deleted')); await load() })
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('protocol.linkCopied')) })
 const showQR = safe(async (item: LinkNode) => { qr.value = await createQrCard(item.link, item.name); qrItem.value = item })
 const saveQR = () => { if (!qrItem.value || !qr.value) return; downloadQrCard(qr.value, qrItem.value.name); emit('toast', t('protocol.qrSaved')) }
-function edit(item: Inbound) { editing.value = JSON.parse(JSON.stringify(item)); delete (editing.value as any).link; delete (editing.value as any).network }
+function edit(item: Inbound) { editing.value = JSON.parse(JSON.stringify(item)); delete (editing.value as any).link; delete (editing.value as any).network; delete editing.value?.egressNodes }
 function openCreate() { createForm.value = { type: 'vless-reality', name: t('protocol.defaultName'), port: 8443 }; creating.value = true }
 onMounted(load)
 </script>
@@ -49,6 +49,13 @@ onMounted(load)
           <dl v-if="item.vless"><div><dt>SNI</dt><dd>{{ item.vless.sni }}</dd></div><div><dt>FLOW</dt><dd>XTLS Vision</dd></div><div><dt>SHORT ID</dt><dd>{{ item.vless.shortId }}</dd></div></dl>
           <dl v-else><div><dt>TLS</dt><dd>Server certificate</dd></div><div><dt>ALPN</dt><dd>h3</dd></div><div><dt>OBFS</dt><dd>{{ item.hysteria2?.obfs || t('protocol.off') }}</dd></div></dl>
           <div class="card-actions"><button @click="copy(item.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(item)">QR</button><button :aria-label="t('protocol.edit')" @click="edit(item)"><Icon name="edit"/></button><ConfirmAction :title="item.name" :message="t('protocol.deleteConfirm', { name: item.name })" destructive @confirm="remove(item)"><button class="destructive" :aria-label="t('protocol.delete')"><Icon name="trash"/></button></ConfirmAction></div>
+        </article>
+        <article v-for="node in item.egressNodes" :key="node.gatewayId" class="protocol-card egress-node-card">
+          <div class="protocol-top"><div class="protocol-glyph">WG</div><div><span class="pill">WIREGUARD · IPv4</span><h2>{{ node.name }}</h2></div></div>
+          <div class="endpoint"><span>{{ item.network.toUpperCase() }}</span><code>{{ item.port }}</code><b>{{ t('egress.enabled') }}</b></div>
+          <dl><div><dt>{{ t('egress.entry') }}</dt><dd>{{ item.name }}</dd></div><div><dt>{{ t('egress.location') }}</dt><dd>{{ node.location || node.marker || node.gatewayId }}</dd></div></dl>
+          <p class="egress-managed">{{ t('egress.managed') }}</p>
+          <div class="card-actions"><button @click="copy(node.link)"><Icon name="copy"/>{{ t('protocol.copyLink') }}</button><button :aria-label="t('protocol.showQr')" @click="showQR(node)">QR</button></div>
         </article>
       </template>
       <button class="add-card" @click="openCreate"><Icon name="plus"/><strong>{{ t('protocol.addAnother') }}</strong><span>{{ t('protocol.addAnotherHelp') }}</span></button>

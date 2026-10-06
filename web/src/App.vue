@@ -6,11 +6,12 @@ import Icon from './components/Icon.vue'
 import LoginView from './views/LoginView.vue'
 import DashboardView from './views/DashboardView.vue'
 import ProtocolsView from './views/ProtocolsView.vue'
+import EgressView from './views/EgressView.vue'
 import ServerView from './views/ServerView.vue'
 import SettingsView from './views/SettingsView.vue'
 import { t, toggleLocale } from './i18n'
 
-type Page = 'dashboard' | 'protocols' | 'server' | 'settings'
+type Page = 'dashboard' | 'protocols' | 'egress' | 'server' | 'settings'
 const ready = ref(false)
 const username = ref('')
 const page = ref<Page>('dashboard')
@@ -43,10 +44,10 @@ onMounted(check)
     </header>
     <aside class="sidebar">
       <div class="brand-mark"><span>SB</span><b>M</b></div>
-      <nav><button :class="{ active: page === 'dashboard' }" :aria-current="page === 'dashboard' ? 'page' : undefined" @click="navigate('dashboard')"><Icon name="grid"/><span>{{ t('overview') }}</span></button><button :class="{ active: page === 'protocols' }" :aria-current="page === 'protocols' ? 'page' : undefined" @click="navigate('protocols')"><Icon name="route"/><span>{{ t('protocols') }}</span></button><button :class="{ active: page === 'server' }" :aria-current="page === 'server' ? 'page' : undefined" @click="navigate('server')"><Icon name="server"/><span>{{ t('server') }}</span></button><button :class="{ active: page === 'settings' }" :aria-current="page === 'settings' ? 'page' : undefined" @click="navigate('settings')"><Icon name="sliders"/><span>{{ t('settings') }}</span></button></nav>
+      <nav><button :class="{ active: page === 'dashboard' }" :aria-current="page === 'dashboard' ? 'page' : undefined" @click="navigate('dashboard')"><Icon name="grid"/><span>{{ t('overview') }}</span></button><button :class="{ active: page === 'protocols' }" :aria-current="page === 'protocols' ? 'page' : undefined" @click="navigate('protocols')"><Icon name="route"/><span>{{ t('protocols') }}</span></button><button :class="{ active: page === 'egress' }" :aria-current="page === 'egress' ? 'page' : undefined" @click="navigate('egress')"><Icon name="route"/><span>{{ t('egress') }}</span></button><button :class="{ active: page === 'server' }" :aria-current="page === 'server' ? 'page' : undefined" @click="navigate('server')"><Icon name="server"/><span>{{ t('server') }}</span></button><button :class="{ active: page === 'settings' }" :aria-current="page === 'settings' ? 'page' : undefined" @click="navigate('settings')"><Icon name="sliders"/><span>{{ t('settings') }}</span></button></nav>
     </aside>
-    <main class="content"><DashboardView v-if="page === 'dashboard'" @toast="showToast"/><ProtocolsView v-else-if="page === 'protocols'" @toast="showToast"/><ServerView v-else-if="page === 'server'"/><SettingsView v-else @toast="showToast" @logged-out="logout"/></main>
-    <nav class="mobile-nav"><button :class="{ active: page === 'dashboard' }" :aria-current="page === 'dashboard' ? 'page' : undefined" @click="navigate('dashboard')"><Icon name="grid"/><span>{{ t('overview') }}</span></button><button :class="{ active: page === 'protocols' }" :aria-current="page === 'protocols' ? 'page' : undefined" @click="navigate('protocols')"><Icon name="route"/><span>{{ t('protocols') }}</span></button><button :class="{ active: page === 'server' }" :aria-current="page === 'server' ? 'page' : undefined" @click="navigate('server')"><Icon name="server"/><span>{{ t('server') }}</span></button><button :class="{ active: page === 'settings' }" :aria-current="page === 'settings' ? 'page' : undefined" @click="navigate('settings')"><Icon name="sliders"/><span>{{ t('settings') }}</span></button></nav>
+    <main class="content"><DashboardView v-if="page === 'dashboard'" @toast="showToast"/><ProtocolsView v-else-if="page === 'protocols'" @toast="showToast"/><EgressView v-else-if="page === 'egress'" @toast="showToast"/><ServerView v-else-if="page === 'server'"/><SettingsView v-else @toast="showToast" @logged-out="logout"/></main>
+    <nav class="mobile-nav"><button :class="{ active: page === 'dashboard' }" :aria-current="page === 'dashboard' ? 'page' : undefined" @click="navigate('dashboard')"><Icon name="grid"/><span>{{ t('overview') }}</span></button><button :class="{ active: page === 'protocols' }" :aria-current="page === 'protocols' ? 'page' : undefined" @click="navigate('protocols')"><Icon name="route"/><span>{{ t('protocols') }}</span></button><button :class="{ active: page === 'egress' }" :aria-current="page === 'egress' ? 'page' : undefined" @click="navigate('egress')"><Icon name="route"/><span>{{ t('egress') }}</span></button><button :class="{ active: page === 'server' }" :aria-current="page === 'server' ? 'page' : undefined" @click="navigate('server')"><Icon name="server"/><span>{{ t('server') }}</span></button><button :class="{ active: page === 'settings' }" :aria-current="page === 'settings' ? 'page' : undefined" @click="navigate('settings')"><Icon name="sliders"/><span>{{ t('settings') }}</span></button></nav>
       <ToastRoot v-model:open="toastOpen" class="toast data-[state=open]:animate-[toast-in_.18s_ease-out] data-[state=closed]:animate-[toast-out_.15s_ease-in]"><Icon name="check"/><ToastTitle>{{ toast }}</ToastTitle></ToastRoot>
       <ToastViewport class="fixed bottom-7 right-7 z-[80] m-0 flex w-[min(390px,calc(100vw-32px))] list-none flex-col gap-2 outline-none max-sm:bottom-20 max-sm:right-4" />
     </ToastProvider>

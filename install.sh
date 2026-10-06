@@ -284,7 +284,7 @@ install_deps() {
 }
 check_required_commands() {
   local command_name missing=()
-  for command_name in awk chmod cp crontab curl cut date df getent grep gzip head install iptables journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr; do
+  for command_name in awk chmod cp crontab curl cut date df getent grep gzip head install iptables iptables-save journalctl mktemp od openssl rm sed sha256sum sort ss sysctl systemctl systemd-analyze tar touch tr; do
     command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
   done
   ((${#missing[@]} == 0)) || die "依赖安装后仍缺少命令：${missing[*]}。请检查 apt 软件源后重试。"

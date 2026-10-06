@@ -38,9 +38,12 @@ jobs:
             exit 1
           fi
       - run: bash -n install.sh scripts/*.sh
-      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck iptables iproute2
       - run: shellcheck install.sh scripts/*.sh
       - run: bash scripts/install-unit.sh
+      - run: bash scripts/sing-box-integration.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...
