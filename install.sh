@@ -772,7 +772,7 @@ open_firewall() {
 repair_runtime() {
   local provider panel_port
   install_deps
-  configure_vnstat || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
+  configure_vnstat /etc/vnstat.conf || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
   provider="$(detect_cloud_provider)"
   panel_port="$(json_number panelPort "$CONFIG_FILE")"
   [[ -n "$panel_port" ]] || { warn "无法从配置读取面板端口。"; return 1; }
@@ -823,7 +823,7 @@ do_install() {
   read -r -p "面板端口 [2096]: " panel_port
   panel_port="${panel_port:-2096}"; validate_panel_port "$panel_port"
   install_deps
-  configure_vnstat || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
+  configure_vnstat /etc/vnstat.conf || die "vnStat 服务配置失败，请检查 journalctl -u vnstat。"
   check_ports "$panel_port"
   cloud_provider="$(detect_cloud_provider)"
   info "云平台识别：$(cloud_provider_name "$cloud_provider")"
