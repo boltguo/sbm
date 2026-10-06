@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boltguo/sbm/internal/health"
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/nettraffic"
 	"github.com/boltguo/sbm/internal/traffic"
@@ -19,6 +20,28 @@ type serverNetworkReader struct{ snapshot nettraffic.Snapshot }
 
 func (r serverNetworkReader) Read(context.Context, nettraffic.Request) (nettraffic.Snapshot, error) {
 	return r.snapshot, nil
+}
+
+func TestVnStatHealthContinuesWhenProxyQuotaPauses(t *testing.T) {
+	for _, useVnStat := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "vnstat"}[useVnStat], func(t *testing.T) {
+			s, _ := testServer(t)
+			now := time.Now()
+			state := model.State{QuotaExceeded: true, Network: map[string]model.NetworkTrafficState{
+				traffic.EntryNetworkScope: {Status: traffic.SampleStatusHealthy, UpdatedAt: now, Available: true},
+			}}
+			s.Traffic = traffic.NewForTest(state, s.Config, nil, func() time.Time { return now })
+			wantStatus, wantReason := health.StatusWarning, "quota_paused"
+			if useVnStat {
+				s.Traffic.NetworkReader = serverNetworkReader{}
+				wantStatus, wantReason = health.StatusOK, "sample_healthy"
+			}
+			got := s.trafficHealth(now, true, false)
+			if got.Status != wantStatus || got.Reason != wantReason {
+				t.Fatalf("traffic health after proxy pause: %+v", got)
+			}
+		})
+	}
 }
 func TestVnStatDashboardHistoryGatewayAndSubscription(t *testing.T) {
 	s, _ := testServer(t)

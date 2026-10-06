@@ -289,7 +289,7 @@ func (s *Server) trafficHealth(now time.Time, coreKnown, coreActive bool) health
 		return check
 	}
 	state, sample := s.Traffic.State(), s.Traffic.SampleHealth()
-	if state.QuotaExceeded {
+	if state.QuotaExceeded && !s.Traffic.UsesVnStat() {
 		if coreKnown && coreActive {
 			check.Status, check.Reason = health.StatusError, "quota_enforcement_failed"
 		} else {

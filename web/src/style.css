@@ -1425,7 +1425,7 @@ label small {
 }
 
 .doctor-panel {
-  margin-bottom: 16px;
+  margin-top: 20px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, .72);
 }
@@ -1436,11 +1436,10 @@ label small {
   justify-content: space-between;
   gap: 24px;
   padding: 22px 24px;
-  border-bottom: 1px solid var(--line);
 }
 
 .doctor-head h2 {
-  margin: 5px 0 3px;
+  margin: 0 0 8px;
   font: 800 28px/1 var(--display);
 }
 
@@ -1451,15 +1450,9 @@ label small {
   font-size: 12px;
 }
 
-.doctor-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-}
-
 .health-chip {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 42px;
   align-items: center;
   justify-content: center;
@@ -1476,39 +1469,9 @@ label small {
 .health-chip[data-status="error"] { color: var(--red); }
 .health-chip[data-status="unknown"] { color: var(--muted); }
 
-.doctor-summary {
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 18px;
-}
-
-.doctor-summary p {
-  margin: 0;
-  color: var(--muted);
-  font: 700 11px/1.4 var(--mono);
-}
-
-.doctor-summary button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font: 700 9px/1 var(--mono);
-}
-
-.doctor-summary button:hover {
-  border-color: var(--line-strong);
-  background: var(--paper-2);
-  color: var(--ink);
-}
-
 .health-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-top: 1px solid var(--line);
 }
 
@@ -1520,7 +1483,7 @@ label small {
   border-bottom: 1px solid var(--line);
 }
 
-.health-check:nth-child(4n) {
+.health-check:nth-child(3n) {
   border-right: 0;
 }
 
@@ -1845,21 +1808,6 @@ label small {
   to { opacity: 0; transform: translateY(8px); }
 }
 
-@media (max-width: 1400px) {
-  .health-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .health-check,
-  .health-check:nth-child(4n) {
-    border-right: 1px solid var(--line);
-  }
-
-  .health-check:nth-child(3n) {
-    border-right: 0;
-  }
-}
-
 @media (max-width: 1050px) {
   .status-strip {
     grid-template-columns: 1fr 1.35fr;
@@ -1904,8 +1852,7 @@ label small {
   }
 
   .health-check,
-  .health-check:nth-child(3n),
-  .health-check:nth-child(4n) {
+  .health-check:nth-child(3n) {
     border-right: 1px solid var(--line);
   }
 
@@ -2217,13 +2164,13 @@ label small {
   }
 
   .doctor-head {
-    align-items: stretch;
-    flex-direction: column;
+    flex-wrap: wrap;
+    gap: 12px;
     padding: 20px 18px;
   }
 
-  .doctor-actions {
-    justify-content: flex-end;
+  .doctor-head h2 {
+    font-size: 24px;
   }
 
   .health-grid {
@@ -2232,8 +2179,7 @@ label small {
 
   .health-check,
   .health-check:nth-child(2n),
-  .health-check:nth-child(3n),
-  .health-check:nth-child(4n) {
+  .health-check:nth-child(3n) {
     border-right: 0;
   }
 

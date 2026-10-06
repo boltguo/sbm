@@ -159,7 +159,7 @@ This setting requires sing-box 1.12 or newer and only affects domain destination
 
 ### Server Health and diagnostics
 
-The Server page is read-only. It normally shows only the number of passed checks, expands warning, error, or unknown items when attention is needed, and still offers a view of every result. It checks the sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. A planned quota pause does not misreport intentionally stopped inbounds as failures. Configuration and certificate checks use a short cache, while listener state is read live.
+The Server page is read-only. Host resources appear first, and every diagnostic result is displayed at the bottom without expand/collapse controls. It checks the sing-box service and configuration, traffic sampling, TLS certificate expiry, the panel and enabled inbound listeners with TCP/UDP kept distinct, root-disk thresholds, and the next traffic reset. A planned quota pause does not misreport intentionally stopped inbounds as failures; vnStat sampling continues independently of the proxy service. Reset times use the configured billing timezone. Configuration and certificate checks use a short cache, while listener state is read live.
 
 The page returns only structured health fields and never exposes passwords, session secrets, subscription tokens, UUIDs, private keys, complete configuration, or raw command output. DNS/public-IP matching is intentionally left out because valid multi-record, IPv6, and NAT setups cannot be judged reliably from the host alone.
 
