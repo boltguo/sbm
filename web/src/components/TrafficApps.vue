@@ -68,6 +68,14 @@ const toggleExpand = (id: string) => {
   expanded.value[id] = !expanded.value[id]
 }
 
+const browserTimezone = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+})()
+
 async function load(background = false) {
   const id = ++request
   if (initialized.value && !validSelection.value) {
@@ -78,6 +86,9 @@ async function load(background = false) {
   if (!background) loading.value = true
   if (!background) error.value = ''
   const query = new URLSearchParams({ period: period.value })
+  if (browserTimezone) {
+    query.set('tz', browserTimezone)
+  }
   if (initialized.value) {
     query.set('date', period.value === 'day' ? day.value : month.value)
   }
@@ -117,6 +128,67 @@ function changeDate() {
   ++request
   loading.value = false
   load()
+}
+
+function exportJSON() {
+  if (!data.value || !apps.value.length) return
+  const current = data.value
+  const unmatchedSites = apps.value
+    .filter(item => item.category === 'site')
+    .map(item => ({
+      domain: item.name,
+      upload: item.upload,
+      download: item.download,
+      total: item.total,
+      share: share(item.total, current.totalBytes),
+    }))
+  const ecosystemServices = apps.value
+    .filter(item => item.category === 'ecosystem' || item.category === 'cdn')
+    .map(item => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      upload: item.upload,
+      download: item.download,
+      total: item.total,
+      share: share(item.total, current.totalBytes),
+      domains: item.domains,
+    }))
+  const matchedApps = apps.value
+    .filter(item => item.category !== 'site' && item.category !== 'ecosystem' && item.category !== 'cdn')
+    .map(item => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      upload: item.upload,
+      download: item.download,
+      total: item.total,
+      share: share(item.total, current.totalBytes),
+      domains: item.domains,
+    }))
+
+  const report = {
+    exportedAt: new Date().toISOString(),
+    period: current.period,
+    date: current.date,
+    timezone: current.timezone,
+    totalUpload: current.totalUpload,
+    totalDownload: current.totalDownload,
+    totalBytes: current.totalBytes,
+    unmatchedSites,
+    ecosystemServices,
+    matchedApps,
+  }
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `sbm-traffic-apps-${current.date}.json`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+  emit('toast', t('apps.exportDone'))
 }
 
 const safe = guard(message => emit('toast', message))
@@ -194,18 +266,6 @@ onBeforeUnmount(() => {
         >
           <Icon name="refresh" />
         </button>
-        <ConfirmAction
-          v-if="apps.length > 0"
-          :title="t('apps.clear')"
-          :message="t('apps.clearConfirm')"
-          :destructive="true"
-          @confirm="clearStats"
-        >
-          <button class="secondary app-clear-btn" type="button" :disabled="clearing">
-            <Icon name="trash" />
-            <span>{{ t('apps.clear') }}</span>
-          </button>
-        </ConfirmAction>
       </div>
     </header>
 
@@ -214,12 +274,36 @@ onBeforeUnmount(() => {
     <p v-if="!data && !error" class="history-empty">{{ t('apps.loading') }}</p>
 
     <template v-if="data">
-      <p v-if="totalBytes > 0" class="history-note">
-        {{ t('apps.proxyTotal', { amount: bytes(totalBytes) }) }} · ↑ {{ bytes(data.totalUpload) }} / ↓ {{ bytes(data.totalDownload) }}
-      </p>
+      <div v-if="totalBytes > 0" class="history-note app-summary-bar">
+        <span>
+          {{ t('apps.proxyTotal', { amount: bytes(totalBytes) }) }} · ↑ {{ bytes(data.totalUpload) }} / ↓ {{ bytes(data.totalDownload) }}
+        </span>
+        <div v-if="apps.length > 0" class="app-summary-actions">
+          <button
+            class="secondary app-action-btn"
+            type="button"
+            @click="exportJSON"
+          >
+            <Icon name="download" />
+            <span>{{ t('apps.export') }}</span>
+          </button>
+          <ConfirmAction
+            :title="t('apps.clear')"
+            :message="t('apps.clearConfirm')"
+            :destructive="true"
+            @confirm="clearStats"
+          >
+            <button class="secondary app-action-btn" type="button" :disabled="clearing">
+              <Icon name="trash" />
+              <span>{{ t('apps.clear') }}</span>
+            </button>
+          </ConfirmAction>
+        </div>
+      </div>
 
       <div v-if="apps.length" class="history-table-scroll">
         <table class="history-table app-rank-table">
+          <caption class="history-caption">{{ t('history.tableLabel', { timezone: data.timezone }) }}</caption>
           <thead>
             <tr>
               <th scope="col">{{ t('apps.app') }}</th>

@@ -28,6 +28,14 @@ const bytes = (value: number) => {
   return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 2 }).format(value / base ** index)} ${units[index]}`
 }
 
+const browserTimezone = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+})()
+
 async function load(background = false) {
   const id = ++request
   if (initialized.value && !validSelection.value) {
@@ -38,6 +46,9 @@ async function load(background = false) {
   if (!background) loading.value = true
   if (!background) error.value = ''
   const query = new URLSearchParams({ granularity: mode.value })
+  if (browserTimezone) {
+    query.set('tz', browserTimezone)
+  }
   if (initialized.value) {
     const lastDay = new Date(Date.UTC(Number(month.value.slice(0, 4)), Number(month.value.slice(5, 7)), 0)).getUTCDate()
     query.set('from', mode.value === 'day' ? `${month.value}-01` : `${year.value}-01`)
@@ -47,8 +58,6 @@ async function load(background = false) {
     const next = await api<TrafficHistory>(`/api/traffic/history?${query}`)
     if (id !== request) return
     if (!initialized.value) {
-      // Let the database choose the initial month, then keep the selector in
-      // its fixed statistics timezone instead of the browser's UTC month.
       const parts = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', timeZone: next.timezone }).formatToParts(new Date())
       year.value = parts.find(part => part.type === 'year')!.value
       month.value = `${year.value}-${parts.find(part => part.type === 'month')!.value}`

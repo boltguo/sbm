@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/boltguo/sbm/internal/model"
@@ -60,6 +61,26 @@ type historyStore struct {
 	startedAt time.Time
 }
 
+func (h *historyStore) resolveLocation(tz string) *time.Location {
+	tz = strings.TrimSpace(tz)
+	if tz != "" && tz != "Local" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			return loc
+		}
+	}
+	if h != nil && h.location != nil {
+		return h.location
+	}
+	return time.UTC
+}
+
+func firstTZ(tz []string) string {
+	if len(tz) > 0 {
+		return tz[0]
+	}
+	return ""
+}
+
 // OpenWithHistory makes SQLite the authoritative checkpoint. JSON remains a
 // compatibility mirror for the installer and old administrative commands.
 func OpenWithHistory(statePath, databasePath string, config ConfigSource, core CoreControl, now func() time.Time) (*Tracker, error) {
@@ -98,6 +119,7 @@ func OpenWithHistory(statePath, databasePath string, config ConfigSource, core C
 	}
 	t.history = h
 	t.pendingHistory = make(map[string]Usage)
+	t.pendingHourlyHistory = make(map[int64]Usage)
 	t.pendingGatewayHistory = make(map[gatewayHistoryKey]gatewayHistoryUsage)
 	t.pendingAppHistory = make(map[appHistoryKey]appHistoryUsage)
 	if err := h.initializeGatewayHistory(t.state, now()); err != nil {
@@ -151,6 +173,9 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 		CREATE TABLE IF NOT EXISTS daily (
 			date TEXT PRIMARY KEY, upload INTEGER NOT NULL, download INTEGER NOT NULL,
 			provider INTEGER NOT NULL, partial INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE IF NOT EXISTS proxy_hourly (
+			hour INTEGER PRIMARY KEY, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+			provider INTEGER NOT NULL, partial INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE IF NOT EXISTS imports (
 			id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
 			upload INTEGER NOT NULL, download INTEGER NOT NULL, provider INTEGER NOT NULL);
@@ -165,6 +190,10 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 			date TEXT NOT NULL, app_id TEXT NOT NULL, domain TEXT NOT NULL,
 			upload INTEGER NOT NULL, download INTEGER NOT NULL,
 			PRIMARY KEY(date, app_id, domain));
+		CREATE TABLE IF NOT EXISTS app_hourly (
+			hour INTEGER NOT NULL, app_id TEXT NOT NULL, domain TEXT NOT NULL,
+			upload INTEGER NOT NULL, download INTEGER NOT NULL,
+			PRIMARY KEY(hour, app_id, domain));
  CREATE TABLE IF NOT EXISTS network_source (
  scope TEXT NOT NULL, generation TEXT NOT NULL, interface TEXT NOT NULL,
  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, available_from INTEGER NOT NULL, ended_at INTEGER NOT NULL,
@@ -198,7 +227,113 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 	if err != nil {
 		return fail(err)
 	}
+	if err := migrateHourlyTables(db, location, now); err != nil {
+		return fail(err)
+	}
 	return &historyStore{db: db, location: location, startedAt: startedAt}, nil
+}
+
+func representativeHourForDay(dayStart, now time.Time) int64 {
+	candidate := dayStart.Add(4 * time.Hour)
+	if !now.Before(dayStart) && now.Before(candidate) {
+		return now.UTC().Truncate(time.Hour).Unix()
+	}
+	return candidate.UTC().Truncate(time.Hour).Unix()
+}
+
+func migrateHourlyTables(db *sql.DB, location *time.Location, now time.Time) error {
+	var migrated string
+	err := db.QueryRow(`SELECT value FROM metadata WHERE key='hourly_migrated'`).Scan(&migrated)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	dailyRows, err := tx.Query(`SELECT date, upload, download, provider, partial FROM daily`)
+	if err != nil {
+		return err
+	}
+	type dailyRecord struct {
+		date                       string
+		upload, download, provider int64
+		partial                    int
+	}
+	var dList []dailyRecord
+	for dailyRows.Next() {
+		var r dailyRecord
+		if err := dailyRows.Scan(&r.date, &r.upload, &r.download, &r.provider, &r.partial); err != nil {
+			dailyRows.Close()
+			return err
+		}
+		dList = append(dList, r)
+	}
+	if err := dailyRows.Err(); err != nil {
+		dailyRows.Close()
+		return err
+	}
+	dailyRows.Close()
+
+	for _, r := range dList {
+		dayStart, err := time.ParseInLocation(time.DateOnly, r.date, location)
+		if err != nil {
+			continue
+		}
+		hour := representativeHourForDay(dayStart, now)
+		if _, err := tx.Exec(`INSERT INTO proxy_hourly (hour, upload, download, provider, partial) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(hour) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download,
+			provider=provider+excluded.provider, partial=MAX(partial, excluded.partial)`,
+			hour, r.upload, r.download, r.provider, r.partial); err != nil {
+			return err
+		}
+	}
+
+	appRows, err := tx.Query(`SELECT date, app_id, domain, upload, download FROM app_daily`)
+	if err != nil {
+		return err
+	}
+	type appRecord struct {
+		date, appID, domain string
+		upload, download    int64
+	}
+	var aList []appRecord
+	for appRows.Next() {
+		var r appRecord
+		if err := appRows.Scan(&r.date, &r.appID, &r.domain, &r.upload, &r.download); err != nil {
+			appRows.Close()
+			return err
+		}
+		aList = append(aList, r)
+	}
+	if err := appRows.Err(); err != nil {
+		appRows.Close()
+		return err
+	}
+	appRows.Close()
+
+	for _, r := range aList {
+		dayStart, err := time.ParseInLocation(time.DateOnly, r.date, location)
+		if err != nil {
+			continue
+		}
+		hour := representativeHourForDay(dayStart, now)
+		if _, err := tx.Exec(`INSERT INTO app_hourly (hour, app_id, domain, upload, download) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(hour, app_id, domain) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`,
+			hour, r.appID, r.domain, r.upload, r.download); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`INSERT INTO metadata VALUES ('hourly_migrated', '1') ON CONFLICT(key) DO UPDATE SET value='1'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (h *historyStore) loadState() (model.State, bool, error) {
@@ -264,7 +399,7 @@ func saveCheckpoint(tx *sql.Tx, state model.State) error {
 	return err
 }
 
-func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, apps map[appHistoryKey]appHistoryUsage, sampledAt time.Time, networks ...map[string]networkRecord) error {
+func (h *historyStore) save(state model.State, pending map[string]Usage, hourly map[int64]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, apps map[appHistoryKey]appHistoryUsage, sampledAt time.Time, networks ...map[string]networkRecord) error {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return err
@@ -275,6 +410,15 @@ func (h *historyStore) save(state model.State, pending map[string]Usage, gateway
 			ON CONFLICT(date) DO UPDATE SET upload=upload+excluded.upload,
 			download=download+excluded.download, provider=provider+excluded.provider,
 			partial=MAX(partial, excluded.partial)`, day, usage.Upload, usage.Download, usage.EstimatedProviderUsedBytes, usage.Partial)
+		if err != nil {
+			return err
+		}
+	}
+	for hour, usage := range hourly {
+		_, err := tx.Exec(`INSERT INTO proxy_hourly VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(hour) DO UPDATE SET upload=upload+excluded.upload,
+			download=download+excluded.download, provider=provider+excluded.provider,
+			partial=MAX(partial, excluded.partial)`, hour, usage.Upload, usage.Download, usage.EstimatedProviderUsedBytes, usage.Partial)
 		if err != nil {
 			return err
 		}
@@ -326,6 +470,25 @@ func (t *Tracker) recordHistory(now time.Time, upload, download, factor int64, r
 			t.pendingHistory[previousDay] = previous
 		}
 	}
+	if t.pendingHourlyHistory == nil {
+		t.pendingHourlyHistory = make(map[int64]Usage)
+	}
+	hour := now.UTC().Truncate(time.Hour).Unix()
+	startedHour := t.history.startedAt.UTC().Truncate(time.Hour).Unix()
+	hUsage := t.pendingHourlyHistory[hour]
+	hUsage.Upload += upload
+	hUsage.Download += download
+	hUsage.EstimatedProviderUsedBytes += (upload + download) * factor
+	hUsage.Partial = hUsage.Partial || gap || restarted || hour == startedHour
+	t.pendingHourlyHistory[hour] = hUsage
+	if gap && !t.historyLastSample.IsZero() {
+		prevHour := t.historyLastSample.UTC().Truncate(time.Hour).Unix()
+		if prevHour >= startedHour {
+			prev := t.pendingHourlyHistory[prevHour]
+			prev.Partial = true
+			t.pendingHourlyHistory[prevHour] = prev
+		}
+	}
 	t.historyLastSample = now
 }
 
@@ -336,16 +499,20 @@ func (t *Tracker) Close() error {
 	return t.history.db.Close()
 }
 
-func (t *Tracker) History(ctx context.Context, granularity, from, to string) (HistoryResponse, error) {
+func (t *Tracker) History(ctx context.Context, granularity, from, to string, tz ...string) (HistoryResponse, error) {
 	if t.history == nil {
 		return HistoryResponse{}, ErrHistoryDisabled
 	}
-	return t.history.query(ctx, granularity, from, to, t.now())
+	loc := t.history.resolveLocation(firstTZ(tz))
+	return t.history.query(ctx, granularity, from, to, loc, t.now())
 }
 
-func (h *historyStore) query(ctx context.Context, granularity, from, to string, now time.Time) (HistoryResponse, error) {
-	result := HistoryResponse{Granularity: granularity, Timezone: h.location.String(), StartedAt: h.startedAt, Rows: []Usage{}, Imports: []ImportedUsage{}}
-	start, end, err := historyRange(granularity, from, to, h.location, now)
+func (h *historyStore) query(ctx context.Context, granularity, from, to string, loc *time.Location, now time.Time) (HistoryResponse, error) {
+	if loc == nil {
+		loc = h.location
+	}
+	result := HistoryResponse{Granularity: granularity, Timezone: loc.String(), StartedAt: h.startedAt, Rows: []Usage{}, Imports: []ImportedUsage{}}
+	start, end, err := historyRange(granularity, from, to, loc, now)
 	if err != nil {
 		return result, err
 	}
@@ -365,33 +532,67 @@ func (h *historyStore) query(ctx context.Context, granularity, from, to string, 
 		return result, err
 	}
 	result.UpdatedAt = state.UpdatedAt
-	rows, err := tx.QueryContext(ctx, `SELECT date, upload, download, provider, partial FROM daily WHERE date>=? AND date<? ORDER BY date`, start.Format(time.DateOnly), end.Format(time.DateOnly))
-	if err != nil {
-		return result, err
-	}
 	buckets := make(map[string]Usage)
-	for rows.Next() {
-		var usage Usage
-		if err := rows.Scan(&usage.Date, &usage.Upload, &usage.Download, &usage.EstimatedProviderUsedBytes, &usage.Partial); err != nil {
-			rows.Close()
+	if loc.String() == h.location.String() {
+		rows, err := tx.QueryContext(ctx, `SELECT date, upload, download, provider, partial FROM daily WHERE date>=? AND date<? ORDER BY date`, start.Format(time.DateOnly), end.Format(time.DateOnly))
+		if err != nil {
 			return result, err
 		}
-		key := usage.Date
-		if granularity == "month" {
-			key = key[:7]
+		for rows.Next() {
+			var usage Usage
+			if err := rows.Scan(&usage.Date, &usage.Upload, &usage.Download, &usage.EstimatedProviderUsedBytes, &usage.Partial); err != nil {
+				rows.Close()
+				return result, err
+			}
+			key := usage.Date
+			if granularity == "month" {
+				key = key[:7]
+			}
+			bucket := buckets[key]
+			bucket.Date = key
+			bucket.Upload += usage.Upload
+			bucket.Download += usage.Download
+			bucket.EstimatedProviderUsedBytes += usage.EstimatedProviderUsedBytes
+			bucket.Partial = bucket.Partial || usage.Partial
+			buckets[key] = bucket
 		}
-		bucket := buckets[key]
-		bucket.Date = key
-		bucket.Upload += usage.Upload
-		bucket.Download += usage.Download
-		bucket.EstimatedProviderUsedBytes += usage.EstimatedProviderUsedBytes
-		bucket.Partial = bucket.Partial || usage.Partial
-		buckets[key] = bucket
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return result, err
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return result, err
+		}
+	} else {
+		rows, err := tx.QueryContext(ctx, `SELECT hour, upload, download, provider, partial FROM proxy_hourly WHERE hour>=? AND hour<? ORDER BY hour`, start.Unix(), end.Unix())
+		if err != nil {
+			return result, err
+		}
+		startedDay := h.startedAt.In(loc).Format(time.DateOnly)
+		for rows.Next() {
+			var hour int64
+			var usage Usage
+			if err := rows.Scan(&hour, &usage.Upload, &usage.Download, &usage.EstimatedProviderUsedBytes, &usage.Partial); err != nil {
+				rows.Close()
+				return result, err
+			}
+			localTime := time.Unix(hour, 0).In(loc)
+			dayKey := localTime.Format(time.DateOnly)
+			key := dayKey
+			if granularity == "month" {
+				key = localTime.Format("2006-01")
+			}
+			bucket := buckets[key]
+			bucket.Date = key
+			bucket.Upload += usage.Upload
+			bucket.Download += usage.Download
+			bucket.EstimatedProviderUsedBytes += usage.EstimatedProviderUsedBytes
+			bucket.Partial = bucket.Partial || usage.Partial || dayKey == startedDay
+			buckets[key] = bucket
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return result, err
+		}
 	}
 	imports, err := tx.QueryContext(ctx, `SELECT started_at, ended_at, upload, download, provider FROM imports`)
 	if err != nil {
@@ -416,9 +617,9 @@ func (h *historyStore) query(ctx context.Context, granularity, from, to string, 
 			continue
 		}
 		result.Imports = append(result.Imports, item)
-		month := item.StartedAt.In(h.location).Format("2006-01")
+		month := item.StartedAt.In(loc).Format("2006-01")
 		// Only a total wholly within one calendar month can join that month.
-		if granularity == "month" && month == item.EndedAt.In(h.location).Format("2006-01") {
+		if granularity == "month" && month == item.EndedAt.In(loc).Format("2006-01") {
 			bucket := buckets[month]
 			bucket.Date = month
 			bucket.Upload += item.Upload
@@ -437,7 +638,7 @@ func (h *historyStore) query(ctx context.Context, granularity, from, to string, 
 	if granularity == "month" {
 		layout = "2006-01"
 	}
-	current := now.In(h.location).Format(layout)
+	current := now.In(loc).Format(layout)
 	for _, bucket := range buckets {
 		bucket.ProxyUsedBytes = bucket.Upload + bucket.Download
 		bucket.Partial = bucket.Partial || bucket.Date == current

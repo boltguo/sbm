@@ -16,14 +16,15 @@ func (s *Server) trafficHistory(w http.ResponseWriter, r *http.Request) {
 	var result traffic.HistoryResponse
 	var err error
 	scope := query.Get("scope")
+	tz := query.Get("tz")
 	if s.Traffic.UsesVnStat() {
 		if scope != "" && scope != traffic.EntryNetworkScope {
 			writeError(w, 400, "vnStat 历史仅统计 SBM 入口")
 			return
 		}
-		result, err = s.Traffic.NetworkHistory(r.Context(), traffic.EntryNetworkScope, granularity, query.Get("from"), query.Get("to"))
+		result, err = s.Traffic.NetworkHistory(r.Context(), traffic.EntryNetworkScope, granularity, query.Get("from"), query.Get("to"), tz)
 	} else {
-		result, err = s.Traffic.History(r.Context(), granularity, query.Get("from"), query.Get("to"))
+		result, err = s.Traffic.History(r.Context(), granularity, query.Get("from"), query.Get("to"), tz)
 	}
 
 	switch {
@@ -40,7 +41,7 @@ func (s *Server) trafficHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) trafficApps(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	result, err := s.Traffic.AppTraffic(r.Context(), query.Get("period"), query.Get("date"))
+	result, err := s.Traffic.AppTraffic(r.Context(), query.Get("period"), query.Get("date"), query.Get("tz"))
 	switch {
 	case errors.Is(err, traffic.ErrAppTrafficPeriod):
 		writeError(w, http.StatusBadRequest, "应用流量查询范围无效")

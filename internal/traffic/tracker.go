@@ -48,6 +48,7 @@ type Tracker struct {
 	health                SampleHealth
 	history               *historyStore
 	pendingHistory        map[string]Usage
+	pendingHourlyHistory  map[int64]Usage
 	historyLastSample     time.Time
 	pendingGatewayHistory map[gatewayHistoryKey]gatewayHistoryUsage
 	activeConns           map[string]connCounter
@@ -422,6 +423,10 @@ func (t *Tracker) persist(_ model.State) (err error) {
 	for day, usage := range t.pendingHistory {
 		pending[day] = usage
 	}
+	hourlyPending := make(map[int64]Usage, len(t.pendingHourlyHistory))
+	for hour, usage := range t.pendingHourlyHistory {
+		hourlyPending[hour] = usage
+	}
 	gatewayPending := make(map[gatewayHistoryKey]gatewayHistoryUsage, len(t.pendingGatewayHistory))
 	for key, usage := range t.pendingGatewayHistory {
 		gatewayPending[key] = usage
@@ -436,7 +441,7 @@ func (t *Tracker) persist(_ model.State) (err error) {
 	}
 	t.mu.RUnlock()
 	if t.history != nil {
-		if err := t.history.save(snapshot, pending, gatewayPending, appPending, sampledAt, networkPending); err != nil {
+		if err := t.history.save(snapshot, pending, hourlyPending, gatewayPending, appPending, sampledAt, networkPending); err != nil {
 			return fmt.Errorf("保存流量历史失败: %w", err)
 		}
 		t.mu.Lock()
@@ -454,6 +459,17 @@ func (t *Tracker) persist(_ model.State) (err error) {
 				delete(t.pendingHistory, day)
 			} else {
 				t.pendingHistory[day] = current
+			}
+		}
+		for hour, saved := range hourlyPending {
+			current := t.pendingHourlyHistory[hour]
+			current.Upload -= saved.Upload
+			current.Download -= saved.Download
+			current.EstimatedProviderUsedBytes -= saved.EstimatedProviderUsedBytes
+			if current.Upload == 0 && current.Download == 0 && current.EstimatedProviderUsedBytes == 0 && current.Partial == saved.Partial {
+				delete(t.pendingHourlyHistory, hour)
+			} else {
+				t.pendingHourlyHistory[hour] = current
 			}
 		}
 		for key, saved := range gatewayPending {

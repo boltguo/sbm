@@ -50,6 +50,7 @@ type connCounter struct {
 
 type appHistoryKey struct {
 	Day    string
+	Hour   int64
 	AppID  string
 	Domain string
 }
@@ -242,7 +243,7 @@ func ClassifyConnection(meta ClashConnectionMeta) (appID, domainKey string) {
 		root := extractRootDomainLocked(host)
 		if root != "" {
 			if idx, ok := domainToApp[root]; ok {
-				return builtInAppRules[idx].id, root
+				return builtInAppRules[idx].id, ecosystemDomainKey(host, root)
 			}
 			// Check if host matches a multi-label rule domain (such as google.com.hk).
 			for d, idx := range domainToApp {
@@ -290,6 +291,16 @@ func ClassifyConnection(meta ClashConnectionMeta) (appID, domainKey string) {
 	return "ip:tcp", "TCP/" + portBucket
 }
 
+func ecosystemDomainKey(host, root string) string {
+	if root == "googleapis.com" && host != root {
+		parts := strings.Split(host, ".")
+		if len(parts) >= 3 {
+			return strings.Join(parts[len(parts)-3:], ".")
+		}
+	}
+	return root
+}
+
 // reclassifyStoredDomain re-evaluates a stored (appID, domain) row against the
 // currently active app_rules.json so that adding a domain to the rules file
 // retroactively groups existing SQLite records into the new application bucket.
@@ -321,7 +332,7 @@ func reclassifyStoredDomain(appID, domain string) (string, string) {
 	root := extractRootDomainLocked(host)
 	if root != "" {
 		if idx, ok := domainToApp[root]; ok {
-			return builtInAppRules[idx].id, root
+			return builtInAppRules[idx].id, ecosystemDomainKey(host, root)
 		}
 		for d, idx := range domainToApp {
 			if host == d || strings.HasSuffix(host, "."+d) {
@@ -438,6 +449,7 @@ func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, rest
 		loc = t.history.location
 	}
 	day := now.In(loc).Format(time.DateOnly)
+	hour := now.UTC().Truncate(time.Hour).Unix()
 
 	nextConns := make(map[string]connCounter, len(conns))
 	for _, c := range conns {
@@ -461,7 +473,7 @@ func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, rest
 			continue
 		}
 		appID, domainKey := ClassifyConnection(c.Metadata)
-		key := appHistoryKey{Day: day, AppID: appID, Domain: domainKey}
+		key := appHistoryKey{Day: day, Hour: hour, AppID: appID, Domain: domainKey}
 		usage := t.pendingAppHistory[key]
 		usage.Upload += upDelta
 		usage.Download += downDelta
@@ -475,19 +487,35 @@ func saveAppUsage(tx *sql.Tx, pending map[appHistoryKey]appHistoryUsage) error {
 		return nil
 	}
 	days := make(map[string]struct{}, 2)
+	hours := make(map[int64]struct{}, 2)
 	for key, usage := range pending {
 		if usage.Upload <= 0 && usage.Download <= 0 {
 			continue
 		}
-		days[key.Day] = struct{}{}
-		if _, err := tx.Exec(`INSERT INTO app_daily (date, app_id, domain, upload, download) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(date, app_id, domain) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`,
-			key.Day, key.AppID, key.Domain, usage.Upload, usage.Download); err != nil {
-			return err
+		if key.Day != "" {
+			days[key.Day] = struct{}{}
+			if _, err := tx.Exec(`INSERT INTO app_daily (date, app_id, domain, upload, download) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(date, app_id, domain) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`,
+				key.Day, key.AppID, key.Domain, usage.Upload, usage.Download); err != nil {
+				return err
+			}
+		}
+		if key.Hour > 0 {
+			hours[key.Hour] = struct{}{}
+			if _, err := tx.Exec(`INSERT INTO app_hourly (hour, app_id, domain, upload, download) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(hour, app_id, domain) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`,
+				key.Hour, key.AppID, key.Domain, usage.Upload, usage.Download); err != nil {
+				return err
+			}
 		}
 	}
 	for day := range days {
 		if err := pruneDailyAppDomains(tx, day); err != nil {
+			return err
+		}
+	}
+	for hour := range hours {
+		if err := pruneHourlyAppDomains(tx, hour); err != nil {
 			return err
 		}
 	}
@@ -536,18 +564,60 @@ func pruneDailyAppDomains(tx *sql.Tx, day string) error {
 	return nil
 }
 
+func pruneHourlyAppDomains(tx *sql.Tx, hour int64) error {
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM app_hourly WHERE hour=? AND NOT (app_id='other' AND domain='other')`, hour).Scan(&count); err != nil {
+		return err
+	}
+	if count <= maxDailyAppDomains {
+		return nil
+	}
+	var tailUpload, tailDownload int64
+	if err := tx.QueryRow(`
+		SELECT COALESCE(SUM(upload), 0), COALESCE(SUM(download), 0)
+		FROM app_hourly
+		WHERE hour=? AND NOT (app_id='other' AND domain='other')
+		AND rowid NOT IN (
+			SELECT rowid FROM app_hourly
+			WHERE hour=? AND NOT (app_id='other' AND domain='other')
+			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
+			LIMIT ?
+		)`, hour, hour, maxDailyAppDomains).Scan(&tailUpload, &tailDownload); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM app_hourly
+		WHERE hour=? AND NOT (app_id='other' AND domain='other')
+		AND rowid NOT IN (
+			SELECT rowid FROM app_hourly
+			WHERE hour=? AND NOT (app_id='other' AND domain='other')
+			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
+			LIMIT ?
+		)`, hour, hour, maxDailyAppDomains); err != nil {
+		return err
+	}
+	if tailUpload > 0 || tailDownload > 0 {
+		if _, err := tx.Exec(`INSERT INTO app_hourly (hour, app_id, domain, upload, download) VALUES (?, 'other', 'other', ?, ?)
+			ON CONFLICT(hour, app_id, domain) DO UPDATE SET upload=upload+excluded.upload, download=download+excluded.download`,
+			hour, tailUpload, tailDownload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var ErrAppTrafficPeriod = errors.New("应用流量查询周期无效")
 
-func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTrafficResponse, error) {
+func (t *Tracker) AppTraffic(ctx context.Context, period, date string, tz ...string) (AppTrafficResponse, error) {
 	if t.history == nil {
 		return AppTrafficResponse{}, ErrHistoryDisabled
 	}
 	if period == "" {
 		period = "day"
 	}
-	loc := t.history.location
+	loc := t.history.resolveLocation(firstTZ(tz))
 	now := t.now().In(loc)
-	var startDay, endDay string
+	var startTime, endTime time.Time
 	switch period {
 	case "day":
 		if date == "" {
@@ -557,8 +627,8 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 		if err != nil || parsed.Format(time.DateOnly) != date {
 			return AppTrafficResponse{}, ErrAppTrafficPeriod
 		}
-		startDay = date
-		endDay = parsed.AddDate(0, 0, 1).Format(time.DateOnly)
+		startTime = parsed
+		endTime = parsed.AddDate(0, 0, 1)
 	case "month":
 		if date == "" {
 			date = now.Format("2006-01")
@@ -567,11 +637,12 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 		if err != nil || parsed.Format("2006-01") != date {
 			return AppTrafficResponse{}, ErrAppTrafficPeriod
 		}
-		startDay = parsed.Format(time.DateOnly)
-		endDay = parsed.AddDate(0, 1, 0).Format(time.DateOnly)
+		startTime = parsed
+		endTime = parsed.AddDate(0, 1, 0)
 	default:
 		return AppTrafficResponse{}, ErrAppTrafficPeriod
 	}
+	startUnix, endUnix := startTime.Unix(), endTime.Unix()
 
 	// Hold persistMu briefly so committed SQLite + pending in-memory deltas
 	// never overlap during a save commit.
@@ -582,7 +653,7 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 	updatedAt := t.state.UpdatedAt
 	pendingCopy := make(map[appHistoryKey]appHistoryUsage, len(t.pendingAppHistory))
 	for k, v := range t.pendingAppHistory {
-		if k.Day >= startDay && k.Day < endDay {
+		if k.Hour >= startUnix && k.Hour < endUnix {
 			pendingCopy[k] = v
 		}
 	}
@@ -596,9 +667,9 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 
 	rows, err := t.history.db.QueryContext(ctx, `
 		SELECT app_id, domain, SUM(upload), SUM(download)
-		FROM app_daily
-		WHERE date >= ? AND date < ?
-		GROUP BY app_id, domain`, startDay, endDay)
+		FROM app_hourly
+		WHERE hour >= ? AND hour < ?
+		GROUP BY app_id, domain`, startUnix, endUnix)
 	if err != nil {
 		return AppTrafficResponse{}, err
 	}
@@ -670,8 +741,8 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 			}
 			return app.Domains[i].Domain < app.Domains[j].Domain
 		})
-		if len(app.Domains) > 20 {
-			app.Domains = app.Domains[:20]
+		if len(app.Domains) > 100 {
+			app.Domains = app.Domains[:100]
 		}
 		apps = append(apps, *app)
 	}
@@ -681,8 +752,8 @@ func (t *Tracker) AppTraffic(ctx context.Context, period, date string) (AppTraff
 		}
 		return apps[i].Name < apps[j].Name
 	})
-	if len(apps) > 100 {
-		apps = apps[:100]
+	if len(apps) > 200 {
+		apps = apps[:200]
 	}
 
 	return AppTrafficResponse{
@@ -704,7 +775,7 @@ func (t *Tracker) ClearAppTraffic(ctx context.Context) error {
 	t.persistMu.Lock()
 	defer t.persistMu.Unlock()
 
-	if _, err := t.history.db.ExecContext(ctx, `DELETE FROM app_daily`); err != nil {
+	if _, err := t.history.db.ExecContext(ctx, `DELETE FROM app_daily; DELETE FROM app_hourly;`); err != nil {
 		return err
 	}
 	t.mu.Lock()

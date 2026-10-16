@@ -306,3 +306,61 @@ func TestCustomAppRulesJSON(t *testing.T) {
 		t.Fatalf("resolveAppMeta(emby) = (%q, %q)", name, cat)
 	}
 }
+
+func TestBrowserTimezoneViewingWithUTCBillingReset(t *testing.T) {
+	// 2026-10-15 17:00 UTC is 2026-10-16 01:00 Asia/Shanghai (1 AM Beijing time on Oct 16).
+	now := time.Date(2026, 10, 15, 17, 0, 0, 0, time.UTC)
+	cfg := model.DefaultConfig()
+	cfg.Reset = model.ResetConfig{Mode: "monthly", Day: 1, Timezone: "UTC"}
+	tracker, _, _, _ := historyTracker(t, model.DefaultState(now), cfg, &now)
+
+	// Sample 1 at 2026-10-15 17:00 UTC (2026-10-16 01:00 CST): 100 upload / 400 download (500 total).
+	conns1 := []ClashConnection{
+		{ID: "c1", Upload: 100, Download: 400, Metadata: ClashConnectionMeta{Host: "api.openai.com", Network: "tcp"}},
+	}
+	if _, err := tracker.applySampleWithConns(context.Background(), 100, 400, "", conns1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sample 2 at 2026-10-16 10:00 UTC (2026-10-16 18:00 CST): +200 upload / +600 download (+800 total).
+	now = time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	conns2 := []ClashConnection{
+		{ID: "c1", Upload: 300, Download: 1000, Metadata: ClashConnectionMeta{Host: "api.openai.com", Network: "tcp"}},
+	}
+	if _, err := tracker.applySampleWithConns(context.Background(), 300, 1000, "", conns2); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. In default UTC billing timezone, 2026-10-16 only has the 10:00 UTC sample (800 bytes).
+	utcHist, err := tracker.History(context.Background(), "day", "2026-10-15", "2026-10-16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utcHist.Timezone != "UTC" || len(utcHist.Rows) != 2 || utcHist.Rows[0].ProxyUsedBytes != 500 || utcHist.Rows[1].ProxyUsedBytes != 800 {
+		t.Fatalf("unexpected UTC history: %+v", utcHist)
+	}
+
+	// 2. When viewed in browser timezone Asia/Shanghai (CST), both samples belong to 2026-10-16 (1300 bytes).
+	cstHist, err := tracker.History(context.Background(), "day", "2026-10-15", "2026-10-16", "Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cstHist.Timezone != "Asia/Shanghai" || len(cstHist.Rows) != 1 || cstHist.Rows[0].Date != "2026-10-16" || cstHist.Rows[0].ProxyUsedBytes != 1300 {
+		t.Fatalf("unexpected Asia/Shanghai history: %+v", cstHist)
+	}
+
+	// 3. AppTraffic in Asia/Shanghai for 2026-10-16 also includes both samples (300 upload + 1000 download = 1300 bytes).
+	cstApps, err := tracker.AppTraffic(context.Background(), "day", "2026-10-16", "Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cstApps.Timezone != "Asia/Shanghai" || cstApps.TotalBytes != 1300 || len(cstApps.Apps) != 1 || cstApps.Apps[0].ID != "openai" {
+		t.Fatalf("unexpected Asia/Shanghai app traffic: %+v", cstApps)
+	}
+}

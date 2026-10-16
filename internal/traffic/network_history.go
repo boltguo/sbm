@@ -207,7 +207,7 @@ func saveNetworks(tx *sql.Tx, pending map[string]networkRecord) error {
 
 // NetworkHistory keeps NIC bytes as the primary columns and attaches sing-box
 // totals as a small reference. Legacy records never become invented NIC bytes.
-func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, to string) (HistoryResponse, error) {
+func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, to string, tz ...string) (HistoryResponse, error) {
 	if t.history == nil {
 		return HistoryResponse{}, ErrHistoryDisabled
 	}
@@ -215,10 +215,11 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		scope = EntryNetworkScope
 	}
 	h := t.history
-	result := HistoryResponse{Granularity: granularity, Timezone: h.location.String(), StartedAt: h.startedAt, Rows: []Usage{}, Imports: []ImportedUsage{}, Source: "vnstat", Scope: scope}
+	loc := h.resolveLocation(firstTZ(tz))
+	result := HistoryResponse{Granularity: granularity, Timezone: loc.String(), StartedAt: h.startedAt, Rows: []Usage{}, Imports: []ImportedUsage{}, Source: "vnstat", Scope: scope}
 	if scope == EntryNetworkScope {
 		var err error
-		result, err = h.query(ctx, granularity, from, to, t.now())
+		result, err = h.query(ctx, granularity, from, to, loc, t.now())
 		if err != nil {
 			return result, err
 		}
@@ -226,7 +227,7 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		result.Scope = scope
 		result.UpdatedAt = time.Time{}
 	}
-	start, end, err := historyRange(granularity, from, to, h.location, t.now())
+	start, end, err := historyRange(granularity, from, to, loc, t.now())
 	if err != nil {
 		return result, err
 	}
@@ -246,7 +247,7 @@ func (t *Tracker) NetworkHistory(ctx context.Context, scope, granularity, from, 
 		}
 	}
 	buckets := map[string]Usage{}
-	firstKey := result.StartedAt.In(h.location).Format(time.DateOnly)
+	firstKey := result.StartedAt.In(loc).Format(time.DateOnly)
 	if granularity == "month" {
 		firstKey = firstKey[:7]
 	}
