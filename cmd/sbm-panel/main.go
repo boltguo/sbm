@@ -230,6 +230,7 @@ func runServe(args []string) {
 	set := flag.NewFlagSet("serve", flag.ExitOnError)
 	p := pathFlags(set)
 	historyPath := set.String("traffic-db", "", "流量历史 SQLite 路径（默认与状态文件同目录的 traffic.db）")
+	appRulesPath := set.String("app-rules", "", "自定义应用归类规则 JSON 路径（默认读取配置目录下的 app-rules.json，不存在则使用内置规则）")
 	plainHTTP := set.Bool("http", false, "开发模式：使用 HTTP")
 	procRoot := set.String("proc-root", "/proc", "系统状态 /proc 路径")
 	osRelease := set.String("os-release", "/etc/os-release", "系统版本文件路径")
@@ -237,6 +238,18 @@ func runServe(args []string) {
 	_ = set.Parse(args)
 	cfgStore, manager := loadCore(p)
 	cfg := cfgStore.Get()
+	if *appRulesPath != "" {
+		if err := traffic.LoadAppRulesFile(*appRulesPath); err != nil {
+			fatal("读取自定义应用归类规则失败：" + err.Error())
+		}
+	} else {
+		candidate := filepath.Join(filepath.Dir(p.config), "app-rules.json")
+		if _, err := os.Stat(candidate); err == nil {
+			if loadErr := traffic.LoadAppRulesFile(candidate); loadErr != nil {
+				log.Printf("加载自定义应用规则 %s 失败，使用内置规则：%v", candidate, loadErr)
+			}
+		}
+	}
 	if *historyPath == "" {
 		*historyPath = filepath.Join(filepath.Dir(p.state), "traffic.db")
 	}

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, guard, post } from '../api'
-import type { Dashboard, GatewayUsage } from '../types'
+import type { Dashboard, GatewayUsage, ServerStatus } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
-import TrafficHistory from '../components/TrafficHistory.vue'
 import PanelUpdate from '../components/PanelUpdate.vue'
 import { dateLocale, t } from '../i18n'
 import { createQrCard, downloadQrCard } from '../qr'
@@ -12,6 +11,7 @@ import { usePollStatus } from '../poll-status'
 
 const emit = defineEmits<{ toast: [message: string] }>()
 const data = ref<Dashboard | null>(null)
+const server = ref<ServerStatus | null>(null)
 const activeGateways = computed(() => data.value?.egressGateways?.filter(g => g.enabled) ?? [])
 const refreshingTraffic = ref(false)
 const qr = ref('')
@@ -29,6 +29,18 @@ const bytes = (value: number) => {
   const units = binary ? ['B','KiB','MiB','GiB','TiB'] : ['B','KB','MB','GB','TB']
   const i = Math.min(Math.floor(Math.log(value) / Math.log(base)), 4)
   return `${(value / base ** i).toFixed(i > 2 ? 2 : 1)} ${units[i]}`
+}
+const hostBytes = (value: number) => {
+  if (!value) return '0 B'
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`
+}
+const uptime = (seconds: number) => {
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor(seconds % 86400 / 3600)
+  const minutes = Math.floor(seconds % 3600 / 60)
+  return days ? t('server.days', { days, hours }) : t('server.hours', { hours, minutes })
 }
 const providerBytes = (value: number) => {
   const unit = data.value?.trafficQuota.unit || 'GB'
@@ -89,12 +101,19 @@ async function load() {
     throw error
   } finally { pending-- }
 }
-const poll = () => { tick(); if (!pending && !mutating) load().catch(() => {}) }
+async function loadServer() {
+  try {
+    const next = await api<ServerStatus>('/api/server', { signal: AbortSignal.timeout(10000) })
+    if (!disposed) server.value = next
+  } catch {}
+}
+const poll = () => { tick(); if (!pending && !mutating) { load().catch(() => {}); loadServer().catch(() => {}) } }
 const refreshTraffic = safe(async () => {
   if (refreshingTraffic.value || mutating) return
   refreshingTraffic.value = true
   try {
     await load()
+    await loadServer()
     emit('toast', t('dashboard.refreshed'))
   } finally {
     refreshingTraffic.value = false
@@ -160,7 +179,12 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
       </article></div>
     </section>
-    <TrafficHistory :unit="data.trafficQuota.unit" />
+    <section v-if="server" class="resource-grid dashboard-resources">
+      <article class="resource-card"><div class="resource-head"><span>{{ t('server.cpu') }}</span><strong>{{ server.cpuPercent.toFixed(1) }}%</strong></div><div class="resource-meter"><i :style="{ width: `${server.cpuPercent}%` }"></i></div><footer><span>{{ t('server.cores', { count: server.cpuCores }) }}</span></footer></article>
+      <article class="resource-card"><div class="resource-head"><span>{{ t('server.memory') }}</span><strong>{{ server.memoryPercent.toFixed(1) }}%</strong></div><div class="resource-meter"><i :style="{ width: `${server.memoryPercent}%` }"></i></div><footer><span>{{ t('server.usedOf', { used: hostBytes(server.memoryUsed), total: hostBytes(server.memoryTotal) }) }}</span></footer></article>
+      <article class="resource-card"><div class="resource-head"><span>{{ t('server.disk') }}</span><strong>{{ server.diskPercent.toFixed(1) }}%</strong></div><div class="resource-meter"><i :style="{ width: `${server.diskPercent}%` }"></i></div><footer><span>{{ t('server.usedOf', { used: hostBytes(server.diskUsed), total: hostBytes(server.diskTotal) }) }}</span></footer></article>
+      <article class="resource-card"><div class="resource-head"><span>{{ t('server.uptime') }}</span><strong>{{ uptime(server.uptimeSeconds) }}</strong></div><div class="resource-meter"><i style="width: 100%"></i></div><footer><span>{{ [server.os, server.architecture].filter(Boolean).join(' · ') || '—' }}</span></footer></article>
+    </section>
   </div>
   <div v-else class="loading" role="status">{{ t(stale ? 'api.stale' : 'dashboard.loading') }}</div>
 </template>

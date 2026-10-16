@@ -1,0 +1,668 @@
+{
+  "rules": [
+    {
+      "id": "openai",
+      "name": "OpenAI / ChatGPT / Codex",
+      "category": "ai",
+      "domains": [
+        "openai.com",
+        "chatgpt.com",
+        "chat.com",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "oaistatsig.com",
+        "crixet.com"
+      ],
+      "subdomains": [
+        "api.openai.com",
+        "platform.openai.com",
+        "auth.openai.com",
+        "auth0.openai.com",
+        "codex.openai.com",
+        "ws.chatgpt.com",
+        "ab.chatgpt.com",
+        "chatgpt.livekit.cloud",
+        "host.livekit.cloud",
+        "turn.livekit.cloud",
+        "openai.com.cdn.cloudflare.net",
+        "openaiapi-site.azureedge.net",
+        "openaiassets.blob.core.windows.net",
+        "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+        "openaicom.imgix.net",
+        "openaicomproductionae4b.blob.core.windows.net",
+        "production-openaicom-storage.azureedge.net"
+      ]
+    },
+    {
+      "id": "claude",
+      "name": "Claude / Anthropic",
+      "category": "ai",
+      "domains": [
+        "claude.ai",
+        "claude.com",
+        "claude.dev",
+        "clau.de",
+        "anthropic.com",
+        "claudeusercontent.com",
+        "claudemcpclient.com",
+        "claudemcpcontent.com"
+      ],
+      "subdomains": [
+        "api.anthropic.com",
+        "console.anthropic.com",
+        "statsig.anthropic.com",
+        "servd-anthropic-website.b-cdn.net"
+      ]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini / Google AI",
+      "category": "ai",
+      "domains": [
+        "gemini.google",
+        "deepmind.com",
+        "deepmind.google",
+        "ai.studio",
+        "generativeai.google",
+        "notebooklm.google",
+        "notebook.google",
+        "jules.google",
+        "labs.google",
+        "flow.google",
+        "opal.google",
+        "antigravity.google",
+        "antigravity-unleash.goog"
+      ],
+      "subdomains": [
+        "gemini.google.com",
+        "gemini.gstatic.com",
+        "geminiweb-pa.clients.google.com",
+        "geminiweb-pa.clients6.google.com",
+        "aistudio.google.com",
+        "ai.google.dev",
+        "makersuite.google.com",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "webchannel-alkalimakersuite-pa.clients6.google.com",
+        "generativelanguage.googleapis.com",
+        "proactivebackend-pa.googleapis.com",
+        "robinfrontend-pa.googleapis.com",
+        "geller-pa.googleapis.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity.googleapis.com",
+        "cloudaicompanion.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "aicode.googleapis.com",
+        "aida.googleapis.com",
+        "notebooklm.google.com",
+        "notebook.google.com",
+        "notebooklm-pa.googleapis.com",
+        "notebooklm.googleapis.com",
+        "labstailwind.pa.googleapis.com",
+        "jules.google.com",
+        "labs.google.com",
+        "flow.google.com",
+        "aisandbox-pa.googleapis.com",
+        "opal.google.com",
+        "stitch.withgoogle.com"
+      ]
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "category": "ai",
+      "domains": [
+        "cursor.com",
+        "cursor.sh",
+        "cursorapi.com",
+        "cursor-cdn.com"
+      ],
+      "subdomains": [
+        "api2.cursor.sh",
+        "api3.cursor.sh",
+        "api4.cursor.sh",
+        "repo42.cursor.sh"
+      ]
+    },
+    {
+      "id": "windsurf",
+      "name": "Windsurf / Codeium",
+      "category": "ai",
+      "domains": [
+        "windsurf.com",
+        "windsurf.build",
+        "codeium.com",
+        "codeiumdata.com"
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "category": "ai",
+      "domains": [
+        "githubcopilot.com"
+      ],
+      "subdomains": [
+        "api.individual.githubcopilot.com",
+        "api.business.githubcopilot.com",
+        "api.enterprise.githubcopilot.com",
+        "copilot-proxy.githubusercontent.com",
+        "copilot-workspace.githubnext.com",
+        "copilotprodattachments.blob.core.windows.net",
+        "copilot-telemetry.githubusercontent.com",
+        "copilot-telemetry-service.githubusercontent.com"
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "Grok / xAI",
+      "category": "ai",
+      "domains": [
+        "grok.com",
+        "x.ai",
+        "grokipedia.com"
+      ],
+      "subdomains": [
+        "grok.x.com"
+      ]
+    },
+    {
+      "id": "perplexity",
+      "name": "Perplexity",
+      "category": "ai",
+      "domains": [
+        "perplexity.ai",
+        "perplexity.com",
+        "pplx.ai"
+      ],
+      "subdomains": [
+        "ppl-ai-file-upload.s3.amazonaws.com",
+        "pplx-res.cloudinary.com"
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "category": "ai",
+      "domains": [
+        "openrouter.ai"
+      ]
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "category": "ai",
+      "domains": [
+        "huggingface.co",
+        "hf.co",
+        "hf.space"
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "category": "ai",
+      "domains": [
+        "deepseek.com"
+      ]
+    },
+    {
+      "id": "poe",
+      "name": "Poe",
+      "category": "ai",
+      "domains": [
+        "poe.com",
+        "poecdn.net"
+      ]
+    },
+    {
+      "id": "midjourney",
+      "name": "Midjourney",
+      "category": "ai",
+      "domains": [
+        "midjourney.com"
+      ]
+    },
+    {
+      "id": "elevenlabs",
+      "name": "ElevenLabs",
+      "category": "ai",
+      "domains": [
+        "elevenlabs.io"
+      ]
+    },
+    {
+      "id": "manus",
+      "name": "Manus",
+      "category": "ai",
+      "domains": [
+        "manus.im",
+        "manuscdn.com"
+      ]
+    },
+    {
+      "id": "youtube",
+      "name": "YouTube",
+      "category": "streaming",
+      "domains": [
+        "youtube.com",
+        "googlevideo.com",
+        "ytimg.com",
+        "youtu.be",
+        "youtube-nocookie.com",
+        "youtubekids.com",
+        "withyoutube.com",
+        "ggpht.com"
+      ],
+      "subdomains": [
+        "youtubei.googleapis.com",
+        "yt3.ggpht.com"
+      ]
+    },
+    {
+      "id": "netflix",
+      "name": "Netflix",
+      "category": "streaming",
+      "domains": [
+        "netflix.com",
+        "nflxvideo.net",
+        "nflximg.net",
+        "nflxext.com",
+        "nflxso.net",
+        "fast.com"
+      ]
+    },
+    {
+      "id": "tiktok",
+      "name": "TikTok",
+      "category": "streaming",
+      "domains": [
+        "tiktok.com",
+        "tiktokv.com",
+        "tiktokv.us",
+        "tiktokv.eu",
+        "tiktokcdn.com",
+        "tiktokcdn-us.com",
+        "tiktokcdn-eu.com",
+        "ttwstatic.com",
+        "tiktokd.net",
+        "tiktokd.org",
+        "byteoversea.com",
+        "ibytedtos.com",
+        "ibyteimg.com",
+        "ipstatp.com",
+        "tik-tokapi.com"
+      ]
+    },
+    {
+      "id": "bilibili",
+      "name": "Bilibili",
+      "category": "streaming",
+      "domains": [
+        "bilibili.com",
+        "bilivideo.com",
+        "bilivideo.cn",
+        "hdslb.com",
+        "biliapi.net",
+        "biliapi.com",
+        "b23.tv"
+      ]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "category": "streaming",
+      "domains": [
+        "spotify.com",
+        "scdn.co",
+        "spotifycdn.com",
+        "pscdn.co",
+        "spoti.fi"
+      ],
+      "subdomains": [
+        "audio-ak-spotify-com.akamaized.net"
+      ]
+    },
+    {
+      "id": "twitch",
+      "name": "Twitch",
+      "category": "streaming",
+      "domains": [
+        "twitch.tv",
+        "ttvnw.net",
+        "jtvnw.net",
+        "twitchcdn.net"
+      ]
+    },
+    {
+      "id": "disneyplus",
+      "name": "Disney+",
+      "category": "streaming",
+      "domains": [
+        "disneyplus.com",
+        "bamgrid.com",
+        "dssott.com",
+        "disneystreaming.com"
+      ]
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "category": "messaging",
+      "domains": [
+        "telegram.org",
+        "t.me",
+        "tdesktop.com",
+        "telegra.ph",
+        "telegram.me",
+        "cdn-telegram.org",
+        "telesco.pe"
+      ],
+      "cidrs": [
+        "149.154.160.0/20",
+        "91.108.4.0/22",
+        "91.108.8.0/22",
+        "91.108.12.0/22",
+        "91.108.16.0/22",
+        "91.108.20.0/22",
+        "91.108.56.0/22",
+        "95.161.64.0/20",
+        "185.76.151.0/24",
+        "2001:b28:f23d::/48",
+        "2001:b28:f23f::/48",
+        "2001:b28:f23c::/48",
+        "2001:67c:4e8::/48"
+      ],
+      "ipLabel": "Telegram IP (MTProto)"
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "category": "messaging",
+      "domains": [
+        "discord.com",
+        "discordapp.com",
+        "discordapp.net",
+        "discord.gg",
+        "discord.media",
+        "discordcdn.com"
+      ]
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "category": "messaging",
+      "domains": [
+        "whatsapp.com",
+        "whatsapp.net",
+        "wa.me"
+      ]
+    },
+    {
+      "id": "twitter",
+      "name": "X (Twitter)",
+      "category": "social",
+      "domains": [
+        "x.com",
+        "twitter.com",
+        "twimg.com",
+        "t.co",
+        "cms-twdigitalassets.com"
+      ]
+    },
+    {
+      "id": "instagram",
+      "name": "Instagram",
+      "category": "social",
+      "domains": [
+        "instagram.com",
+        "cdninstagram.com",
+        "ig.me"
+      ]
+    },
+    {
+      "id": "threads",
+      "name": "Threads",
+      "category": "social",
+      "domains": [
+        "threads.com",
+        "threads.net"
+      ]
+    },
+    {
+      "id": "reddit",
+      "name": "Reddit",
+      "category": "social",
+      "domains": [
+        "reddit.com",
+        "redd.it",
+        "redditmedia.com",
+        "redditstatic.com"
+      ]
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "dev",
+      "domains": [
+        "github.com",
+        "githubusercontent.com",
+        "githubassets.com",
+        "github.io",
+        "ghcr.io",
+        "githubstatus.com"
+      ]
+    },
+    {
+      "id": "docker",
+      "name": "Docker / Registries",
+      "category": "dev",
+      "domains": [
+        "docker.com",
+        "docker.io",
+        "dockerstatic.com",
+        "quay.io",
+        "gcr.io",
+        "k8s.io"
+      ]
+    },
+    {
+      "id": "npm-js",
+      "name": "npm / JS Packages",
+      "category": "dev",
+      "domains": [
+        "npmjs.org",
+        "npmjs.com",
+        "yarnpkg.com",
+        "nodejs.org",
+        "bun.sh",
+        "deno.land",
+        "jsr.io",
+        "unpkg.com",
+        "jsdelivr.net"
+      ]
+    },
+    {
+      "id": "pypi-python",
+      "name": "PyPI / Python Packages",
+      "category": "dev",
+      "domains": [
+        "pypi.org",
+        "pythonhosted.org",
+        "python.org",
+        "astral.sh"
+      ]
+    },
+    {
+      "id": "steam",
+      "name": "Steam",
+      "category": "gaming",
+      "domains": [
+        "steampowered.com",
+        "steamcommunity.com",
+        "steamstatic.com",
+        "steamcontent.com",
+        "steamserver.net",
+        "steamusercontent.com"
+      ]
+    },
+    {
+      "id": "ecosystem:google",
+      "name": "Google Services",
+      "category": "ecosystem",
+      "domains": [
+        "google.com",
+        "googleapis.com",
+        "gstatic.com",
+        "googleusercontent.com",
+        "1e100.net",
+        "gvt1.com",
+        "gvt2.com",
+        "gmail.com",
+        "google.com.hk",
+        "google.co.jp",
+        "android.com"
+      ]
+    },
+    {
+      "id": "ecosystem:apple",
+      "name": "Apple Services",
+      "category": "ecosystem",
+      "domains": [
+        "apple.com",
+        "icloud.com",
+        "icloud-content.com",
+        "mzstatic.com",
+        "aaplimg.com",
+        "cdn-apple.com",
+        "me.com",
+        "itunes.com",
+        "apple-dns.net"
+      ]
+    },
+    {
+      "id": "ecosystem:meta",
+      "name": "Meta / Facebook",
+      "category": "ecosystem",
+      "domains": [
+        "facebook.com",
+        "fbcdn.net",
+        "fb.com",
+        "fbsbx.com",
+        "messenger.com",
+        "meta.ai"
+      ]
+    },
+    {
+      "id": "ecosystem:microsoft",
+      "name": "Microsoft Services",
+      "category": "ecosystem",
+      "domains": [
+        "microsoft.com",
+        "live.com",
+        "office.com",
+        "office365.com",
+        "microsoftonline.com",
+        "msn.com",
+        "windows.com",
+        "windowsupdate.com",
+        "bing.com",
+        "sharepoint.com",
+        "onedrive.com",
+        "sfx.ms",
+        "msedge.net",
+        "visualstudio.com",
+        "vsassets.io",
+        "azure.com",
+        "windows.net"
+      ]
+    },
+    {
+      "id": "ecosystem:amazon",
+      "name": "Amazon / AWS",
+      "category": "ecosystem",
+      "domains": [
+        "amazon.com",
+        "amazonaws.com",
+        "amazonvideo.com",
+        "primevideo.com",
+        "aiv-cdn.net",
+        "media-amazon.com"
+      ]
+    },
+    {
+      "id": "cdn:cloudfront",
+      "name": "CloudFront CDN",
+      "category": "cdn",
+      "domains": [
+        "cloudfront.net"
+      ]
+    },
+    {
+      "id": "cdn:akamai",
+      "name": "Akamai CDN",
+      "category": "cdn",
+      "domains": [
+        "akamaized.net",
+        "akamaihd.net",
+        "akamai.net",
+        "akamaitechnologies.com",
+        "edgekey.net",
+        "edgesuite.net"
+      ]
+    },
+    {
+      "id": "cdn:cloudflare",
+      "name": "Cloudflare",
+      "category": "cdn",
+      "domains": [
+        "cloudflare.com",
+        "cloudflare-dns.com",
+        "workers.dev",
+        "pages.dev",
+        "cloudflareclient.com"
+      ],
+      "cidrs": [
+        "1.1.1.1/32",
+        "1.0.0.1/32",
+        "2606:4700:4700::1111/128",
+        "2606:4700:4700::1001/128"
+      ],
+      "ipLabel": "Cloudflare DNS (1.1.1.1)"
+    },
+    {
+      "id": "cdn:fastly",
+      "name": "Fastly CDN",
+      "category": "cdn",
+      "domains": [
+        "fastly.net",
+        "fastlylb.net"
+      ]
+    }
+  ],
+  "multiLabelSuffixes": [
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "ac.cn",
+    "com.hk", "edu.hk", "gov.hk", "net.hk", "org.hk",
+    "com.tw", "org.tw", "edu.tw", "gov.tw", "net.tw", "idv.tw",
+    "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp", "ed.jp", "gr.jp", "lg.jp",
+    "co.kr", "ne.kr", "or.kr", "re.kr", "pe.kr", "go.kr", "ac.kr",
+    "com.sg", "edu.sg", "gov.sg", "net.sg", "org.sg",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "asn.au", "id.au",
+    "co.nz", "net.nz", "org.nz", "ac.nz", "govt.nz",
+    "co.in", "net.in", "org.in", "gen.in", "firm.in", "ind.in", "ac.in", "edu.in", "res.in", "gov.in",
+    "com.br", "net.br", "org.br", "gov.br", "edu.br",
+    "com.my", "net.my", "org.my", "gov.my", "edu.my",
+    "com.ru", "org.ru", "net.ru",
+    "com.tr", "org.tr", "gov.tr", "edu.tr",
+    "co.za", "org.za", "net.za", "gov.za", "ac.za",
+    "co.il", "org.il", "net.il", "ac.il", "gov.il",
+    "co.th", "in.th", "ac.th", "go.th", "or.th",
+    "com.vn", "net.vn", "org.vn", "edu.vn", "gov.vn",
+    "com.ph", "net.ph", "org.ph", "gov.ph", "edu.ph",
+    "com.mx", "org.mx", "gob.mx", "edu.mx", "net.mx",
+    "com.ar", "org.ar", "gob.ar", "edu.ar", "net.ar",
+    "eu.org", "js.org", "uk.com", "us.com", "eu.com"
+  ]
+}

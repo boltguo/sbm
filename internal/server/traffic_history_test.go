@@ -108,3 +108,69 @@ func TestDashboardReportsPersistenceFailureSeparatelyFromSampling(t *testing.T) 
 		}
 	}
 }
+
+func TestTrafficAppsAPIAuthenticationQueryAndClear(t *testing.T) {
+	s, _ := testServer(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tracker, err := traffic.OpenWithHistory(filepath.Join(dir, "state.json"), filepath.Join(dir, "traffic.db"), s.Config, s.Core, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracker.Close()
+	s.Traffic = tracker
+
+	clash := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"uploadTotal":100,"downloadTotal":900,"connections":[{"id":"1","upload":100,"download":900,"metadata":{"network":"tcp","host":"api.openai.com","destinationPort":"443"}}]}`))
+	}))
+	defer clash.Close()
+	if _, err := tracker.Sample(context.Background(), traffic.ClashClient{URL: clash.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unauthenticated request rejected.
+	unauth := httptest.NewRecorder()
+	s.Handler().ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/api/traffic/apps", nil))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d", unauth.Code)
+	}
+
+	// Valid day query.
+	getRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(getRec, authenticatedRequest(t, s, http.MethodGet, "/api/traffic/apps?period=day&date=2026-10-16", nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/traffic/apps status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var result traffic.AppTrafficResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Apps) != 1 || result.Apps[0].ID != "openai" || result.Apps[0].Total != 1000 {
+		t.Fatalf("unexpected apps result: %+v", result)
+	}
+
+	// Invalid period rejected.
+	badRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(badRec, authenticatedRequest(t, s, http.MethodGet, "/api/traffic/apps?period=year", nil))
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid period, got %d", badRec.Code)
+	}
+
+	// Clear endpoint.
+	clearRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(clearRec, authenticatedRequest(t, s, http.MethodPost, "/api/traffic/apps/clear", map[string]any{}))
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/traffic/apps/clear status=%d body=%s", clearRec.Code, clearRec.Body.String())
+	}
+	afterClear := httptest.NewRecorder()
+	s.Handler().ServeHTTP(afterClear, authenticatedRequest(t, s, http.MethodGet, "/api/traffic/apps?period=day&date=2026-10-16", nil))
+	if err := json.Unmarshal(afterClear.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Apps) != 0 || result.TotalBytes != 0 {
+		t.Fatalf("expected empty apps after clear, got %+v", result)
+	}
+}

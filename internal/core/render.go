@@ -37,7 +37,8 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		inbounds = append(inbounds, built)
 	}
 	direct := map[string]any{"type": "direct", "tag": "direct"}
-	route := map[string]any{"rules": []any{}, "final": "direct"}
+	rules := []any{map[string]any{"action": "sniff", "timeout": "300ms"}}
+	route := map[string]any{"rules": rules, "final": "direct"}
 	doc := map[string]any{
 		"log":       map[string]any{"level": "warn", "timestamp": true},
 		"inbounds":  inbounds,
@@ -47,7 +48,7 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			"external_controller": "127.0.0.1:9090", "secret": cfg.ClashAPISecret,
 		}},
 	}
-	endpoints, rules := []any{}, []any{}
+	endpoints := []any{}
 	for _, g := range buildContext.EgressGateways {
 		if !g.Enabled {
 			continue

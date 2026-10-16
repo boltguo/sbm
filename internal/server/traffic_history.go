@@ -37,3 +37,30 @@ func (s *Server) trafficHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, result)
 	}
 }
+
+func (s *Server) trafficApps(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	result, err := s.Traffic.AppTraffic(r.Context(), query.Get("period"), query.Get("date"))
+	switch {
+	case errors.Is(err, traffic.ErrAppTrafficPeriod):
+		writeError(w, http.StatusBadRequest, "应用流量查询范围无效")
+	case errors.Is(err, traffic.ErrHistoryDisabled):
+		writeError(w, http.StatusServiceUnavailable, "流量历史记录未启用")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "读取应用流量统计失败")
+	default:
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) clearTrafficApps(w http.ResponseWriter, r *http.Request) {
+	err := s.Traffic.ClearAppTraffic(r.Context())
+	switch {
+	case errors.Is(err, traffic.ErrHistoryDisabled):
+		writeError(w, http.StatusServiceUnavailable, "流量历史记录未启用")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "清空应用流量统计失败")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}

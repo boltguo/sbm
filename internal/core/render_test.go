@@ -23,7 +23,7 @@ func TestRenderConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, expected := range []string{`"external_controller": "127.0.0.1:9090"`, `"secret": "` + secret + `"`, `"certificate_path": "/cert.pem"`, `"type": "hysteria2"`} {
+	for _, expected := range []string{`"external_controller": "127.0.0.1:9090"`, `"secret": "` + secret + `"`, `"certificate_path": "/cert.pem"`, `"type": "hysteria2"`, `"action": "sniff"`, `"timeout": "300ms"`} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("render missing %s", expected)
 		}

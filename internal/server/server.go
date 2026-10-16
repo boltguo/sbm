@@ -207,6 +207,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.resetTraffic(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/traffic/history":
 		s.trafficHistory(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/traffic/apps":
+		s.trafficApps(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/traffic/apps/clear":
+		s.clearTrafficApps(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/inbounds":
 		s.listInbounds(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/inbounds":
@@ -1222,6 +1226,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"流量历史查询范围无效":                   "Invalid traffic history range.",
 		"流量历史记录未启用":                    "Traffic history is not enabled.",
 		"读取流量历史失败":                     "Could not read traffic history.",
+		"应用流量查询范围无效":                   "Invalid application traffic period.",
+		"读取应用流量统计失败":                   "Could not read application traffic statistics.",
+		"清空应用流量统计失败":                   "Could not clear application traffic statistics.",
 		"重启 sing-box 失败":               "Could not restart sing-box.",
 		"重置流量失败":                       "Could not reset traffic.",
 		"无法读取核心流量，请稍后重试":               "Could not read current core traffic. Try again shortly.",

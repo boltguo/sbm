@@ -101,11 +101,15 @@ func TestMultipleEgressRender(t *testing.T) {
 			}
 		}
 		rules := doc["route"].(map[string]any)["rules"].([]any)
-		if len(rules) != 6 {
+		if len(rules) != 7 {
 			t.Fatal("wrong rule count")
 		}
+		sniff := rules[0].(map[string]any)
+		if sniff["action"] != "sniff" || sniff["timeout"] != "300ms" {
+			t.Fatal("sniff rule missing or invalid")
+		}
 		for i, g := range cfg.EgressGateways {
-			resolve, route := rules[i*2].(map[string]any), rules[i*2+1].(map[string]any)
+			resolve, route := rules[1+i*2].(map[string]any), rules[1+i*2+1].(map[string]any)
 			if resolve["strategy"] != "ipv4_only" || route["outbound"] != g.EndpointTag() {
 				t.Fatal("gateway route or resolution incorrect")
 			}

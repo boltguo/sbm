@@ -54,6 +54,31 @@ export interface TrafficHistory {
   rows: TrafficUsage[]
   imports: { startedAt: string; endedAt: string; upload: number; download: number; estimatedProviderUsedBytes: number }[]
 }
+export interface AppDomainUsage {
+  domain: string
+  upload: number
+  download: number
+  total: number
+}
+export interface AppUsage {
+  id: string
+  name: string
+  category: string
+  upload: number
+  download: number
+  total: number
+  domains: AppDomainUsage[]
+}
+export interface AppTrafficResponse {
+  period: 'day' | 'month'
+  date: string
+  timezone: string
+  updatedAt: string
+  totalUpload: number
+  totalDownload: number
+  totalBytes: number
+  apps: AppUsage[]
+}
 export type TrafficUnit = 'GB' | 'GiB'
 export interface TrafficQuota {
   amount: number

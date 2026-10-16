@@ -99,6 +99,7 @@ func OpenWithHistory(statePath, databasePath string, config ConfigSource, core C
 	t.history = h
 	t.pendingHistory = make(map[string]Usage)
 	t.pendingGatewayHistory = make(map[gatewayHistoryKey]gatewayHistoryUsage)
+	t.pendingAppHistory = make(map[appHistoryKey]appHistoryUsage)
 	if err := h.initializeGatewayHistory(t.state, now()); err != nil {
 		h.db.Close()
 		return nil, err
@@ -160,6 +161,10 @@ func openHistory(path, zone string, now time.Time) (*historyStore, error) {
 		CREATE TABLE IF NOT EXISTS gateway_imports (
 			gateway_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
 			ended_at TEXT NOT NULL, tx INTEGER NOT NULL, rx INTEGER NOT NULL);
+		CREATE TABLE IF NOT EXISTS app_daily (
+			date TEXT NOT NULL, app_id TEXT NOT NULL, domain TEXT NOT NULL,
+			upload INTEGER NOT NULL, download INTEGER NOT NULL,
+			PRIMARY KEY(date, app_id, domain));
  CREATE TABLE IF NOT EXISTS network_source (
  scope TEXT NOT NULL, generation TEXT NOT NULL, interface TEXT NOT NULL,
  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, available_from INTEGER NOT NULL, ended_at INTEGER NOT NULL,
@@ -259,7 +264,7 @@ func saveCheckpoint(tx *sql.Tx, state model.State) error {
 	return err
 }
 
-func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, sampledAt time.Time, networks ...map[string]networkRecord) error {
+func (h *historyStore) save(state model.State, pending map[string]Usage, gateways map[gatewayHistoryKey]gatewayHistoryUsage, apps map[appHistoryKey]appHistoryUsage, sampledAt time.Time, networks ...map[string]networkRecord) error {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return err
@@ -281,6 +286,9 @@ func (h *historyStore) save(state model.State, pending map[string]Usage, gateway
 		if err != nil {
 			return err
 		}
+	}
+	if err := saveAppUsage(tx, apps); err != nil {
+		return err
 	}
 	for _, pending := range networks {
 		if err := saveNetworks(tx, pending); err != nil {

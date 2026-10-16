@@ -50,6 +50,9 @@ type Tracker struct {
 	pendingHistory        map[string]Usage
 	historyLastSample     time.Time
 	pendingGatewayHistory map[gatewayHistoryKey]gatewayHistoryUsage
+	activeConns           map[string]connCounter
+	connsSeeded           bool
+	pendingAppHistory     map[appHistoryKey]appHistoryUsage
 	persistenceHealth     SampleHealth
 }
 
@@ -167,7 +170,7 @@ func (t *Tracker) Sample(ctx context.Context, client ClashClient) (bool, error) 
 		return false, fmt.Errorf("检查流量重置周期: %w", err)
 	}
 	generationBefore := t.readCoreGeneration()
-	upload, download, err := client.Sample(ctx)
+	snapshot, err := client.SampleSnapshot(ctx)
 	if err != nil {
 		t.recordSampleFailure()
 		return false, fmt.Errorf("%w: %v", ErrSampleUnavailable, err)
@@ -182,7 +185,7 @@ func (t *Tracker) Sample(ctx context.Context, client ClashClient) (bool, error) 
 		generation = generationBefore
 	}
 	t.recordSampleSuccess()
-	return t.applySample(ctx, upload, download, generation)
+	return t.applySampleWithConns(ctx, snapshot.Upload, snapshot.Download, generation, snapshot.Connections)
 }
 
 func (t *Tracker) readCoreGeneration() string {
@@ -221,6 +224,10 @@ func (t *Tracker) ApplySample(ctx context.Context, currentUpload, currentDownloa
 }
 
 func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownload int64, generation string) (bool, error) {
+	return t.applySampleWithConns(ctx, currentUpload, currentDownload, generation, nil)
+}
+
+func (t *Tracker) applySampleWithConns(ctx context.Context, currentUpload, currentDownload int64, generation string, conns []ClashConnection) (bool, error) {
 	if currentUpload < 0 || currentDownload < 0 {
 		return false, errors.New("核心流量计数不能为负数")
 	}
@@ -234,6 +241,7 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 	if generation != "" && t.state.CoreGeneration != "" && generation != t.state.CoreGeneration {
 		restarted = true
 	}
+	hadBaseline := t.state.LastCoreUpload > 0 || t.state.LastCoreDownload > 0
 	uploadDelta, downloadDelta := currentUpload, currentDownload
 	if !restarted {
 		uploadDelta -= t.state.LastCoreUpload
@@ -241,6 +249,7 @@ func (t *Tracker) applySample(ctx context.Context, currentUpload, currentDownloa
 	}
 	now := t.now()
 	t.recordHistory(now, uploadDelta, downloadDelta, cfg.TrafficQuota.ProviderUsageFactor(), restarted)
+	t.recordConnections(now, conns, restarted, hadBaseline)
 	if restarted {
 		t.state.Upload += currentUpload
 		t.state.Download += currentDownload
@@ -417,13 +426,17 @@ func (t *Tracker) persist(_ model.State) (err error) {
 	for key, usage := range t.pendingGatewayHistory {
 		gatewayPending[key] = usage
 	}
+	appPending := make(map[appHistoryKey]appHistoryUsage, len(t.pendingAppHistory))
+	for key, usage := range t.pendingAppHistory {
+		appPending[key] = usage
+	}
 	networkPending := make(map[string]networkRecord, len(t.pendingNetwork))
 	for id, record := range t.pendingNetwork {
 		networkPending[id] = record
 	}
 	t.mu.RUnlock()
 	if t.history != nil {
-		if err := t.history.save(snapshot, pending, gatewayPending, sampledAt, networkPending); err != nil {
+		if err := t.history.save(snapshot, pending, gatewayPending, appPending, sampledAt, networkPending); err != nil {
 			return fmt.Errorf("保存流量历史失败: %w", err)
 		}
 		t.mu.Lock()
@@ -451,6 +464,19 @@ func (t *Tracker) persist(_ model.State) (err error) {
 				delete(t.pendingGatewayHistory, key)
 			} else {
 				t.pendingGatewayHistory[key] = current
+			}
+		}
+		for key, saved := range appPending {
+			current, ok := t.pendingAppHistory[key]
+			if !ok {
+				continue
+			}
+			current.Upload -= saved.Upload
+			current.Download -= saved.Download
+			if current.Upload <= 0 && current.Download <= 0 {
+				delete(t.pendingAppHistory, key)
+			} else {
+				t.pendingAppHistory[key] = current
 			}
 		}
 		t.mu.Unlock()
@@ -482,36 +508,49 @@ type ClashClient struct {
 	Client      *http.Client
 }
 type clashResponse struct {
-	Upload   *int64 `json:"uploadTotal"`
-	Download *int64 `json:"downloadTotal"`
+	Upload      *int64            `json:"uploadTotal"`
+	Download    *int64            `json:"downloadTotal"`
+	Connections []ClashConnection `json:"connections"`
 }
 
 func (c ClashClient) Sample(ctx context.Context) (int64, int64, error) {
+	snapshot, err := c.SampleSnapshot(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return snapshot.Upload, snapshot.Download, nil
+}
+
+func (c ClashClient) SampleSnapshot(ctx context.Context) (ClashSnapshot, error) {
 	client := c.Client
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL, nil)
 	if err != nil {
-		return 0, 0, err
+		return ClashSnapshot{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Secret)
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, err
+		return ClashSnapshot{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("clash API status %d", resp.StatusCode)
+		return ClashSnapshot{}, fmt.Errorf("clash API status %d", resp.StatusCode)
 	}
 	var data clashResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return 0, 0, err
+		return ClashSnapshot{}, err
 	}
 	if data.Upload == nil || data.Download == nil || *data.Upload < 0 || *data.Download < 0 {
-		return 0, 0, errors.New("clash API response has missing or invalid counters")
+		return ClashSnapshot{}, errors.New("clash API response has missing or invalid counters")
 	}
-	return *data.Upload, *data.Download, nil
+	return ClashSnapshot{
+		Upload:      *data.Upload,
+		Download:    *data.Download,
+		Connections: data.Connections,
+	}, nil
 }
 
 func (t *Tracker) Run(ctx context.Context, client ClashClient) {
