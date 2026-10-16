@@ -560,7 +560,11 @@ func (s *Server) latestUpdate(parent context.Context) (updateStatus, error) {
 		CanInstall:      s.Updater != nil && panelupdate.Supports(info.TagName),
 	}
 	s.releaseCache = &status
-	s.releaseUntil = now.Add(15 * time.Minute)
+	ttl := time.Minute
+	if status.UpdateAvailable {
+		ttl = 5 * time.Minute
+	}
+	s.releaseUntil = now.Add(ttl)
 	return status, nil
 }
 
