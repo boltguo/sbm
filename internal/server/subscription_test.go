@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,6 +83,7 @@ func TestSubscriptionMultiFormatAndUserAgentDetection(t *testing.T) {
 		body := rec.Body.String()
 		for _, want := range []string{
 			"mixed-port: 7890",
+			"allow-lan: false",
 			`name: "JP-VLESS"`,
 			"type: vless",
 			"flow: xtls-rprx-vision",
@@ -173,4 +177,89 @@ func TestSubscriptionMultiFormatAndUserAgentDetection(t *testing.T) {
 			t.Fatalf("expected 4 share links, got %d: %s", len(lines), decoded)
 		}
 	})
+}
+
+func TestSubscriptionUserAgentDetection(t *testing.T) {
+	for ua, want := range map[string]string{
+		"clash-verge/v2.2.3":                                         subTargetClash,
+		"ClashMetaForAndroid/2.11.1.Meta":                            subTargetClash,
+		"mihomo.party/v1.7.0 (clash.meta)":                           subTargetClash,
+		"Stash/2.4.6 Clash/1.0":                                      subTargetClash,
+		"SFI/1.12.0 (iOS; sing-box 1.12.0)":                          subTargetSingBox,
+		"v2rayNG/1.9.30":                                             subTargetBase64,
+		"Shadowrocket/2070 CFNetwork/1410.0.3 Darwin/22.6.0":         subTargetBase64,
+		"Mozilla/5.0 (Windows NT 10.0) Chrome/120 SE 2.X MetaSr 1.0": subTargetBase64,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/sub/token", nil)
+		req.Header.Set("User-Agent", ua)
+		if got, explicit := resolveSubscriptionTarget(req); got != want || explicit {
+			t.Errorf("UA %q: got %s explicit=%v, want %s", ua, got, explicit, want)
+		}
+	}
+}
+
+func singBoxSubscriptionNodes() []model.Inbound {
+	return []model.Inbound{
+		{ID: "v", Type: protocol.TypeVLESSReality, Name: "JP-VLESS", Enabled: true, Port: 443, VLESS: &model.VLESSOptions{UUID: "11111111-2222-4333-8444-555555555555", SNI: "www.microsoft.com", PrivateKey: "x", PublicKey: "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0", ShortID: "01ab"}},
+		{ID: "h", Type: protocol.TypeHysteria2, Name: "JP-HY2", Enabled: true, Port: 443, Hysteria2: &model.Hysteria2Options{Password: "hy2-secret-pass", Obfs: "salamander", ObfsPassword: "obfs-secret-pass"}},
+	}
+}
+
+func TestSingBoxSubscriptionAvoidsRemovedFields(t *testing.T) {
+	body, err := renderSingBoxSubscription("node.example.com", singBoxSubscriptionNodes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		DNS struct {
+			Servers []map[string]any `json:"servers"`
+		} `json:"dns"`
+		Inbounds []map[string]any `json:"inbounds"`
+		Route    struct {
+			DefaultDomainResolver string           `json:"default_domain_resolver"`
+			Rules                 []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range doc.DNS.Servers {
+		if _, legacy := server["address"]; legacy || server["type"] == nil {
+			t.Fatalf("legacy DNS server: %v", server)
+		}
+	}
+	for _, inbound := range doc.Inbounds {
+		if _, legacy := inbound["sniff"]; legacy {
+			t.Fatalf("legacy inbound sniff field: %v", inbound)
+		}
+	}
+	if doc.Route.DefaultDomainResolver != "dns-direct" || len(doc.Route.Rules) == 0 || doc.Route.Rules[0]["action"] != "sniff" {
+		t.Fatalf("route must sniff first and resolve node domains directly: %s", body)
+	}
+}
+
+func TestSingBoxSubscriptionIntegration(t *testing.T) {
+	binary := os.Getenv("SBM_TEST_SING_BOX")
+	if binary == "" {
+		t.Skip("set SBM_TEST_SING_BOX to the official sing-box 1.13.14 binary")
+	}
+	version, err := exec.Command(binary, "version").Output()
+	if err != nil || !strings.HasPrefix(string(version), "sing-box version 1.13.14\n") {
+		t.Fatal("integration needs sing-box 1.13.14")
+	}
+	for _, nodes := range [][]model.Inbound{singBoxSubscriptionNodes(), nil} {
+		body, err := renderSingBoxSubscription("node.example.com", nodes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "client.json")
+		if err := os.WriteFile(path, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+		// A deprecation warning today is a removal in the next sing-box release.
+		output, err := exec.Command(binary, "check", "-c", path).CombinedOutput()
+		if err != nil || strings.Contains(strings.ToLower(string(output)), "deprecated") {
+			t.Fatalf("sing-box check failed for %d nodes: %v\n%s", len(nodes), err, output)
+		}
+	}
 }

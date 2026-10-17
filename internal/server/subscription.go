@@ -41,8 +41,7 @@ func resolveSubscriptionTarget(r *http.Request) (string, bool) {
 	case strings.Contains(ua, "clash"),
 		strings.Contains(ua, "mihomo"),
 		strings.Contains(ua, "stash"),
-		strings.Contains(ua, "flclash"),
-		strings.Contains(ua, "meta"):
+		strings.Contains(ua, "flclash"):
 		return subTargetClash, false
 	case strings.Contains(ua, "sing-box"),
 		strings.Contains(ua, "singbox"),
@@ -104,7 +103,7 @@ func collectSubscriptionNodes(cfg model.Config, registry *protocol.Registry) ([]
 func renderClashSubscription(domain string, nodes []model.Inbound) string {
 	var b strings.Builder
 	b.WriteString("mixed-port: 7890\n")
-	b.WriteString("allow-lan: true\n")
+	b.WriteString("allow-lan: false\n")
 	b.WriteString("mode: rule\n")
 	b.WriteString("log-level: info\n")
 	b.WriteString("ipv6: true\n")
@@ -314,17 +313,20 @@ func renderSingBoxSubscription(domain string, nodes []model.Inbound) ([]byte, er
 			"level":     "info",
 			"timestamp": true,
 		},
+		// sing-box 1.13 rejects legacy DNS servers and inbound sniff fields, so
+		// this client profile uses the 1.12+ formats.
 		"dns": map[string]any{
 			"servers": []any{
 				map[string]any{
-					"tag":     "dns-remote",
-					"address": "https://1.1.1.1/dns-query",
-					"detour":  "🚀 节点选择",
+					"type":   "https",
+					"tag":    "dns-remote",
+					"server": "1.1.1.1",
+					"detour": "🚀 节点选择",
 				},
 				map[string]any{
-					"tag":     "dns-direct",
-					"address": "223.5.5.5",
-					"detour":  "direct",
+					"type":   "udp",
+					"tag":    "dns-direct",
+					"server": "223.5.5.5",
 				},
 			},
 			"final":    "dns-remote",
@@ -337,21 +339,23 @@ func renderSingBoxSubscription(domain string, nodes []model.Inbound) ([]byte, er
 				"address":      []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
 				"auto_route":   true,
 				"strict_route": true,
-				"sniff":        true,
 			},
 			map[string]any{
 				"type":        "mixed",
 				"tag":         "mixed-in",
 				"listen":      "127.0.0.1",
 				"listen_port": 7890,
-				"sniff":       true,
 			},
 		},
 		"outbounds": outbounds,
 		"route": map[string]any{
 			"auto_detect_interface": true,
-			"final":                 "🚀 节点选择",
+			// Node domains resolve directly; through dns-remote they would need
+			// the node itself.
+			"default_domain_resolver": "dns-direct",
+			"final":                   "🚀 节点选择",
 			"rules": []any{
+				map[string]any{"action": "sniff"},
 				map[string]any{
 					"protocol": "dns",
 					"action":   "hijack-dns",

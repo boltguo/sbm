@@ -228,6 +228,8 @@ var (
 	appRuleIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9:_-]{0,63}$`)
 )
 
+// ValidateAppRouteKey checks a key an administrator is about to set: it must
+// name a loaded app rule or a valid site domain.
 func ValidateAppRouteKey(appID string) bool {
 	if strings.HasPrefix(appID, "site:") {
 		return ValidateDomain(strings.TrimPrefix(appID, "site:")) == nil
@@ -236,6 +238,29 @@ func ValidateAppRouteKey(appID string) bool {
 		return model.IsKnownAppRule(appID)
 	}
 	return appRuleIDRE.MatchString(appID)
+}
+
+// ValidateStoredAppRouteKey also accepts a saved key whose app rule is no
+// longer loaded (an edited custom rule file or a renamed built-in rule), so it
+// cannot block startup or later changes. Render ignores such keys.
+func ValidateStoredAppRouteKey(appID string) bool {
+	if ValidateAppRouteKey(appID) {
+		return true
+	}
+	if strings.HasPrefix(appID, "site:") {
+		return false
+	}
+	return appID != "" && len(appID) <= 128 && strings.IndexFunc(appID, unicode.IsControl) < 0
+}
+
+// NormalizeAppRouteKey lowercases a site key's domain; sing-box matches
+// domains case-insensitively, so mixed-case keys would only duplicate routes.
+func NormalizeAppRouteKey(appID string) string {
+	appID = strings.TrimSpace(appID)
+	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
+		return "site:" + strings.ToLower(domain)
+	}
+	return appID
 }
 
 func ValidateGatewayServer(server string) error {
@@ -355,7 +380,7 @@ func ValidateEgress(cfg model.Config) error {
 		}
 	}
 	for appID, target := range cfg.AppRoutes {
-		if !ValidateAppRouteKey(appID) {
+		if !ValidateStoredAppRouteKey(appID) {
 			return errors.New("应用分流规则标识无效")
 		}
 		if target != model.AppRouteDirect && !ids[target] {

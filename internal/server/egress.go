@@ -305,13 +305,21 @@ func buildAppRoutesView(cfg model.Config) appRoutesView {
 			Enabled:  g.Enabled,
 		})
 	}
+	specs := traffic.AppRuleSpecs()
+	known := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		known[spec.ID] = true
+	}
 	routes := make(map[string]string, len(cfg.AppRoutes))
 	for k, v := range cfg.AppRoutes {
+		// A key whose rule is no longer loaded stays saved but inactive.
+		if !known[k] && !strings.HasPrefix(k, "site:") {
+			continue
+		}
 		if v == model.AppRouteDirect || validGateways[v] {
 			routes[k] = v
 		}
 	}
-	specs := traffic.AppRuleSpecs()
 	apps := make([]appRouteRuleView, 0, len(specs))
 	for _, spec := range specs {
 		apps = append(apps, appRouteRuleView{
@@ -350,27 +358,34 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 			validGateways[g.ID] = true
 		}
 		if input.AppID != nil {
-			appID := strings.TrimSpace(*input.AppID)
+			raw := strings.TrimSpace(*input.AppID)
+			appID := protocol.NormalizeAppRouteKey(raw)
 			target := strings.TrimSpace(input.Target)
+			if target == "" || target == "default" {
+				// Clearing must work for a key whose rule is no longer loaded.
+				if !protocol.ValidateStoredAppRouteKey(raw) {
+					return errors.New("应用分流规则标识无效")
+				}
+				delete(cfg.AppRoutes, raw)
+				delete(cfg.AppRoutes, appID)
+				return nil
+			}
 			if !protocol.ValidateAppRouteKey(appID) {
 				return errors.New("应用分流规则标识无效")
+			}
+			if target != model.AppRouteDirect && !validGateways[target] {
+				return errors.New("应用分流目标出口不存在")
 			}
 			if cfg.AppRoutes == nil {
 				cfg.AppRoutes = make(map[string]string)
 			}
-			if target == "" || target == "default" {
-				delete(cfg.AppRoutes, appID)
-			} else {
-				if target != model.AppRouteDirect && !validGateways[target] {
-					return errors.New("应用分流目标出口不存在")
-				}
-				cfg.AppRoutes[appID] = target
-			}
+			delete(cfg.AppRoutes, raw)
+			cfg.AppRoutes[appID] = target
 			return nil
 		}
 		next := make(map[string]string, len(input.Routes))
 		for k, v := range input.Routes {
-			k = strings.TrimSpace(k)
+			k = protocol.NormalizeAppRouteKey(k)
 			v = strings.TrimSpace(v)
 			if v == "" || v == "default" {
 				continue
@@ -380,6 +395,9 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 			}
 			if v != model.AppRouteDirect && !validGateways[v] {
 				return errors.New("应用分流目标出口不存在")
+			}
+			if prev, ok := next[k]; ok && prev != v {
+				return errors.New("应用分流规则重复")
 			}
 			next[k] = v
 		}

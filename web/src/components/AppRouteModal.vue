@@ -23,6 +23,8 @@ const localView = ref<AppRoutesView | null>(null)
 const loading = ref(false)
 const savingId = ref('')
 const selectedCat = ref('all')
+// Bumped around every save so the fetch started on open cannot overwrite it.
+let revision = 0
 
 const view = computed(() => localView.value ?? props.initialData ?? null)
 const gateways = computed(() => view.value?.gateways ?? [])
@@ -97,9 +99,11 @@ const categoryLabel = (category: string) => {
 const safe = guard(message => emit('toast', message))
 
 async function fetchRoutes() {
+  const current = revision
   loading.value = true
   try {
     const next = await api<AppRoutesView>('/api/egress/app-routes')
+    if (current !== revision) return
     localView.value = next
     emit('updated', next)
   } finally {
@@ -129,12 +133,14 @@ watch(
 
 const changeRoute = safe(async (appId: string, target: string) => {
   savingId.value = appId
+  revision++
   try {
     const next = await put<AppRoutesView>('/api/egress/app-routes', { appId, target })
     localView.value = next
     emit('updated', next)
     emit('toast', t('apps.routeSaved'))
   } finally {
+    revision++
     savingId.value = ''
   }
 })
@@ -150,6 +156,7 @@ const routeOptions = computed(() => [
 
 const resetAll = safe(async () => {
   savingId.value = '__all__'
+  revision++
   try {
     const next = await put<AppRoutesView>('/api/egress/app-routes', { routes: {} })
     localView.value = next
@@ -157,6 +164,7 @@ const resetAll = safe(async () => {
     emit('updated', next)
     emit('toast', t('apps.routeSaved'))
   } finally {
+    revision++
     savingId.value = ''
   }
 })

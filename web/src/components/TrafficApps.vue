@@ -28,6 +28,9 @@ const error = ref('')
 const initialized = ref(false)
 const expanded = ref<Record<string, boolean>>({})
 let request = 0
+// Bumped around every route save so a poll that started earlier cannot put
+// the previous routes back while sing-box restarts.
+let routesRevision = 0
 let timer = 0
 
 const validSelection = computed(() =>
@@ -103,9 +106,10 @@ async function load(background = false) {
   if (initialized.value) {
     query.set('date', period.value === 'day' ? day.value : month.value)
   }
+  const routesRequest = routesRevision
   api<AppRoutesView>('/api/egress/app-routes')
     .then(res => {
-      if (id === request) routesView.value = res
+      if (id === request && routesRequest === routesRevision) routesView.value = res
     })
     .catch(() => {})
   try {
@@ -210,14 +214,20 @@ function exportJSON() {
 const safe = guard(message => emit('toast', message))
 const changeInlineRoute = safe(async (appId: string, target: string) => {
   savingRouteId.value = appId
+  routesRevision++
   try {
     const next = await put<AppRoutesView>('/api/egress/app-routes', { appId, target })
     routesView.value = next
     emit('toast', t('apps.routeSaved'))
   } finally {
+    routesRevision++
     savingRouteId.value = ''
   }
 })
+const applyRoutes = (next: AppRoutesView) => {
+  routesRevision++
+  routesView.value = next
+}
 const clearStats = safe(async () => {
   if (clearing.value) return
   clearing.value = true
@@ -432,7 +442,7 @@ onBeforeUnmount(() => {
       :open="routeModalOpen"
       :initial-data="routesView"
       @close="routeModalOpen = false"
-      @updated="routesView = $event"
+      @updated="applyRoutes"
       @toast="emit('toast', $event)"
     />
   </section>
