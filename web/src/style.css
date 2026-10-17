@@ -2658,6 +2658,30 @@ label small {
   flex-shrink: 0;
 }
 
+.app-route-item.pending {
+  border-style: dashed;
+  border-color: var(--signal-dark);
+}
+
+.app-route-meta .app-route-pending-pill {
+  padding: 2px 5px;
+  background: var(--signal);
+  color: var(--ink);
+  font: 700 10px/1 var(--mono);
+}
+
+/* Stays at the bottom of the scrolling dialog so staged changes are never
+   left without a visible way to apply them. */
+.app-route-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0 -24px -24px;
+  padding: 14px 24px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
 /* Unified SelectControl & DatePickerControl (Reka UI) */
 .sbm-select-trigger,
 .sbm-datepicker-trigger {
@@ -2970,6 +2994,15 @@ label small {
   font-weight: 800;
 }
 
+.sbm-dp-nav:disabled,
+.sbm-dp-day:disabled,
+.sbm-dp-cell:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: var(--line-strong);
+  cursor: not-allowed;
+}
+
 .sbm-dp-foot {
   display: flex;
   justify-content: flex-end;
@@ -3001,6 +3034,11 @@ label small {
 
   .app-route-modal {
     padding: 16px 16px 20px;
+  }
+
+  .app-route-actions {
+    margin: 0 -16px -20px;
+    padding: 12px 16px 20px;
   }
 
   .app-route-list {

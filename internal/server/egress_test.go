@@ -491,3 +491,33 @@ func TestAppRoutesToleratesUnloadedRulesAndNormalizesSites(t *testing.T) {
 		t.Fatalf("bulk routes=%+v want=%+v", got, want)
 	}
 }
+
+func TestAppRouteChangesApplyTogether(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	commands := &gatewayCommander{}
+	s.Core.Commands = commands
+	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
+	gwID := s.Config.Get().EgressGateways[0].ID
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": gwID, "youtube": "direct", "site:linux.do": "direct"}}, 200)
+
+	restarts := commands.restarts
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "", "youtube": gwID, "telegram": "direct", "site:Linux.DO": "default", "site:Example.COM": gwID}}, 200)
+	if commands.restarts != restarts+1 {
+		t.Fatalf("a batch must restart sing-box once, got %d restarts", commands.restarts-restarts)
+	}
+	want := map[string]string{"youtube": gwID, "telegram": model.AppRouteDirect, "site:example.com": gwID}
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
+		t.Fatalf("routes=%+v want=%+v", got, want)
+	}
+
+	// A batch with any invalid entry changes nothing.
+	restarts = commands.restarts
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "nonexistent-app": "direct"}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "youtube": "missing-gw"}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"site:A.example": "direct", "site:a.example": ""}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{}}, 400)
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) || commands.restarts != restarts {
+		t.Fatalf("rejected batches must not change routes: %+v restarts=%d", got, commands.restarts-restarts)
+	}
+}

@@ -284,6 +284,7 @@ onBeforeUnmount(() => {
             v-if="period === 'day'"
             v-model="day"
             type="date"
+            :time-zone="data?.timezone"
             :disabled="!initialized"
             :aria-label="t('apps.selectDay')"
             @change="changeDate"
@@ -292,6 +293,7 @@ onBeforeUnmount(() => {
             v-else
             v-model="month"
             type="month"
+            :time-zone="data?.timezone"
             :disabled="!initialized"
             :aria-label="t('apps.selectMonth')"
             @change="changeDate"
