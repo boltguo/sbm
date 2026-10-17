@@ -71,6 +71,14 @@ func (s *ConfigStore) Replace(cfg model.Config) error {
 func cloneConfig(cfg model.Config) model.Config {
 	copyCfg := cfg
 	copyCfg.EgressGateways = append([]model.EgressGateway(nil), cfg.EgressGateways...)
+	if len(cfg.AppRoutes) > 0 {
+		copyCfg.AppRoutes = make(map[string]string, len(cfg.AppRoutes))
+		for k, v := range cfg.AppRoutes {
+			copyCfg.AppRoutes[k] = v
+		}
+	} else {
+		copyCfg.AppRoutes = nil
+	}
 	copyCfg.Inbounds = append([]model.Inbound(nil), cfg.Inbounds...)
 	for i := range copyCfg.Inbounds {
 		copyCfg.Inbounds[i].EgressCredentials = append([]model.EgressCredential(nil), cfg.Inbounds[i].EgressCredentials...)

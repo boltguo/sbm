@@ -342,3 +342,63 @@ func TestGatewayDraftValidationAndKeysAPI(t *testing.T) {
 	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.2"), 201)
 	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.2"), 400)
 }
+
+func TestAppRoutesAPIAndRendering(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	s.Core.Commands = &gatewayCommander{}
+
+	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
+	gwID := s.Config.Get().EgressGateways[0].ID
+
+	// GET initial app-routes
+	resp := gatewayRequest(t, s, "GET", "/api/egress/app-routes", nil, 200)
+	var view appRoutesView
+	if err := json.Unmarshal(resp.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Gateways) != 1 || view.Gateways[0].ID != gwID || len(view.Apps) == 0 {
+		t.Fatalf("unexpected initial appRoutesView: gateways=%d apps=%d", len(view.Gateways), len(view.Apps))
+	}
+
+	// Set YouTube -> direct (entry machine itself), OpenAI -> gwID, Telegram -> gwID, and custom site:linux.do -> direct
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "direct"}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "openai", "target": gwID}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "telegram", "target": gwID}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:linux.do", "target": "direct"}, 200)
+
+	// Invalid app ID or gateway ID must be rejected
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "nonexistent-app", "target": "direct"}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "missing-gw"}, 400)
+
+	cfg := s.Config.Get()
+	if cfg.AppRoutes["youtube"] != "direct" || cfg.AppRoutes["openai"] != gwID || cfg.AppRoutes["site:linux.do"] != "direct" {
+		t.Fatalf("unexpected saved AppRoutes: %+v", cfg.AppRoutes)
+	}
+
+	// Verify rendered sing-box config places app route rules BEFORE auth_user gateway rules
+	rendered, err := s.Core.Renderer.Render(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderedStr := string(rendered)
+	youtubeIdx := strings.Index(renderedStr, "googlevideo.com")
+	openaiIdx := strings.Index(renderedStr, "chatgpt.com")
+	authUserIdx := strings.Index(renderedStr, "auth_user")
+	if youtubeIdx < 0 || openaiIdx < 0 || authUserIdx < 0 {
+		t.Fatalf("expected app domains and auth_user in rendered config:\n%s", renderedStr)
+	}
+	if youtubeIdx > authUserIdx || openaiIdx > authUserIdx {
+		t.Fatalf("app route rules must appear before auth_user fallback rules")
+	}
+
+	// Deleting the gateway must automatically clean up AppRoutes referencing gwID while preserving "direct" routes
+	gatewayRequest(t, s, "DELETE", "/api/egress/"+gwID, nil, 200)
+	cfgAfter := s.Config.Get()
+	if _, exists := cfgAfter.AppRoutes["openai"]; exists {
+		t.Fatalf("expected deleted gateway route to be pruned, got %+v", cfgAfter.AppRoutes)
+	}
+	if cfgAfter.AppRoutes["youtube"] != "direct" {
+		t.Fatalf("expected direct route for youtube to be preserved, got %+v", cfgAfter.AppRoutes)
+	}
+}

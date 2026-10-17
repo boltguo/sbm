@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
@@ -49,10 +50,13 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		}},
 	}
 	endpoints := []any{}
+	gatewayRules := []any{}
+	enabledGateways := make(map[string]model.EgressGateway, len(buildContext.EgressGateways))
 	for _, g := range buildContext.EgressGateways {
 		if !g.Enabled {
 			continue
 		}
+		enabledGateways[g.ID] = g
 		endpoints = append(endpoints, map[string]any{
 			"type": "wireguard", "tag": g.EndpointTag(), "system": false, "mtu": 1408,
 			"address": []string{g.TunnelAddress()}, "private_key": g.PrivateKey,
@@ -65,10 +69,12 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			}
 		}
 		if len(users) > 0 {
-			rules = append(rules, map[string]any{"auth_user": users, "action": "resolve", "server": "local", "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
+			gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "resolve", "server": "local", "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
 		}
 	}
 	if len(endpoints) > 0 {
+		rules = append(rules, buildAppRouteRules(cfg.AppRoutes, enabledGateways)...)
+		rules = append(rules, gatewayRules...)
 		doc["endpoints"] = endpoints
 		doc["dns"] = map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}}
 		route["rules"] = rules
@@ -83,4 +89,140 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		return nil, err
 	}
 	return append(data, '\n'), nil
+}
+
+func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]model.EgressGateway) []any {
+	if len(appRoutes) == 0 {
+		return nil
+	}
+	resolveTarget := func(target string) (outboundTag string, isGateway bool, ok bool) {
+		if target == model.AppRouteDirect {
+			return "direct", false, true
+		}
+		if g, exists := enabledGateways[target]; exists {
+			return g.EndpointTag(), true, true
+		}
+		return "", false, false
+	}
+
+	type routeGroup struct {
+		target string
+		items  []string
+	}
+
+	specs := model.AppRuleSpecs()
+	var domainSteps []routeGroup
+	for _, spec := range specs {
+		target := appRoutes[spec.ID]
+		if _, _, ok := resolveTarget(target); ok && len(spec.Subdomains) > 0 {
+			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Subdomains})
+		}
+	}
+	for _, spec := range specs {
+		if spec.Category == "ecosystem" || spec.Category == "cdn" {
+			continue
+		}
+		target := appRoutes[spec.ID]
+		if _, _, ok := resolveTarget(target); ok && len(spec.Domains) > 0 {
+			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Domains})
+		}
+	}
+	var siteKeys []string
+	for k, target := range appRoutes {
+		if strings.HasPrefix(k, "site:") {
+			if _, _, ok := resolveTarget(target); ok {
+				siteKeys = append(siteKeys, k)
+			}
+		}
+	}
+	sort.Strings(siteKeys)
+	for _, k := range siteKeys {
+		domain := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(k, "site:")))
+		if domain != "" {
+			domainSteps = append(domainSteps, routeGroup{target: appRoutes[k], items: []string{domain}})
+		}
+	}
+	for _, spec := range specs {
+		if spec.Category != "ecosystem" && spec.Category != "cdn" {
+			continue
+		}
+		target := appRoutes[spec.ID]
+		if _, _, ok := resolveTarget(target); ok && len(spec.Domains) > 0 {
+			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Domains})
+		}
+	}
+
+	var mergedDomains []routeGroup
+	seenDomains := map[string]bool{}
+	for _, step := range domainSteps {
+		var unique []string
+		for _, d := range step.items {
+			d = strings.ToLower(strings.TrimSpace(d))
+			if d != "" && !seenDomains[d] {
+				seenDomains[d] = true
+				unique = append(unique, d)
+			}
+		}
+		if len(unique) == 0 {
+			continue
+		}
+		if n := len(mergedDomains); n > 0 && mergedDomains[n-1].target == step.target {
+			mergedDomains[n-1].items = append(mergedDomains[n-1].items, unique...)
+		} else {
+			mergedDomains = append(mergedDomains, routeGroup{target: step.target, items: unique})
+		}
+	}
+
+	var out []any
+	for _, g := range mergedDomains {
+		outboundTag, isGateway, _ := resolveTarget(g.target)
+		if isGateway {
+			out = append(out,
+				map[string]any{"domain_suffix": g.items, "action": "resolve", "server": "local", "strategy": "ipv4_only"},
+				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
+			)
+		} else {
+			out = append(out,
+				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
+			)
+		}
+	}
+
+	var mergedCIDRs []routeGroup
+	seenCIDRs := map[string]bool{}
+	for _, spec := range specs {
+		target := appRoutes[spec.ID]
+		_, isGateway, ok := resolveTarget(target)
+		if !ok || len(spec.CIDRs) == 0 {
+			continue
+		}
+		var unique []string
+		for _, p := range spec.CIDRs {
+			if isGateway && !p.Addr().Is4() {
+				continue
+			}
+			cidr := p.String()
+			if !seenCIDRs[cidr] {
+				seenCIDRs[cidr] = true
+				unique = append(unique, cidr)
+			}
+		}
+		if len(unique) == 0 {
+			continue
+		}
+		if n := len(mergedCIDRs); n > 0 && mergedCIDRs[n-1].target == target {
+			mergedCIDRs[n-1].items = append(mergedCIDRs[n-1].items, unique...)
+		} else {
+			mergedCIDRs = append(mergedCIDRs, routeGroup{target: target, items: unique})
+		}
+	}
+	for _, g := range mergedCIDRs {
+		outboundTag, _, _ := resolveTarget(g.target)
+		out = append(out, map[string]any{
+			"ip_cidr":  g.items,
+			"action":   "route",
+			"outbound": outboundTag,
+		})
+	}
+	return out
 }

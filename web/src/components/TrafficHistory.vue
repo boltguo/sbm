@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { TrafficHistory, TrafficUnit } from '../types'
 import { dateLocale, t } from '../i18n'
+import DatePickerControl from './DatePickerControl.vue'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ unit: TrafficUnit }>()
@@ -90,7 +91,25 @@ onBeforeUnmount(() => { ++request; clearInterval(timer) })
           <button type="button" :disabled="!initialized" :aria-pressed="mode === 'day'" @click="select('day')">{{ t('history.daily') }}</button>
           <button type="button" :disabled="!initialized" :aria-pressed="mode === 'month'" @click="select('month')">{{ t('history.monthly') }}</button>
         </div>
-        <label class="history-month"><span>{{ mode === 'day' ? t('history.selectMonth') : t('history.selectYear') }}</span><input v-if="mode === 'day'" v-model="month" :disabled="!initialized" type="month" min="1970-01" max="9999-12" required @change="changeMonth"><input v-else v-model="year" :disabled="!initialized" type="number" min="1970" max="9999" required @change="changeMonth"></label>
+        <div class="history-month">
+          <span>{{ mode === 'day' ? t('history.selectMonth') : t('history.selectYear') }}</span>
+          <DatePickerControl
+            v-if="mode === 'day'"
+            v-model="month"
+            type="month"
+            :disabled="!initialized"
+            :aria-label="t('history.selectMonth')"
+            @change="changeMonth"
+          />
+          <DatePickerControl
+            v-else
+            v-model="year"
+            type="year"
+            :disabled="!initialized"
+            :aria-label="t('history.selectYear')"
+            @change="changeMonth"
+          />
+        </div>
         <button class="secondary history-refresh" :class="{ refreshing: loading }" type="button" :disabled="loading || !validSelection" :aria-label="t('dashboard.refresh')" @click="load()"><Icon name="refresh" /></button>
       </div>
     </header>

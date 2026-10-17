@@ -225,6 +225,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.generateWireGuardKeypair(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/egress/public-key":
 		s.wireGuardPublicKey(w, r)
+	case r.Method == "GET" && r.URL.Path == "/api/egress/app-routes":
+		s.getAppRoutes(w, r)
+	case r.Method == "PUT" && r.URL.Path == "/api/egress/app-routes":
+		s.updateAppRoutes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/egress/"):
 		s.gatewayByID(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/settings":
@@ -969,25 +973,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "已达到代理安全阈值，请等待重置")
 		return
 	}
-	links := make([]string, 0, len(cfg.Inbounds))
-	for _, inbound := range cfg.Inbounds {
-		if !inbound.Enabled {
-			continue
-		}
-		d, _ := s.Registry.Get(inbound.Type)
-		link, err := d.ShareLink(inbound, protocol.ShareContext{Domain: cfg.Domain})
-		if err == nil {
-			links = append(links, link)
-		}
-	}
-
-	for _, node := range protocol.EgressNodes(cfg) {
-		d, _ := s.Registry.Get(node.Inbound.Type)
-		if link, err := d.ShareLink(node.Inbound, protocol.ShareContext{Domain: cfg.Domain}); err == nil {
-			links = append(links, link)
-		}
-	}
-	payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
+	nodes, links := collectSubscriptionNodes(cfg, s.Registry)
 	effectiveLimit, err := cfg.EffectiveTrafficLimitBytes()
 	if err != nil {
 		writeError(w, 500, "计算流量限额失败")
@@ -1005,17 +991,33 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=0", upload, download, effectiveLimit))
 	w.Header().Set("Profile-Update-Interval", "12")
 	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(subscriptionName(cfg))))
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+	target, explicit := resolveSubscriptionTarget(r)
+	if !explicit && target == subTargetBase64 && strings.Contains(r.Header.Get("Accept"), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "zh") {
-			_, _ = fmt.Fprintf(w, "<!doctype html><html lang=zh-CN><meta charset=utf-8><meta name=viewport content='width=device-width'><title>SBM 订阅</title><style>body{font:16px sans-serif;max-width:600px;margin:12vh auto;padding:24px;background:#111;color:#eee}small{color:#aaa}</style><h1>订阅可用</h1><p>%d 个已启用节点</p><small>请将地址复制到支持 Base64 订阅的代理客户端中。</small>", len(links))
+			_, _ = fmt.Fprintf(w, "<!doctype html><html lang=zh-CN><meta charset=utf-8><meta name=viewport content='width=device-width'><title>SBM 订阅</title><style>body{font:16px sans-serif;max-width:600px;margin:12vh auto;padding:24px;background:#111;color:#eee}small{color:#aaa}</style><h1>订阅可用</h1><p>%d 个已启用节点</p><small>请将地址复制到支持 Base64 / Clash Meta / sing-box 订阅的代理客户端中。</small>", len(links))
 		} else {
-			_, _ = fmt.Fprintf(w, "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width'><title>SBM subscription</title><style>body{font:16px sans-serif;max-width:600px;margin:12vh auto;padding:24px;background:#111;color:#eee}small{color:#aaa}</style><h1>Subscription ready</h1><p>%d enabled nodes</p><small>Copy this URL into a proxy client that supports Base64 subscriptions.</small>", len(links))
+			_, _ = fmt.Fprintf(w, "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width'><title>SBM subscription</title><style>body{font:16px sans-serif;max-width:600px;margin:12vh auto;padding:24px;background:#111;color:#eee}small{color:#aaa}</style><h1>Subscription ready</h1><p>%d enabled nodes</p><small>Copy this URL into a proxy client that supports Base64, Clash Meta, or sing-box subscriptions.</small>", len(links))
 		}
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(payload))
+	switch target {
+	case subTargetClash:
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		_, _ = w.Write([]byte(renderClashSubscription(cfg.Domain, nodes)))
+	case subTargetSingBox:
+		body, err := renderSingBoxSubscription(cfg.Domain, nodes)
+		if err != nil {
+			writeError(w, 500, "生成 sing-box 订阅失败")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(body)
+	default:
+		payload := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(payload))
+	}
 }
 
 func subscriptionURL(cfg model.Config) string {

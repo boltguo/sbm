@@ -24,6 +24,8 @@ const (
 	TrafficUnitGiB              = "GiB"
 	TrafficGBBytes              = 1_000_000_000
 	TrafficGiBBytes             = 1024 * 1024 * 1024
+
+	AppRouteDirect = "direct"
 )
 
 type Config struct {
@@ -42,6 +44,7 @@ type Config struct {
 	OutboundStrategy     string             `json:"outboundStrategy,omitempty"`
 	Inbounds             []Inbound          `json:"inbounds"`
 	EgressGateways       []EgressGateway    `json:"egressGateways,omitempty"`
+	AppRoutes            map[string]string  `json:"appRoutes,omitempty"`
 }
 
 // TrafficQuotaConfig stores the provider's advertised allowance and unit.

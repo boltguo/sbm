@@ -2,9 +2,74 @@ package model
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
+	"sync"
 	"time"
 )
+
+type AppRuleSpec struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Category   string         `json:"category"`
+	Domains    []string       `json:"domains,omitempty"`
+	Subdomains []string       `json:"subdomains,omitempty"`
+	CIDRs      []netip.Prefix `json:"-"`
+}
+
+var (
+	appRulesMu   sync.RWMutex
+	appRuleSpecs []AppRuleSpec
+	appRuleByID  map[string]AppRuleSpec
+)
+
+func SetAppRules(specs []AppRuleSpec) {
+	copied := make([]AppRuleSpec, 0, len(specs))
+	byID := make(map[string]AppRuleSpec, len(specs))
+	for _, s := range specs {
+		item := AppRuleSpec{
+			ID:         s.ID,
+			Name:       s.Name,
+			Category:   s.Category,
+			Domains:    append([]string(nil), s.Domains...),
+			Subdomains: append([]string(nil), s.Subdomains...),
+			CIDRs:      append([]netip.Prefix(nil), s.CIDRs...),
+		}
+		copied = append(copied, item)
+		byID[s.ID] = item
+	}
+	appRulesMu.Lock()
+	appRuleSpecs = copied
+	appRuleByID = byID
+	appRulesMu.Unlock()
+}
+
+func AppRuleSpecs() []AppRuleSpec {
+	appRulesMu.RLock()
+	defer appRulesMu.RUnlock()
+	out := make([]AppRuleSpec, 0, len(appRuleSpecs))
+	for _, s := range appRuleSpecs {
+		out = append(out, AppRuleSpec{
+			ID:         s.ID,
+			Name:       s.Name,
+			Category:   s.Category,
+			Domains:    append([]string(nil), s.Domains...),
+			Subdomains: append([]string(nil), s.Subdomains...),
+			CIDRs:      append([]netip.Prefix(nil), s.CIDRs...),
+		})
+	}
+	return out
+}
+
+func IsKnownAppRule(id string) bool {
+	appRulesMu.RLock()
+	defer appRulesMu.RUnlock()
+	if len(appRuleByID) == 0 {
+		return false
+	}
+	_, ok := appRuleByID[id]
+	return ok
+}
 
 // TunnelSlot is persisted, so removing or reordering another gateway never
 // changes the address the operator has configured on this gateway's B server.

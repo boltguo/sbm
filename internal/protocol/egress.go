@@ -192,6 +192,24 @@ func SyncEgressCredentials(cfg *model.Config) error {
 		}
 		in.EgressCredentials = result
 	}
+	if len(cfg.AppRoutes) > 0 {
+		cleaned := make(map[string]string, len(cfg.AppRoutes))
+		for appID, target := range cfg.AppRoutes {
+			appID = strings.TrimSpace(appID)
+			target = strings.TrimSpace(target)
+			if appID == "" || target == "" {
+				continue
+			}
+			if target == model.AppRouteDirect || gateways[target] {
+				cleaned[appID] = target
+			}
+		}
+		if len(cleaned) > 0 {
+			cfg.AppRoutes = cleaned
+		} else {
+			cfg.AppRoutes = nil
+		}
+	}
 	return nil
 }
 func generateUUID() (string, error) {
@@ -205,7 +223,20 @@ func generateUUID() (string, error) {
 	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:], nil
 }
 
-var gatewayIDRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,47}$`)
+var (
+	gatewayIDRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,47}$`)
+	appRuleIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9:_-]{0,63}$`)
+)
+
+func ValidateAppRouteKey(appID string) bool {
+	if strings.HasPrefix(appID, "site:") {
+		return ValidateDomain(strings.TrimPrefix(appID, "site:")) == nil
+	}
+	if len(model.AppRuleSpecs()) > 0 {
+		return model.IsKnownAppRule(appID)
+	}
+	return appRuleIDRE.MatchString(appID)
+}
 
 func ValidateGatewayServer(server string) error {
 	addr, err := netip.ParseAddr(server)
@@ -321,6 +352,14 @@ func ValidateEgress(cfg model.Config) error {
 		}
 		if len(seen) != len(ids) {
 			return errors.New("缺少中继出口凭据")
+		}
+	}
+	for appID, target := range cfg.AppRoutes {
+		if !ValidateAppRouteKey(appID) {
+			return errors.New("应用分流规则标识无效")
+		}
+		if target != model.AppRouteDirect && !ids[target] {
+			return errors.New("应用分流目标出口不存在")
 		}
 	}
 	return nil

@@ -7,6 +7,7 @@ import {
   EyeOff,
   Grid2X2,
   LogOut,
+  MapPin,
   Pencil,
   Plus,
   Power,
@@ -19,7 +20,7 @@ import {
 } from '@lucide/vue'
 import GithubMark from './GithubMark.vue'
 
-type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'download' | 'refresh' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check' | 'eye' | 'eye-off' | 'github'
+type IconName = 'grid' | 'route' | 'server' | 'sliders' | 'copy' | 'download' | 'refresh' | 'locate' | 'power' | 'logout' | 'plus' | 'x' | 'edit' | 'trash' | 'check' | 'eye' | 'eye-off' | 'github'
 
 defineProps<{ name: IconName }>()
 
@@ -31,6 +32,7 @@ const icons = {
   copy: Copy,
   download: Download,
   refresh: RotateCcw,
+  locate: MapPin,
   power: Power,
   logout: LogOut,
   plus: Plus,

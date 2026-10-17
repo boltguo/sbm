@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { api, guard, post } from '../api'
-import type { AppTrafficResponse, AppUsage, TrafficUnit } from '../types'
+import { api, guard, post, put } from '../api'
+import type { AppRoutesView, AppTrafficResponse, AppUsage, TrafficUnit } from '../types'
 import { dateLocale, t } from '../i18n'
+import AppRouteModal from './AppRouteModal.vue'
 import ConfirmAction from './ConfirmAction.vue'
+import DatePickerControl from './DatePickerControl.vue'
 import Icon from './Icon.vue'
+import SelectControl from './SelectControl.vue'
 
 const props = defineProps<{ unit: TrafficUnit }>()
 const emit = defineEmits<{ toast: [message: string] }>()
 
 const data = ref<AppTrafficResponse | null>(null)
+const routesView = ref<AppRoutesView | null>(null)
+const routeModalOpen = ref(false)
+const savingRouteId = ref('')
 const period = ref<'day' | 'month'>('day')
 const localNow = new Date()
 const day = ref(
@@ -32,6 +38,11 @@ const validSelection = computed(() =>
 
 const apps = computed(() => data.value?.apps ?? [])
 const totalBytes = computed(() => data.value?.totalBytes ?? 0)
+const gateways = computed(() => routesView.value?.gateways ?? [])
+const activeRoutes = computed(() => routesView.value?.routes ?? {})
+const activeRouteCount = computed(() => Object.keys(activeRoutes.value).length)
+
+const isRoutable = (id: string) => !id.startsWith('ip:') && id !== 'other'
 
 const bytes = (value: number) => {
   const base = props.unit === 'GiB' ? 1024 : 1000
@@ -92,6 +103,11 @@ async function load(background = false) {
   if (initialized.value) {
     query.set('date', period.value === 'day' ? day.value : month.value)
   }
+  api<AppRoutesView>('/api/egress/app-routes')
+    .then(res => {
+      if (id === request) routesView.value = res
+    })
+    .catch(() => {})
   try {
     const next = await api<AppTrafficResponse>(`/api/traffic/apps?${query}`)
     if (id !== request) return
@@ -192,6 +208,16 @@ function exportJSON() {
 }
 
 const safe = guard(message => emit('toast', message))
+const changeInlineRoute = safe(async (appId: string, target: string) => {
+  savingRouteId.value = appId
+  try {
+    const next = await put<AppRoutesView>('/api/egress/app-routes', { appId, target })
+    routesView.value = next
+    emit('toast', t('apps.routeSaved'))
+  } finally {
+    savingRouteId.value = ''
+  }
+})
 const clearStats = safe(async () => {
   if (clearing.value) return
   clearing.value = true
@@ -205,6 +231,15 @@ const clearStats = safe(async () => {
     clearing.value = false
   }
 })
+
+const routeOptions = computed(() => [
+  { value: '', label: t('apps.routeDefault') },
+  { value: 'direct', label: t('apps.routeDirect') },
+  ...gateways.value.map(gw => ({
+    value: gw.id,
+    label: `${gw.name}${gw.enabled ? '' : t('apps.routeDisabledSuffix')}`,
+  })),
+])
 
 onMounted(() => {
   load()
@@ -233,29 +268,25 @@ onBeforeUnmount(() => {
             {{ t('apps.monthly') }}
           </button>
         </div>
-        <label class="history-month">
+        <div class="history-month">
           <span>{{ period === 'day' ? t('apps.selectDay') : t('apps.selectMonth') }}</span>
-          <input
+          <DatePickerControl
             v-if="period === 'day'"
             v-model="day"
-            :disabled="!initialized"
             type="date"
-            min="1970-01-01"
-            max="9999-12-31"
-            required
+            :disabled="!initialized"
+            :aria-label="t('apps.selectDay')"
             @change="changeDate"
           />
-          <input
+          <DatePickerControl
             v-else
             v-model="month"
-            :disabled="!initialized"
             type="month"
-            min="1970-01"
-            max="9999-12"
-            required
+            :disabled="!initialized"
+            :aria-label="t('apps.selectMonth')"
             @change="changeDate"
           />
-        </label>
+        </div>
         <button
           class="secondary history-refresh"
           :class="{ refreshing: loading }"
@@ -274,12 +305,23 @@ onBeforeUnmount(() => {
     <p v-if="!data && !error" class="history-empty">{{ t('apps.loading') }}</p>
 
     <template v-if="data">
-      <div v-if="totalBytes > 0" class="history-note app-summary-bar">
+      <div class="history-note app-summary-bar">
         <span>
           {{ t('apps.proxyTotal', { amount: bytes(totalBytes) }) }} · ↑ {{ bytes(data.totalUpload) }} / ↓ {{ bytes(data.totalDownload) }}
         </span>
-        <div v-if="apps.length > 0" class="app-summary-actions">
+        <div class="app-summary-actions">
           <button
+            class="secondary app-action-btn app-route-trigger"
+            :class="{ 'has-active': activeRouteCount > 0 }"
+            type="button"
+            @click="routeModalOpen = true"
+          >
+            <Icon name="route" />
+            <span>{{ t('apps.routeButton') }}</span>
+            <b v-if="activeRouteCount > 0" class="app-route-badge">{{ activeRouteCount }}</b>
+          </button>
+          <button
+            v-if="apps.length > 0"
             class="secondary app-action-btn"
             type="button"
             @click="exportJSON"
@@ -288,6 +330,7 @@ onBeforeUnmount(() => {
             <span>{{ t('apps.export') }}</span>
           </button>
           <ConfirmAction
+            v-if="apps.length > 0"
             :title="t('apps.clear')"
             :message="t('apps.clearConfirm')"
             :destructive="true"
@@ -332,6 +375,22 @@ onBeforeUnmount(() => {
                     <span v-if="item.domains.length > 1 || (item.domains.length === 1 && item.domains[0].domain !== item.name)" class="app-domain-count">
                       {{ item.domains.length > 1 ? t('apps.domainsCount', { count: item.domains.length }) : item.domains[0].domain }}
                     </span>
+                    <div
+                      v-if="isRoutable(item.id) && (gateways.length > 0 || activeRoutes[item.id])"
+                      class="app-route-inline-wrap"
+                      @click.stop
+                      @keydown.stop
+                    >
+                      <SelectControl
+                        :model-value="activeRoutes[item.id] || ''"
+                        :options="routeOptions"
+                        size="xs"
+                        :active="!!activeRoutes[item.id]"
+                        :disabled="savingRouteId === item.id"
+                        :aria-label="`${appName(item)} · ${t('apps.routeButton')}`"
+                        @update:model-value="val => changeInlineRoute(item.id, val)"
+                      />
+                    </div>
                   </div>
                   <div class="app-share-track">
                     <i :style="{ width: shareWidth(item.total, totalBytes) }"></i>
@@ -368,6 +427,14 @@ onBeforeUnmount(() => {
       <p v-else class="history-empty">{{ t('apps.empty') }}</p>
       <footer>{{ t('apps.footnote') }}</footer>
     </template>
+
+    <AppRouteModal
+      :open="routeModalOpen"
+      :initial-data="routesView"
+      @close="routeModalOpen = false"
+      @updated="routesView = $event"
+      @toast="emit('toast', $event)"
+    />
   </section>
 </template>
 

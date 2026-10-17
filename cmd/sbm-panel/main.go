@@ -236,8 +236,6 @@ func runServe(args []string) {
 	osRelease := set.String("os-release", "/etc/os-release", "系统版本文件路径")
 	diskPath := set.String("disk-path", "/", "磁盘统计路径")
 	_ = set.Parse(args)
-	cfgStore, manager := loadCore(p)
-	cfg := cfgStore.Get()
 	if *appRulesPath != "" {
 		if err := traffic.LoadAppRulesFile(*appRulesPath); err != nil {
 			fatal("读取自定义应用归类规则失败：" + err.Error())
@@ -250,6 +248,8 @@ func runServe(args []string) {
 			}
 		}
 	}
+	cfgStore, manager := loadCore(p)
+	cfg := cfgStore.Get()
 	if *historyPath == "" {
 		*historyPath = filepath.Join(filepath.Dir(p.state), "traffic.db")
 	}

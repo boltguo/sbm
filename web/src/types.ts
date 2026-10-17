@@ -199,3 +199,23 @@ export interface EgressGateway extends GatewayInput {
   id: string; tunnelSlot: number; geo: GatewayGeo; publicKey: string; name: string; location: string
   tunnelAddress: string; peerAddress: string; usage: GatewayUsage
 }
+export interface AppRouteGatewayOption {
+  id: string
+  name: string
+  location: string
+  enabled: boolean
+}
+export interface AppRouteRuleView {
+  id: string
+  name: string
+  category: string
+  domainCount: number
+  hasCidrs: boolean
+  target: string
+}
+export interface AppRoutesView {
+  gateways: AppRouteGatewayOption[]
+  apps: AppRouteRuleView[]
+  routes: Record<string, string>
+}
+

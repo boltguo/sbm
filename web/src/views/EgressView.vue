@@ -9,6 +9,7 @@ import PasswordInput from '../components/PasswordInput.vue'
 import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import EgressGuide from '../components/EgressGuide.vue'
+import AppRouteModal from '../components/AppRouteModal.vue'
 import { dateLocale, t } from '../i18n'
 import { usePollStatus } from '../poll-status'
 
@@ -19,6 +20,7 @@ const busy = ref(false)
 const form = ref<GatewayInput | null>(null)
 const editing = ref<EgressGateway | null>(null)
 const publicKey = ref('')
+const routeModalOpen = ref(false)
 let timer = 0
 let keyRevision = 0
 let listRevision = 0
@@ -91,7 +93,7 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
 
 <template>
   <div class="page egress-page">
-    <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></header>
+    <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><div class="head-actions"><button class="secondary" type="button" :disabled="busy" @click="routeModalOpen = true"><Icon name="sliders"/>{{ t('egress.appRoutes') }}</button><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></div></header>
     <div v-if="stale" class="alert" role="status">{{ t('api.stale') }}</div>
     <div class="egress-flow"><span>{{ t('egress.client') }}</span><b>→</b><span>{{ t('egress.entry') }}</span><b>→</b><strong>{{ t('egress.gateway') }}</strong><b>→</b><span>Internet</span></div>
     <p class="egress-source">{{ t('egress.estimate') }} · {{ t('egress.warningOnly') }}</p>
@@ -104,7 +106,7 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
         <div class="endpoint"><span>{{ t('egress.exitIP') }}</span><code>{{ g.server || '—' }}</code><b>UDP/{{ g.serverPort }}</b></div>
         <dl><div><dt>{{ t('egress.detected') }}</dt><dd>{{ [g.geo.countryCode, g.geo.region, g.geo.city].filter(Boolean).join(' / ') || t('egress.unknown') }}</dd></div><div v-if="g.locationOverride"><dt>{{ t('egress.override') }}</dt><dd>{{ g.locationOverride }}</dd></div><div><dt>{{ t('egress.aAddress') }}</dt><dd>{{ g.tunnelAddress }}</dd></div><div><dt>{{ t('egress.bAddress') }}</dt><dd>{{ g.peerAddress }}</dd></div><div><dt>{{ t('settings.planAllowance') }}</dt><dd>{{ g.trafficQuota.amount ? `${g.trafficQuota.amount} ${g.trafficQuota.unit}` : t('settings.unlimited') }} · {{ t(g.trafficQuota.billingMode === 'bidirectional' ? 'settings.billingBidirectional' : 'settings.billingSingle') }}</dd></div><div><dt>{{ t('settings.autoReset') }}</dt><dd>{{ g.reset.mode === 'monthly' ? `${t('egress.resetDay', { day: g.reset.day })} · ${g.reset.timezone}` : t('settings.noReset') }}</dd></div></dl>
         <div class="gateway-usage" :class="{ warning: g.usage.warning }"><strong>{{ amount(g.usage.estimatedProviderUsedBytes, g.trafficQuota.unit) }}</strong><span v-if="g.usage.providerAllowanceBytes"> / {{ amount(g.usage.providerAllowanceBytes, g.trafficQuota.unit) }}</span><small>{{ t(`egress.sample.${g.usage.sampleHealth.status}`) }}</small><p v-if="g.usage.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p><p v-if="g.usage.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><div class="progress-track"><i :style="{ width: `${g.usage.providerProgress}%` }"></i></div><p v-if="g.usage.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.usage.providerAllowanceBytes">{{ t('egress.remaining', { amount: amount(g.usage.providerRemainingBytes, g.trafficQuota.unit) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.usage.nextResetAt) }) }}</small></div>
-        <div class="card-actions gateway-actions"><button :disabled="busy" @click="edit(g)"><Icon name="edit"/>{{ t('egress.edit') }}</button><button :disabled="busy || !g.server" :title="t('egress.redetect')" @click="detect(g)"><Icon name="refresh"/>{{ t('egress.redetect') }}</button><ConfirmAction :title="t('egress.resetTraffic')" :message="t('egress.resetConfirm')" @confirm="reset(g)"><button :disabled="busy" :aria-label="t('egress.resetTraffic')"><Icon name="refresh"/></button></ConfirmAction><ConfirmAction :title="g.name" :message="t('egress.deleteConfirm')" destructive @confirm="remove(g)"><button :disabled="busy" class="destructive" :aria-label="`${t('egress.delete')} ${g.name}`"><Icon name="trash"/></button></ConfirmAction></div>
+        <div class="card-actions gateway-actions"><button :disabled="busy" @click="edit(g)"><Icon name="edit"/>{{ t('egress.edit') }}</button><button :disabled="busy || !g.server" :title="t('egress.redetect')" @click="detect(g)"><Icon name="locate"/>{{ t('egress.redetect') }}</button><ConfirmAction :title="t('egress.resetTraffic')" :message="t('egress.resetConfirm')" @confirm="reset(g)"><button :disabled="busy" :aria-label="t('egress.resetTraffic')"><Icon name="refresh"/></button></ConfirmAction><ConfirmAction :title="g.name" :message="t('egress.deleteConfirm')" destructive @confirm="remove(g)"><button :disabled="busy" class="destructive" :aria-label="`${t('egress.delete')} ${g.name}`"><Icon name="trash"/></button></ConfirmAction></div>
       </article>
     </div>
     <Modal v-if="form" :title="editing ? t('egress.edit') : t('egress.add')" :description="t('egress.setupHelp')" wide @close="close">
@@ -131,5 +133,6 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
         <div class="modal-actions span-two"><button type="button" class="secondary" :disabled="busy" @click="close">{{ t('protocol.cancel') }}</button><button class="primary" :disabled="busy">{{ busy ? t('egress.saving') : t('egress.save') }}</button></div>
       </form>
     </Modal>
+    <AppRouteModal :open="routeModalOpen" @close="routeModalOpen = false" @toast="emit('toast', $event)" />
   </div>
 </template>

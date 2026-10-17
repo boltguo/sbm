@@ -81,6 +81,30 @@ const sampleDetail = () => {
   return t('dashboard.sampleHelp')
 }
 
+type SubFormat = 'auto' | 'clash' | 'singbox' | 'v2ray'
+const subFormat = ref<SubFormat>('auto')
+const subFormats: { id: SubFormat; label: string }[] = [
+  { id: 'auto', label: 'dashboard.subFormatAuto' },
+  { id: 'clash', label: 'dashboard.subFormatClash' },
+  { id: 'singbox', label: 'dashboard.subFormatSingbox' },
+  { id: 'v2ray', label: 'dashboard.subFormatV2ray' },
+]
+const formatSubURL = (base: string, format: SubFormat) => {
+  if (!base || format === 'auto') return base
+  const hashIndex = base.indexOf('#')
+  const main = hashIndex >= 0 ? base.slice(0, hashIndex) : base
+  const hash = hashIndex >= 0 ? base.slice(hashIndex) : ''
+  const sep = main.includes('?') ? '&' : '?'
+  return `${main}${sep}target=${format}${hash}`
+}
+const activeSubscriptionURL = computed(() => data.value ? formatSubURL(data.value.subscriptionURL, subFormat.value) : '')
+const selectSubFormat = async (format: SubFormat) => {
+  subFormat.value = format
+  if (data.value) {
+    qr.value = await createQrCard(formatSubURL(data.value.subscriptionURL, format), data.value.subscriptionName)
+  }
+}
+
 const safe = guard(message => emit('toast', message))
 
 async function load() {
@@ -90,7 +114,7 @@ async function load() {
     const next = await api<Dashboard>('/api/dashboard', { signal: AbortSignal.timeout(10000) })
     let nextQR = qr.value
     if (!data.value || data.value.subscriptionURL !== next.subscriptionURL || data.value.subscriptionName !== next.subscriptionName) {
-      nextQR = await createQrCard(next.subscriptionURL, next.subscriptionName)
+      nextQR = await createQrCard(formatSubURL(next.subscriptionURL, subFormat.value), next.subscriptionName)
     }
     if (disposed || request !== revision) return
     qr.value = nextQR
@@ -151,7 +175,18 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
       <div><small>NEXT RESET</small><strong>{{ date(data.nextResetAt) }}</strong></div>
     </section>
     <section class="subscription-card">
-      <div class="sub-copy"><span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span><h2>{{ t('dashboard.subscription') }}</h2><p>{{ t('dashboard.subscriptionHelp') }}</p><div class="copy-field"><code>{{ data.subscriptionURL }}</code><button @click="copy(data.subscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div><small>{{ t('dashboard.secretHelp') }}</small></div>
+      <div class="sub-copy">
+        <span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span>
+        <div class="sub-head-row">
+          <h2>{{ t('dashboard.subscription') }}</h2>
+          <div class="sub-format-tabs" role="tablist">
+            <button v-for="fmt in subFormats" :key="fmt.id" type="button" :class="{ active: subFormat === fmt.id }" @click="selectSubFormat(fmt.id)">{{ t(fmt.label) }}</button>
+          </div>
+        </div>
+        <p>{{ t('dashboard.subscriptionHelp') }}</p>
+        <div class="copy-field"><code>{{ activeSubscriptionURL }}</code><button @click="copy(activeSubscriptionURL)"><Icon name="copy"/>{{ t('dashboard.copy') }}</button></div>
+        <small>{{ t('dashboard.secretHelp') }}</small>
+      </div>
       <div class="qr-frame"><img :src="qr" :alt="t('dashboard.qrAlt', { name: data.subscriptionName })"><button class="qr-download" type="button" @click="saveQR"><Icon name="download"/>{{ t('dashboard.qrDownload') }}</button></div>
     </section>
     <section class="traffic-panel">

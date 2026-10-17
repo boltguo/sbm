@@ -49,6 +49,7 @@ export const egressMessages = {
     'egress.guide.slotHelp': '使用面板隧道地址的第三段数字。例如卡片显示 10.66.2.1/24 与 10.66.2.2/32，则 X=2；不要一律填 1。',
     'egress.guide.aPublicKeyHelp': '打开该 Gateway 的编辑窗口，复制“A 端公钥（复制给 B）”。这里填 A 公钥，B 私钥由本地文件读取。',
     'egress.guide.reference': 'WireGuard 官方入门说明',
+    'egress.appRoutes': '应用分流',
   },
   en: {
     egress: 'Egress', 'egress.delete': 'Delete gateway',
@@ -77,7 +78,7 @@ export const egressMessages = {
     'egress.managed': 'Read-only derived node. Manage its configuration on the Egress page.',
     'egress.guide.title': 'Set up the exit machine B',
     'egress.guide.subtitle': '5 steps · Ubuntu / Debian · Installation, keys, fields and verification',
-    'egress.guide.intro': 'A is the entry machine running SBM. B is the Linux machine providing the final exit IP. Run every command marked B · SSH on B; manage A’s keys and nodes in this panel.',
+    'egress.guide.intro': 'A is the entry machine running SBM. Run every command marked B · SSH on B; manage A’s keys and nodes in this panel.',
     'egress.guide.installTitle': 'Install WireGuard on B',
     'egress.guide.installHelp': 'SSH into B, confirm it has a reachable public IPv4, then install WireGuard, iptables and network tools. B runs WireGuard and does not need SBM.',
     'egress.guide.interfaceHelp': 'Find the interface name after dev in the output of ip route show default, for example ens5, ens4 or eth0.',
@@ -100,5 +101,6 @@ export const egressMessages = {
     'egress.guide.slotHelp': 'Use the third segment of the tunnel addresses shown in the panel. For 10.66.2.1/24 and 10.66.2.2/32, X=2; do not always use 1.',
     'egress.guide.aPublicKeyHelp': 'Edit this gateway and copy A public key (copy to B). Enter A’s public key here; B’s private key is read from its local file.',
     'egress.guide.reference': 'WireGuard official quick start',
+    'egress.appRoutes': 'App routing',
   },
 }

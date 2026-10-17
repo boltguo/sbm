@@ -209,12 +209,26 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 		t.Fatal("integration needs sing-box 1.13.14")
 	}
 	cert, key := testCertificate(t)
+	if len(model.AppRuleSpecs()) == 0 {
+		model.SetAppRules([]model.AppRuleSpec{
+			{ID: "openai", Name: "OpenAI", Category: "ai", Domains: []string{"openai.com", "chatgpt.com"}, Subdomains: []string{"api.openai.com"}},
+			{ID: "youtube", Name: "YouTube", Category: "streaming", Domains: []string{"youtube.com", "googlevideo.com"}},
+		})
+		defer model.SetAppRules(nil)
+	}
 	renderer := Renderer{Registry: protocol.DefaultRegistry(), BuildContext: protocol.BuildContext{CertificatePath: cert, KeyPath: key}}
 	for _, count := range []int{0, 1, 2, 3} {
 		for _, strategy := range []string{"auto", "prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only"} {
 			cfg := multiEgressConfig(t)
 			cfg.EgressGateways = cfg.EgressGateways[:count]
 			cfg.OutboundStrategy = strategy
+			if count > 0 {
+				cfg.AppRoutes = map[string]string{
+					"youtube":       model.AppRouteDirect,
+					"openai":        cfg.EgressGateways[0].ID,
+					"site:linux.do": model.AppRouteDirect,
+				}
+			}
 			if err := protocol.SyncEgressCredentials(&cfg); err != nil {
 				t.Fatal(err)
 			}

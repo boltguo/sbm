@@ -269,3 +269,126 @@ func (s *Server) wireGuardPublicKey(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]string{"publicKey": public})
 }
+
+type appRouteGatewayOption struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Location string `json:"location"`
+	Enabled  bool   `json:"enabled"`
+}
+
+type appRouteRuleView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	DomainCount int    `json:"domainCount"`
+	HasCIDRs    bool   `json:"hasCidrs"`
+	Target      string `json:"target"`
+}
+
+type appRoutesView struct {
+	Gateways []appRouteGatewayOption `json:"gateways"`
+	Apps     []appRouteRuleView      `json:"apps"`
+	Routes   map[string]string       `json:"routes"`
+}
+
+func buildAppRoutesView(cfg model.Config) appRoutesView {
+	ordered := model.OrderedGateways(cfg.EgressGateways)
+	gateways := make([]appRouteGatewayOption, 0, len(ordered))
+	validGateways := make(map[string]bool, len(ordered))
+	for _, g := range ordered {
+		validGateways[g.ID] = true
+		gateways = append(gateways, appRouteGatewayOption{
+			ID:       g.ID,
+			Name:     protocol.GatewayName(g),
+			Location: protocol.GatewayLocation(g),
+			Enabled:  g.Enabled,
+		})
+	}
+	routes := make(map[string]string, len(cfg.AppRoutes))
+	for k, v := range cfg.AppRoutes {
+		if v == model.AppRouteDirect || validGateways[v] {
+			routes[k] = v
+		}
+	}
+	specs := traffic.AppRuleSpecs()
+	apps := make([]appRouteRuleView, 0, len(specs))
+	for _, spec := range specs {
+		apps = append(apps, appRouteRuleView{
+			ID:          spec.ID,
+			Name:        spec.Name,
+			Category:    spec.Category,
+			DomainCount: len(spec.Domains) + len(spec.Subdomains),
+			HasCIDRs:    len(spec.CIDRs) > 0,
+			Target:      routes[spec.ID],
+		})
+	}
+	return appRoutesView{
+		Gateways: gateways,
+		Apps:     apps,
+		Routes:   routes,
+	}
+}
+
+func (s *Server) getAppRoutes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, buildAppRoutesView(s.Config.Get()))
+}
+
+func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		AppID  *string           `json:"appId"`
+		Target string            `json:"target"`
+		Routes map[string]string `json:"routes"`
+	}
+	if decodeJSON(r, &input) != nil || (input.AppID == nil && input.Routes == nil) {
+		writeError(w, 400, "请求格式无效")
+		return
+	}
+	err := s.mutateChange(r.Context(), func(cfg *model.Config) error {
+		validGateways := make(map[string]bool, len(cfg.EgressGateways))
+		for _, g := range cfg.EgressGateways {
+			validGateways[g.ID] = true
+		}
+		if input.AppID != nil {
+			appID := strings.TrimSpace(*input.AppID)
+			target := strings.TrimSpace(input.Target)
+			if !protocol.ValidateAppRouteKey(appID) {
+				return errors.New("应用分流规则标识无效")
+			}
+			if cfg.AppRoutes == nil {
+				cfg.AppRoutes = make(map[string]string)
+			}
+			if target == "" || target == "default" {
+				delete(cfg.AppRoutes, appID)
+			} else {
+				if target != model.AppRouteDirect && !validGateways[target] {
+					return errors.New("应用分流目标出口不存在")
+				}
+				cfg.AppRoutes[appID] = target
+			}
+			return nil
+		}
+		next := make(map[string]string, len(input.Routes))
+		for k, v := range input.Routes {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if v == "" || v == "default" {
+				continue
+			}
+			if !protocol.ValidateAppRouteKey(k) {
+				return errors.New("应用分流规则标识无效")
+			}
+			if v != model.AppRouteDirect && !validGateways[v] {
+				return errors.New("应用分流目标出口不存在")
+			}
+			next[k] = v
+		}
+		cfg.AppRoutes = next
+		return nil
+	})
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, buildAppRoutesView(s.Config.Get()))
+}
