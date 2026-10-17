@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,6 +214,7 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 		model.SetAppRules([]model.AppRuleSpec{
 			{ID: "openai", Name: "OpenAI", Category: "ai", Domains: []string{"openai.com", "chatgpt.com"}, Subdomains: []string{"api.openai.com"}},
 			{ID: "youtube", Name: "YouTube", Category: "streaming", Domains: []string{"youtube.com", "googlevideo.com"}},
+			{ID: "telegram", Name: "Telegram", Category: "social", Domains: []string{"telegram.org"}, CIDRs: []netip.Prefix{netip.MustParsePrefix("91.108.4.0/22"), netip.MustParsePrefix("2001:b28:f23d::/48")}},
 		})
 		defer model.SetAppRules(nil)
 	}
@@ -226,6 +228,7 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 				cfg.AppRoutes = map[string]string{
 					"youtube":       model.AppRouteDirect,
 					"openai":        cfg.EgressGateways[0].ID,
+					"telegram":      cfg.EgressGateways[0].ID,
 					"site:linux.do": model.AppRouteDirect,
 				}
 			}
@@ -235,6 +238,9 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 			data, err := renderer.Render(cfg)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if count > 0 && !bytes.Contains(data, []byte(`"action": "reject"`)) {
+				t.Fatal("gateway-routed IPv6 ranges must render a reject rule")
 			}
 			path := filepath.Join(t.TempDir(), "config.json")
 			if err := os.WriteFile(path, data, 0600); err != nil {

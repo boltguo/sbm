@@ -97,6 +97,7 @@ onBeforeUnmount(() => { ++request; clearInterval(timer) })
             v-if="mode === 'day'"
             v-model="month"
             type="month"
+            :time-zone="history?.timezone"
             :disabled="!initialized"
             :aria-label="t('history.selectMonth')"
             @change="changeMonth"
@@ -105,6 +106,7 @@ onBeforeUnmount(() => { ++request; clearInterval(timer) })
             v-else
             v-model="year"
             type="year"
+            :time-zone="history?.timezone"
             :disabled="!initialized"
             :aria-label="t('history.selectYear')"
             @change="changeMonth"

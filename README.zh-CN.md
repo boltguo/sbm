@@ -19,6 +19,8 @@ SBM 是管理单台 sing-box 服务器的小面板，适合个人 VPS 使用。
 
 参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。Direct 和 Gateway 节点共用总订阅。节点名称冲突时加入端口与短标识，标记放在末尾；调整出口显示顺序可直接生效。
 
+在“流量 → 应用与站点”或“中继出口 → 应用分流”中，可把指定应用或站点固定到“本机直出”或某个 Gateway。该设置对所有节点生效，优先于节点本身的出口；Gateway 隧道只承载 IPv4，固定到 Gateway 的应用发起的 IPv6 连接会失败，不会改走其他出口。应用修改时会重启 sing-box。
+
 ## 安装
 
 面板支持网页自动更新与 CLI 更新，配置和流量历史会保留。
@@ -53,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器使用经过验证的 SBM 与 sing-box 版本组合。安装指定的已发布 SBM 版本时，设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=2.1.4 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.5 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 当前安装器支持 SBM 2.1 及以上的 2.x 发布，自动选择该 Release 对应的 sing-box 版本。排错或测试时可用 `SING_BOX_VERSION` 指定 core 版本。
@@ -118,6 +120,7 @@ https://node.example.com:2096/
 - 服务器健康页：CPU、负载、内存、磁盘、运行时长、服务/配置检查、TLS 到期、TCP/UDP 监听、采样状态和重置计划
 - 新增、修改、启停和删除 VLESS Reality、Hysteria2 入站
 - 复制单节点链接或显示二维码
+- 总订阅支持 Base64、Clash Meta（mihomo）YAML 和 sing-box JSON：按客户端 User-Agent 自动识别，也可在地址后加 `?target=v2ray|clash|singbox` 指定；sing-box 格式需要 1.12 或更新的客户端
 - 自动生成 UUID、Reality 密钥、short ID 和 Hysteria2 密码
 - 手动重置流量，或设置每月 1～28 日自动重置
 - 可选自动、优先 IPv4、优先 IPv6、仅 IPv4 或仅 IPv6 的代理出口策略

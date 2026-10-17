@@ -391,6 +391,47 @@ func TestAppRoutesAPIAndRendering(t *testing.T) {
 	if youtubeIdx > authUserIdx || openaiIdx > authUserIdx {
 		t.Fatalf("app route rules must appear before auth_user fallback rules")
 	}
+	// The tunnel is IPv4 only: Telegram's IPv4 ranges use the gateway and its
+	// IPv6 ranges are rejected rather than leaving through the node's exit.
+	cidrAction := func(data []byte, cidr string) string {
+		t.Helper()
+		var doc struct {
+			Route struct {
+				Rules []map[string]any `json:"rules"`
+			} `json:"route"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range doc.Route.Rules {
+			items, _ := rule["ip_cidr"].([]any)
+			for _, item := range items {
+				if item == cidr {
+					if rule["action"] == "route" {
+						return rule["outbound"].(string)
+					}
+					return rule["action"].(string)
+				}
+			}
+		}
+		return ""
+	}
+	gatewayTag := cfg.EgressGateways[0].EndpointTag()
+	if got := cidrAction(rendered, "91.108.4.0/22"); got != gatewayTag {
+		t.Fatalf("telegram IPv4 range routed to %q, want %q", got, gatewayTag)
+	}
+	if got := cidrAction(rendered, "2001:b28:f23d::/48"); got != "reject" {
+		t.Fatalf("telegram IPv6 range on a gateway route = %q, want reject", got)
+	}
+	directCfg := cfg
+	directCfg.AppRoutes = map[string]string{"telegram": model.AppRouteDirect}
+	directRendered, err := s.Core.Renderer.Render(directCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cidrAction(directRendered, "2001:b28:f23d::/48"); got != "direct" {
+		t.Fatalf("telegram IPv6 range on a direct route = %q, want direct", got)
+	}
 
 	// Deleting the gateway must automatically clean up AppRoutes referencing gwID while preserving "direct" routes
 	gatewayRequest(t, s, "DELETE", "/api/egress/"+gwID, nil, 200)
@@ -400,5 +441,83 @@ func TestAppRoutesAPIAndRendering(t *testing.T) {
 	}
 	if cfgAfter.AppRoutes["youtube"] != "direct" {
 		t.Fatalf("expected direct route for youtube to be preserved, got %+v", cfgAfter.AppRoutes)
+	}
+}
+
+func TestAppRoutesToleratesUnloadedRulesAndNormalizesSites(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	s.Core.Commands = &gatewayCommander{}
+	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
+	cfg := s.Config.Get()
+	gwID := cfg.EgressGateways[0].ID
+
+	// A route saved under a rule that a later rule file no longer contains,
+	// plus a mixed-case site key written before keys were normalized.
+	cfg.AppRoutes = map[string]string{"openai": gwID, "ghost-app": gwID, "site:Legacy.Example": model.AppRouteDirect}
+	if err := s.Config.Replace(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.DefaultRegistry().ValidateConfig(cfg); err != nil {
+		t.Fatalf("an unloaded app rule must not block startup: %v", err)
+	}
+	rendered, err := s.Core.Renderer.Render(cfg)
+	if err != nil || strings.Contains(string(rendered), "ghost") {
+		t.Fatalf("render must ignore unloaded app rules: err=%v", err)
+	}
+	var view appRoutesView
+	if err := json.Unmarshal(gatewayRequest(t, s, "GET", "/api/egress/app-routes", nil, 200).Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if _, shown := view.Routes["ghost-app"]; shown || view.Routes["openai"] != gwID {
+		t.Fatalf("view must hide only unloaded rules: %+v", view.Routes)
+	}
+
+	// Unrelated changes keep working, and stale or mixed-case keys stay removable.
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "direct"}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "ghost-app", "target": gwID}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "ghost-app", "target": "default"}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:Legacy.Example", "target": ""}, 200)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:Linux.DO", "target": gwID}, 200)
+	want := map[string]string{"openai": gwID, "youtube": model.AppRouteDirect, "site:linux.do": gwID}
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
+		t.Fatalf("routes=%+v want=%+v", got, want)
+	}
+
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"site:A.example": "direct", "site:a.example": gwID}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"site:A.example": "direct", "openai": gwID}}, 200)
+	want = map[string]string{"openai": gwID, "site:a.example": model.AppRouteDirect}
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bulk routes=%+v want=%+v", got, want)
+	}
+}
+
+func TestAppRouteChangesApplyTogether(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	commands := &gatewayCommander{}
+	s.Core.Commands = commands
+	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
+	gwID := s.Config.Get().EgressGateways[0].ID
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": gwID, "youtube": "direct", "site:linux.do": "direct"}}, 200)
+
+	restarts := commands.restarts
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "", "youtube": gwID, "telegram": "direct", "site:Linux.DO": "default", "site:Example.COM": gwID}}, 200)
+	if commands.restarts != restarts+1 {
+		t.Fatalf("a batch must restart sing-box once, got %d restarts", commands.restarts-restarts)
+	}
+	want := map[string]string{"youtube": gwID, "telegram": model.AppRouteDirect, "site:example.com": gwID}
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
+		t.Fatalf("routes=%+v want=%+v", got, want)
+	}
+
+	// A batch with any invalid entry changes nothing.
+	restarts = commands.restarts
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "nonexistent-app": "direct"}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "youtube": "missing-gw"}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"site:A.example": "direct", "site:a.example": ""}}, 400)
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{}}, 400)
+	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) || commands.restarts != restarts {
+		t.Fatalf("rejected batches must not change routes: %+v restarts=%d", got, commands.restarts-restarts)
 	}
 }

@@ -19,6 +19,8 @@ For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VL
 
 See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
 
+**Traffic → Apps & sites** or **Egress → App routing** pins an application or site to Entry Direct or a specific gateway. The choice applies to every node and takes precedence over the node’s own exit; gateway tunnels carry IPv4 only, so IPv6 connections of an app pinned to a gateway fail instead of leaving through another exit. Applying changes restarts sing-box.
+
 ## Install
 
 The panel supports web and CLI updates, retaining configuration and traffic history.
@@ -53,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer uses a tested SBM and sing-box release pair. To install a specific published SBM version, set `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.1.4 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.5 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer supports SBM 2.1 and later 2.x releases and selects the sing-box version tested with that release. Use `SING_BOX_VERSION` to specify a core version for troubleshooting or testing.
@@ -118,6 +120,7 @@ Screenshots use sample data.
 - Server Health with CPU, load, memory, disk, uptime, service/configuration checks, TLS expiry, TCP/UDP listeners, sampling state, and reset schedule
 - Add, edit, enable, disable, and delete VLESS Reality or Hysteria2 inbounds
 - Copy a single-node URL or display its QR code
+- Serve the master subscription as Base64, Clash Meta (mihomo) YAML, or sing-box JSON, detected from the client User-Agent or chosen with `?target=v2ray|clash|singbox`; the sing-box format needs sing-box 1.12 or later
 - Automatic UUID, Reality key pair, short ID, and Hysteria2 password generation
 - Manual traffic reset or monthly reset on days 1–28
 - Automatic, prefer IPv4, prefer IPv6, IPv4-only, or IPv6-only proxy egress strategy

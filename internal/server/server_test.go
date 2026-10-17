@@ -791,3 +791,20 @@ func TestServerStatusAPI(t *testing.T) {
 		t.Fatal("server status fields missing")
 	}
 }
+
+func TestDisablingObfsDropsItsPassword(t *testing.T) {
+	s, cfg := testServer(t)
+	s.Core.Commands = &gatewayCommander{}
+	inbound := cfg.Inbounds[0]
+	inbound.Hysteria2 = &model.Hysteria2Options{Password: "password-123", Obfs: "salamander", ObfsPassword: "obfs-secret-1"}
+	gatewayRequest(t, s, http.MethodPut, "/api/inbounds/"+inbound.ID, inbound, http.StatusOK)
+	if got := s.Config.Get().Inbounds[0].Hysteria2.ObfsPassword; got != "obfs-secret-1" {
+		t.Fatalf("obfs password=%q", got)
+	}
+	// The edit form still sends the hidden password after obfs is switched off.
+	inbound.Hysteria2.Obfs = ""
+	gatewayRequest(t, s, http.MethodPut, "/api/inbounds/"+inbound.ID, inbound, http.StatusOK)
+	if got := s.Config.Get().Inbounds[0].Hysteria2; got.Obfs != "" || got.ObfsPassword != "" || got.Password != "password-123" {
+		t.Fatalf("disabled obfs kept %+v", *got)
+	}
+}

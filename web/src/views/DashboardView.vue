@@ -17,6 +17,9 @@ const refreshingTraffic = ref(false)
 const qr = ref('')
 let timer = 0
 let revision = 0
+// The latest QR render wins, so quick format switches cannot leave the QR on
+// a format other than the selected one.
+let qrRevision = 0
 let disposed = false
 let pending = 0
 let mutating = false
@@ -101,7 +104,9 @@ const activeSubscriptionURL = computed(() => data.value ? formatSubURL(data.valu
 const selectSubFormat = async (format: SubFormat) => {
   subFormat.value = format
   if (data.value) {
-    qr.value = await createQrCard(formatSubURL(data.value.subscriptionURL, format), data.value.subscriptionName)
+    const current = ++qrRevision
+    const card = await createQrCard(formatSubURL(data.value.subscriptionURL, format), data.value.subscriptionName)
+    if (!disposed && current === qrRevision) qr.value = card
   }
 }
 
@@ -113,11 +118,13 @@ async function load() {
   try {
     const next = await api<Dashboard>('/api/dashboard', { signal: AbortSignal.timeout(10000) })
     let nextQR = qr.value
+    let qrRequest = qrRevision
     if (!data.value || data.value.subscriptionURL !== next.subscriptionURL || data.value.subscriptionName !== next.subscriptionName) {
+      qrRequest = ++qrRevision
       nextQR = await createQrCard(formatSubURL(next.subscriptionURL, subFormat.value), next.subscriptionName)
     }
     if (disposed || request !== revision) return
-    qr.value = nextQR
+    if (qrRequest === qrRevision) qr.value = nextQR
     data.value = next
     succeeded()
   } catch (error) {
@@ -179,8 +186,8 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span>
         <div class="sub-head-row">
           <h2>{{ t('dashboard.subscription') }}</h2>
-          <div class="sub-format-tabs" role="tablist">
-            <button v-for="fmt in subFormats" :key="fmt.id" type="button" :class="{ active: subFormat === fmt.id }" @click="selectSubFormat(fmt.id)">{{ t(fmt.label) }}</button>
+          <div class="sub-format-tabs" role="group" :aria-label="t('dashboard.subscription')">
+            <button v-for="fmt in subFormats" :key="fmt.id" type="button" :class="{ active: subFormat === fmt.id }" :aria-pressed="subFormat === fmt.id" @click="selectSubFormat(fmt.id)">{{ t(fmt.label) }}</button>
           </div>
         </div>
         <p>{{ t('dashboard.subscriptionHelp') }}</p>

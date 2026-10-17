@@ -10,6 +10,8 @@ const props = withDefaults(
     type?: 'date' | 'month' | 'year'
     disabled?: boolean
     ariaLabel?: string
+    // Zone the data is grouped in; "today" follows it rather than the browser.
+    timeZone?: string
   }>(),
   {
     type: 'date',
@@ -22,39 +24,49 @@ const emit = defineEmits<{
   change: [value: string]
 }>()
 
+// The traffic views only accept these years.
+const MIN_YEAR = 1970
+const MAX_YEAR = 9999
+const inRange = (year: number) => year >= MIN_YEAR && year <= MAX_YEAR
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+function isoDate(date: Date, timeZone?: string) {
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone }).formatToParts(date)
+      const part = (type: string) => parts.find(p => p.type === type)?.value
+      return `${part('year')}-${part('month')}-${part('day')}`
+    } catch {
+      // Unknown zone: fall back to the browser's own.
+    }
+  }
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
 const open = ref(false)
-const now = new Date()
-const viewYear = ref(now.getFullYear())
-const viewMonth = ref(now.getMonth() + 1)
+// Refreshed on every open so a page left open past midnight moves "today".
+const clock = ref(Date.now())
+const todayISO = computed(() => isoDate(new Date(clock.value), props.timeZone))
+const viewYear = ref(Number(todayISO.value.slice(0, 4)))
+const viewMonth = ref(Number(todayISO.value.slice(5, 7)))
 
 function syncFromValue(val: string) {
   const parts = (val || '').split('-').map(Number)
-  if (parts[0] && parts[0] >= 1970 && parts[0] <= 9999) {
-    viewYear.value = parts[0]
-  } else {
-    viewYear.value = new Date().getFullYear()
-  }
-  if (parts[1] && parts[1] >= 1 && parts[1] <= 12) {
-    viewMonth.value = parts[1]
-  } else {
-    viewMonth.value = new Date().getMonth() + 1
-  }
+  viewYear.value = parts[0] && inRange(parts[0]) ? parts[0] : Number(todayISO.value.slice(0, 4))
+  viewMonth.value = parts[1] && parts[1] >= 1 && parts[1] <= 12 ? parts[1] : Number(todayISO.value.slice(5, 7))
 }
 
 watch(
   () => [props.modelValue, open.value] as const,
   ([val, isOpen]) => {
-    if (isOpen) syncFromValue(val)
+    if (!isOpen) return
+    clock.value = Date.now()
+    syncFromValue(val)
   },
   { immediate: true },
 )
 
-const pad2 = (n: number) => String(n).padStart(2, '0')
-
-const todayISO = computed(() => {
-  const d = new Date()
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-})
 const currentMonthISO = computed(() => todayISO.value.slice(0, 7))
 const currentYearISO = computed(() => todayISO.value.slice(0, 4))
 
@@ -83,6 +95,7 @@ const calendarDays = computed(() => {
     iso: string
     day: number
     outside: boolean
+    disabled: boolean
     isToday: boolean
     isSelected: boolean
   }> = []
@@ -97,6 +110,7 @@ const calendarDays = computed(() => {
       iso,
       day: d,
       outside: true,
+      disabled: !inRange(prevY),
       isToday: iso === todayISO.value,
       isSelected: iso === props.modelValue,
     })
@@ -109,6 +123,7 @@ const calendarDays = computed(() => {
       iso,
       day: d,
       outside: false,
+      disabled: false,
       isToday: iso === todayISO.value,
       isSelected: iso === props.modelValue,
     })
@@ -124,6 +139,7 @@ const calendarDays = computed(() => {
       iso,
       day: d,
       outside: true,
+      disabled: !inRange(nextY),
       isToday: iso === todayISO.value,
       isSelected: iso === props.modelValue,
     })
@@ -138,6 +154,7 @@ const yearGrid = computed(() =>
     const y = String(yearStart.value + idx)
     return {
       year: y,
+      disabled: !inRange(yearStart.value + idx),
       isCurrent: y === currentYearISO.value,
       isSelected: y === props.modelValue,
     }
@@ -155,12 +172,13 @@ function stepMonth(delta: number) {
     m -= 12
     y += 1
   }
-  viewYear.value = Math.min(9999, Math.max(1970, y))
+  if (!inRange(y)) return
+  viewYear.value = y
   viewMonth.value = m
 }
 
 function stepYear(delta: number) {
-  viewYear.value = Math.min(9999, Math.max(1970, viewYear.value + delta))
+  viewYear.value = Math.min(MAX_YEAR, Math.max(MIN_YEAR, viewYear.value + delta))
 }
 
 function commit(val: string) {
@@ -180,6 +198,12 @@ function selectQuickToday() {
   else if (props.type === 'month') commit(currentMonthISO.value)
   else commit(currentYearISO.value)
 }
+
+const navLabels = computed(() =>
+  locale.value === 'zh-CN'
+    ? { prevYear: '上一年', nextYear: '下一年', prevMonth: '上个月', nextMonth: '下个月', prevYears: '前 12 年', nextYears: '后 12 年' }
+    : { prevYear: 'Previous year', nextYear: 'Next year', prevMonth: 'Previous month', nextMonth: 'Next month', prevYears: 'Previous 12 years', nextYears: 'Next 12 years' },
+)
 
 const quickLabel = computed(() => {
   if (locale.value === 'zh-CN') {
@@ -210,19 +234,19 @@ const quickLabel = computed(() => {
         <template v-if="type === 'date'">
           <div class="sbm-dp-head">
             <div class="sbm-dp-nav-group">
-              <button type="button" class="sbm-dp-nav" @click="stepYear(-1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYear" :disabled="viewYear <= MIN_YEAR" @click="stepYear(-1)">
                 <ChevronsLeft class="icon" :stroke-width="1.8" />
               </button>
-              <button type="button" class="sbm-dp-nav" @click="stepMonth(-1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevMonth" :disabled="viewYear <= MIN_YEAR && viewMonth === 1" @click="stepMonth(-1)">
                 <ChevronLeft class="icon" :stroke-width="1.8" />
               </button>
             </div>
             <strong class="sbm-dp-title">{{ viewYear }} / {{ pad2(viewMonth) }}</strong>
             <div class="sbm-dp-nav-group">
-              <button type="button" class="sbm-dp-nav" @click="stepMonth(1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextMonth" :disabled="viewYear >= MAX_YEAR && viewMonth === 12" @click="stepMonth(1)">
                 <ChevronRight class="icon" :stroke-width="1.8" />
               </button>
-              <button type="button" class="sbm-dp-nav" @click="stepYear(1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYear" :disabled="viewYear >= MAX_YEAR" @click="stepYear(1)">
                 <ChevronsRight class="icon" :stroke-width="1.8" />
               </button>
             </div>
@@ -241,6 +265,7 @@ const quickLabel = computed(() => {
                 'is-today': cell.isToday,
                 'is-selected': cell.isSelected,
               }"
+              :disabled="cell.disabled"
               @click="commit(cell.iso)"
             >
               {{ cell.day }}
@@ -251,11 +276,11 @@ const quickLabel = computed(() => {
         <!-- Month (YYYY-MM) Picker -->
         <template v-else-if="type === 'month'">
           <div class="sbm-dp-head">
-            <button type="button" class="sbm-dp-nav" @click="stepYear(-1)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYear" :disabled="viewYear <= MIN_YEAR" @click="stepYear(-1)">
               <ChevronLeft class="icon" :stroke-width="1.8" />
             </button>
             <strong class="sbm-dp-title">{{ viewYear }}</strong>
-            <button type="button" class="sbm-dp-nav" @click="stepYear(1)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYear" :disabled="viewYear >= MAX_YEAR" @click="stepYear(1)">
               <ChevronRight class="icon" :stroke-width="1.8" />
             </button>
           </div>
@@ -279,11 +304,11 @@ const quickLabel = computed(() => {
         <!-- Year (YYYY) Picker -->
         <template v-else>
           <div class="sbm-dp-head">
-            <button type="button" class="sbm-dp-nav" @click="stepYear(-12)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYears" :disabled="yearStart <= MIN_YEAR" @click="stepYear(-12)">
               <ChevronLeft class="icon" :stroke-width="1.8" />
             </button>
             <strong class="sbm-dp-title">{{ yearStart }} – {{ yearStart + 11 }}</strong>
-            <button type="button" class="sbm-dp-nav" @click="stepYear(12)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYears" :disabled="yearStart + 11 >= MAX_YEAR" @click="stepYear(12)">
               <ChevronRight class="icon" :stroke-width="1.8" />
             </button>
           </div>
@@ -297,6 +322,7 @@ const quickLabel = computed(() => {
                 'is-today': item.isCurrent,
                 'is-selected': item.isSelected,
               }"
+              :disabled="item.disabled"
               @click="commit(item.year)"
             >
               {{ item.year }}

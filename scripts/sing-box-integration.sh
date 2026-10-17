@@ -28,6 +28,7 @@ PY
 binary="$(cat "$test_dir/binary-path")"
 cd "$root_dir"
 SBM_TEST_SING_BOX="$binary" go test ./internal/core -run '^TestSingBoxEgressIntegration$' -v
+SBM_TEST_SING_BOX="$binary" go test ./internal/server -run '^TestSingBoxSubscriptionIntegration$' -v
 if [[ "$(uname -s)" == Linux ]]; then
   SBM_TEST_SING_BOX="$binary" bash scripts/egress-linux-test.sh
 fi

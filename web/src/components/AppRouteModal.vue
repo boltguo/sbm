@@ -23,6 +23,11 @@ const localView = ref<AppRoutesView | null>(null)
 const loading = ref(false)
 const savingId = ref('')
 const selectedCat = ref('all')
+// Selections wait here until applied together, so several edits cost one
+// sing-box restart instead of one each.
+const pending = ref<Record<string, string>>({})
+// Bumped around every save so the fetch started on open cannot overwrite it.
+let revision = 0
 
 const view = computed(() => localView.value ?? props.initialData ?? null)
 const gateways = computed(() => view.value?.gateways ?? [])
@@ -48,6 +53,8 @@ const allApps = computed<AppRouteRuleView[]>(() => {
 })
 
 const activeCount = computed(() => Object.keys(routes.value).length)
+const pendingCount = computed(() => Object.keys(pending.value).length)
+const targetOf = (id: string) => (id in pending.value ? pending.value[id] : routes.value[id] || '')
 
 const categories = computed(() => {
   const seen = new Set<string>()
@@ -97,9 +104,11 @@ const categoryLabel = (category: string) => {
 const safe = guard(message => emit('toast', message))
 
 async function fetchRoutes() {
+  const current = revision
   loading.value = true
   try {
     const next = await api<AppRoutesView>('/api/egress/app-routes')
+    if (current !== revision) return
     localView.value = next
     emit('updated', next)
   } finally {
@@ -111,6 +120,7 @@ watch(
   () => props.open,
   isOpen => {
     if (isOpen) {
+      pending.value = {}
       if (props.initialData) {
         localView.value = props.initialData
       }
@@ -127,14 +137,27 @@ watch(
   },
 )
 
-const changeRoute = safe(async (appId: string, target: string) => {
-  savingId.value = appId
+function stageRoute(appId: string, target: string) {
+  const next = { ...pending.value }
+  if (target === (routes.value[appId] || '')) delete next[appId]
+  else next[appId] = target
+  pending.value = next
+}
+
+const applyChanges = safe(async () => {
+  const changes = { ...pending.value }
+  if (!Object.keys(changes).length) return
+  savingId.value = '__apply__'
+  revision++
   try {
-    const next = await put<AppRoutesView>('/api/egress/app-routes', { appId, target })
+    const next = await put<AppRoutesView>('/api/egress/app-routes', { changes })
     localView.value = next
+    pending.value = {}
     emit('updated', next)
     emit('toast', t('apps.routeSaved'))
+    emit('close')
   } finally {
+    revision++
     savingId.value = ''
   }
 })
@@ -150,13 +173,16 @@ const routeOptions = computed(() => [
 
 const resetAll = safe(async () => {
   savingId.value = '__all__'
+  revision++
   try {
     const next = await put<AppRoutesView>('/api/egress/app-routes', { routes: {} })
     localView.value = next
+    pending.value = {}
     if (selectedCat.value === 'active') selectedCat.value = 'all'
     emit('updated', next)
     emit('toast', t('apps.routeSaved'))
   } finally {
+    revision++
     savingId.value = ''
   }
 })
@@ -171,12 +197,14 @@ const resetAll = safe(async () => {
     @close="emit('close')"
   >
     <div class="app-route-modal">
+      <p class="app-route-help">{{ t('apps.routeHelp') }}</p>
       <div class="app-route-toolbar">
-        <div class="app-route-cats" role="tablist">
+        <div class="app-route-cats" role="group">
           <button
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === 'all' }"
+            :aria-pressed="selectedCat === 'all'"
             @click="selectedCat = 'all'"
           >
             {{ t('apps.routeFilterAll') }}
@@ -186,6 +214,7 @@ const resetAll = safe(async () => {
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === 'active' }"
+            :aria-pressed="selectedCat === 'active'"
             @click="selectedCat = 'active'"
           >
             {{ t('apps.routeFilterActive', { count: activeCount }) }}
@@ -196,6 +225,7 @@ const resetAll = safe(async () => {
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === cat }"
+            :aria-pressed="selectedCat === cat"
             @click="selectedCat = cat"
           >
             {{ categoryLabel(cat) }}
@@ -208,7 +238,7 @@ const resetAll = safe(async () => {
           destructive
           @confirm="resetAll"
         >
-          <button type="button" class="secondary app-action-btn" :disabled="savingId === '__all__'">
+          <button type="button" class="secondary app-action-btn" :disabled="!!savingId">
             <Icon name="refresh" />
             <span>{{ t('apps.routeResetAll') }}</span>
           </button>
@@ -227,29 +257,37 @@ const resetAll = safe(async () => {
               v-for="app in group.items"
               :key="app.id"
               class="app-route-item"
-              :class="{ overridden: !!routes[app.id] }"
+              :class="{ overridden: !!targetOf(app.id), pending: app.id in pending }"
             >
               <div class="app-route-info">
                 <strong>{{ appName(app) }}</strong>
                 <div class="app-route-meta">
                   <small>{{ t('apps.routeRulesCount', { count: app.domainCount }) }}</small>
                   <small v-if="app.hasCidrs" class="app-cidr-pill">{{ t('apps.routeHasCidrs') }}</small>
+                  <small v-if="app.id in pending" class="app-route-pending-pill">{{ t('apps.routePendingTag') }}</small>
                 </div>
               </div>
               <div class="app-route-control">
                 <SelectControl
-                  :model-value="routes[app.id] || ''"
+                  :model-value="targetOf(app.id)"
                   :options="routeOptions"
                   size="sm"
-                  :active="!!routes[app.id]"
-                  :disabled="savingId === app.id || savingId === '__all__'"
+                  :active="!!targetOf(app.id)"
+                  :disabled="!!savingId"
                   :aria-label="appName(app)"
-                  @update:model-value="val => changeRoute(app.id, val)"
+                  @update:model-value="val => stageRoute(app.id, val)"
                 />
               </div>
             </div>
           </div>
         </section>
+      </div>
+
+      <div class="modal-actions app-route-actions">
+        <button type="button" class="secondary" :disabled="!!savingId" @click="emit('close')">{{ t('protocol.cancel') }}</button>
+        <button type="button" class="primary" :disabled="!pendingCount || !!savingId" @click="applyChanges">
+          {{ savingId === '__apply__' ? t('apps.routeApplying') : pendingCount ? t('apps.routeApplyCount', { count: pendingCount }) : t('apps.routeApply') }}
+        </button>
       </div>
     </div>
   </Modal>

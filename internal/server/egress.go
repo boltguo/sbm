@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -305,13 +306,21 @@ func buildAppRoutesView(cfg model.Config) appRoutesView {
 			Enabled:  g.Enabled,
 		})
 	}
+	specs := traffic.AppRuleSpecs()
+	known := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		known[spec.ID] = true
+	}
 	routes := make(map[string]string, len(cfg.AppRoutes))
 	for k, v := range cfg.AppRoutes {
+		// A key whose rule is no longer loaded stays saved but inactive.
+		if !known[k] && !strings.HasPrefix(k, "site:") {
+			continue
+		}
 		if v == model.AppRouteDirect || validGateways[v] {
 			routes[k] = v
 		}
 	}
-	specs := traffic.AppRuleSpecs()
 	apps := make([]appRouteRuleView, 0, len(specs))
 	for _, spec := range specs {
 		apps = append(apps, appRouteRuleView{
@@ -336,11 +345,12 @@ func (s *Server) getAppRoutes(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		AppID  *string           `json:"appId"`
-		Target string            `json:"target"`
-		Routes map[string]string `json:"routes"`
+		AppID   *string           `json:"appId"`
+		Target  string            `json:"target"`
+		Changes map[string]string `json:"changes"`
+		Routes  map[string]string `json:"routes"`
 	}
-	if decodeJSON(r, &input) != nil || (input.AppID == nil && input.Routes == nil) {
+	if decodeJSON(r, &input) != nil || (input.AppID == nil && len(input.Changes) == 0 && input.Routes == nil) {
 		writeError(w, 400, "请求格式无效")
 		return
 	}
@@ -350,27 +360,35 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 			validGateways[g.ID] = true
 		}
 		if input.AppID != nil {
-			appID := strings.TrimSpace(*input.AppID)
-			target := strings.TrimSpace(input.Target)
-			if !protocol.ValidateAppRouteKey(appID) {
-				return errors.New("应用分流规则标识无效")
+			return applyAppRouteChange(cfg, validGateways, *input.AppID, input.Target)
+		}
+		if len(input.Changes) > 0 {
+			// Several edits in one request apply with one sing-box restart.
+			keys := make([]string, 0, len(input.Changes))
+			for k := range input.Changes {
+				keys = append(keys, k)
 			}
-			if cfg.AppRoutes == nil {
-				cfg.AppRoutes = make(map[string]string)
-			}
-			if target == "" || target == "default" {
-				delete(cfg.AppRoutes, appID)
-			} else {
-				if target != model.AppRouteDirect && !validGateways[target] {
-					return errors.New("应用分流目标出口不存在")
+			sort.Strings(keys)
+			seen := make(map[string]string, len(keys))
+			for _, k := range keys {
+				target := strings.TrimSpace(input.Changes[k])
+				if target == "default" {
+					target = ""
 				}
-				cfg.AppRoutes[appID] = target
+				normalized := protocol.NormalizeAppRouteKey(k)
+				if prev, ok := seen[normalized]; ok && prev != target {
+					return errors.New("应用分流规则重复")
+				}
+				seen[normalized] = target
+				if err := applyAppRouteChange(cfg, validGateways, k, target); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		next := make(map[string]string, len(input.Routes))
 		for k, v := range input.Routes {
-			k = strings.TrimSpace(k)
+			k = protocol.NormalizeAppRouteKey(k)
 			v = strings.TrimSpace(v)
 			if v == "" || v == "default" {
 				continue
@@ -380,6 +398,9 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 			}
 			if v != model.AppRouteDirect && !validGateways[v] {
 				return errors.New("应用分流目标出口不存在")
+			}
+			if prev, ok := next[k]; ok && prev != v {
+				return errors.New("应用分流规则重复")
 			}
 			next[k] = v
 		}
@@ -391,4 +412,33 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, buildAppRoutesView(s.Config.Get()))
+}
+
+// applyAppRouteChange sets one app or site route, or clears it when target is
+// empty or "default".
+func applyAppRouteChange(cfg *model.Config, validGateways map[string]bool, key, target string) error {
+	raw := strings.TrimSpace(key)
+	appID := protocol.NormalizeAppRouteKey(raw)
+	target = strings.TrimSpace(target)
+	if target == "" || target == "default" {
+		// Clearing must work for a key whose rule is no longer loaded.
+		if !protocol.ValidateStoredAppRouteKey(raw) {
+			return errors.New("应用分流规则标识无效")
+		}
+		delete(cfg.AppRoutes, raw)
+		delete(cfg.AppRoutes, appID)
+		return nil
+	}
+	if !protocol.ValidateAppRouteKey(appID) {
+		return errors.New("应用分流规则标识无效")
+	}
+	if target != model.AppRouteDirect && !validGateways[target] {
+		return errors.New("应用分流目标出口不存在")
+	}
+	if cfg.AppRoutes == nil {
+		cfg.AppRoutes = make(map[string]string)
+	}
+	delete(cfg.AppRoutes, raw)
+	cfg.AppRoutes[appID] = target
+	return nil
 }
