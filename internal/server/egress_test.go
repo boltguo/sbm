@@ -391,6 +391,47 @@ func TestAppRoutesAPIAndRendering(t *testing.T) {
 	if youtubeIdx > authUserIdx || openaiIdx > authUserIdx {
 		t.Fatalf("app route rules must appear before auth_user fallback rules")
 	}
+	// The tunnel is IPv4 only: Telegram's IPv4 ranges use the gateway and its
+	// IPv6 ranges are rejected rather than leaving through the node's exit.
+	cidrAction := func(data []byte, cidr string) string {
+		t.Helper()
+		var doc struct {
+			Route struct {
+				Rules []map[string]any `json:"rules"`
+			} `json:"route"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range doc.Route.Rules {
+			items, _ := rule["ip_cidr"].([]any)
+			for _, item := range items {
+				if item == cidr {
+					if rule["action"] == "route" {
+						return rule["outbound"].(string)
+					}
+					return rule["action"].(string)
+				}
+			}
+		}
+		return ""
+	}
+	gatewayTag := cfg.EgressGateways[0].EndpointTag()
+	if got := cidrAction(rendered, "91.108.4.0/22"); got != gatewayTag {
+		t.Fatalf("telegram IPv4 range routed to %q, want %q", got, gatewayTag)
+	}
+	if got := cidrAction(rendered, "2001:b28:f23d::/48"); got != "reject" {
+		t.Fatalf("telegram IPv6 range on a gateway route = %q, want reject", got)
+	}
+	directCfg := cfg
+	directCfg.AppRoutes = map[string]string{"telegram": model.AppRouteDirect}
+	directRendered, err := s.Core.Renderer.Render(directCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cidrAction(directRendered, "2001:b28:f23d::/48"); got != "direct" {
+		t.Fatalf("telegram IPv6 range on a direct route = %q, want direct", got)
+	}
 
 	// Deleting the gateway must automatically clean up AppRoutes referencing gwID while preserving "direct" routes
 	gatewayRequest(t, s, "DELETE", "/api/egress/"+gwID, nil, 200)

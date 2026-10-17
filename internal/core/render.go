@@ -188,7 +188,20 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 		}
 	}
 
+	// Gateway tunnels carry IPv4 only, so a gateway-routed app's IPv6 ranges
+	// are rejected (target "") instead of falling through to the node's own
+	// exit: the app never leaves through an egress other than the chosen one.
 	var mergedCIDRs []routeGroup
+	addCIDRs := func(target string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		if n := len(mergedCIDRs); n > 0 && mergedCIDRs[n-1].target == target {
+			mergedCIDRs[n-1].items = append(mergedCIDRs[n-1].items, items...)
+		} else {
+			mergedCIDRs = append(mergedCIDRs, routeGroup{target: target, items: items})
+		}
+	}
 	seenCIDRs := map[string]bool{}
 	for _, spec := range specs {
 		target := appRoutes[spec.ID]
@@ -196,27 +209,27 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 		if !ok || len(spec.CIDRs) == 0 {
 			continue
 		}
-		var unique []string
+		var routed, rejected []string
 		for _, p := range spec.CIDRs {
-			if isGateway && !p.Addr().Is4() {
+			cidr := p.String()
+			if seenCIDRs[cidr] {
 				continue
 			}
-			cidr := p.String()
-			if !seenCIDRs[cidr] {
-				seenCIDRs[cidr] = true
-				unique = append(unique, cidr)
+			seenCIDRs[cidr] = true
+			if isGateway && !p.Addr().Is4() {
+				rejected = append(rejected, cidr)
+			} else {
+				routed = append(routed, cidr)
 			}
 		}
-		if len(unique) == 0 {
-			continue
-		}
-		if n := len(mergedCIDRs); n > 0 && mergedCIDRs[n-1].target == target {
-			mergedCIDRs[n-1].items = append(mergedCIDRs[n-1].items, unique...)
-		} else {
-			mergedCIDRs = append(mergedCIDRs, routeGroup{target: target, items: unique})
-		}
+		addCIDRs(target, routed)
+		addCIDRs("", rejected)
 	}
 	for _, g := range mergedCIDRs {
+		if g.target == "" {
+			out = append(out, map[string]any{"ip_cidr": g.items, "action": "reject"})
+			continue
+		}
 		outboundTag, _, _ := resolveTarget(g.target)
 		out = append(out, map[string]any{
 			"ip_cidr":  g.items,
