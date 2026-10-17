@@ -104,6 +104,7 @@
         "labs.google.com",
         "flow.google.com",
         "aisandbox-pa.googleapis.com",
+        "appsgenaiserver-pa.googleapis.com",
         "opal.google.com",
         "stitch.withgoogle.com"
       ]
@@ -115,13 +116,18 @@
       "domains": [
         "cursor.com",
         "cursor.sh",
+        "cursor.ai",
         "cursorapi.com",
-        "cursor-cdn.com"
+        "cursor-cdn.com",
+        "cursorvm.com"
       ],
       "subdomains": [
         "api2.cursor.sh",
         "api3.cursor.sh",
         "api4.cursor.sh",
+        "api5.cursor.sh",
+        "agent.api5.cursor.sh",
+        "agentn.api5.cursor.sh",
         "repo42.cursor.sh"
       ]
     },
@@ -152,6 +158,19 @@
         "copilotprodattachments.blob.core.windows.net",
         "copilot-telemetry.githubusercontent.com",
         "copilot-telemetry-service.githubusercontent.com"
+      ]
+    },
+    {
+      "id": "meta-ai",
+      "name": "Meta AI / Muse",
+      "category": "ai",
+      "domains": [
+        "meta.ai",
+        "muse.ai",
+        "metaaivm.com"
+      ],
+      "subdomains": [
+        "hatch.metaaivm.com"
       ]
     },
     {
@@ -205,6 +224,15 @@
       "category": "ai",
       "domains": [
         "deepseek.com"
+      ]
+    },
+    {
+      "id": "nousresearch",
+      "name": "Nous Research / Hermes",
+      "category": "ai",
+      "domains": [
+        "nousresearch.com",
+        "hermexapp.com"
       ]
     },
     {
@@ -438,7 +466,44 @@
         "reddit.com",
         "redd.it",
         "redditmedia.com",
-        "redditstatic.com"
+        "redditstatic.com",
+        "redditspace.com"
+      ]
+    },
+    {
+      "id": "linkedin",
+      "name": "LinkedIn",
+      "category": "social",
+      "domains": [
+        "linkedin.com",
+        "licdn.com"
+      ]
+    },
+    {
+      "id": "nodeseek",
+      "name": "NodeSeek",
+      "category": "social",
+      "domains": [
+        "nodeseek.com",
+        "nodeseek.org",
+        "nodeimage.com"
+      ]
+    },
+    {
+      "id": "v2ex",
+      "name": "V2EX",
+      "category": "social",
+      "domains": [
+        "v2ex.com",
+        "v2ex.pro"
+      ]
+    },
+    {
+      "id": "linuxdo",
+      "name": "LINUX DO",
+      "category": "social",
+      "domains": [
+        "linux.do"
       ]
     },
     {
@@ -480,7 +545,8 @@
         "deno.land",
         "jsr.io",
         "unpkg.com",
-        "jsdelivr.net"
+        "jsdelivr.net",
+        "esm.sh"
       ]
     },
     {
@@ -492,6 +558,16 @@
         "pythonhosted.org",
         "python.org",
         "astral.sh"
+      ]
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "category": "dev",
+      "domains": [
+        "stripe.com",
+        "stripe.network",
+        "stripecdn.com"
       ]
     },
     {
@@ -519,10 +595,24 @@
         "1e100.net",
         "gvt1.com",
         "gvt2.com",
+        "gvt3.com",
+        "ggpht.cn",
         "gmail.com",
         "google.com.hk",
         "google.co.jp",
-        "android.com"
+        "android.com",
+        "run.app",
+        "withgoogle.com",
+        "dns.google",
+        "doubleclick.net",
+        "doubleclick-cn.net",
+        "googlesyndication.com",
+        "googlesyndication-cn.com",
+        "googletagmanager.com",
+        "google-analytics.com",
+        "googleadservices.com",
+        "adtrafficquality.google",
+        "app-measurement.com"
       ]
     },
     {
@@ -551,7 +641,7 @@
         "fb.com",
         "fbsbx.com",
         "messenger.com",
-        "meta.ai"
+        "meta.com"
       ]
     },
     {
@@ -574,8 +664,15 @@
         "msedge.net",
         "visualstudio.com",
         "vsassets.io",
+        "vscode-cdn.net",
+        "vscode.dev",
+        "exp-tas.com",
         "azure.com",
-        "windows.net"
+        "windows.net",
+        "trafficmanager.net",
+        "azureedge.net",
+        "azurefd.net",
+        "msecnd.net"
       ]
     },
     {
@@ -588,7 +685,10 @@
         "amazonvideo.com",
         "primevideo.com",
         "aiv-cdn.net",
-        "media-amazon.com"
+        "media-amazon.com",
+        "on.aws",
+        "aws.dev",
+        "awsstatic.com"
       ]
     },
     {
@@ -618,10 +718,16 @@
       "category": "cdn",
       "domains": [
         "cloudflare.com",
+        "cloudflare.net",
+        "cloudflaressl.com",
         "cloudflare-dns.com",
+        "cloudflareinsights.com",
         "workers.dev",
         "pages.dev",
-        "cloudflareclient.com"
+        "cloudflareclient.com",
+        "argotunnel.com",
+        "cfargotunnel.com",
+        "trycloudflare.com"
       ],
       "cidrs": [
         "1.1.1.1/32",
@@ -637,7 +743,9 @@
       "category": "cdn",
       "domains": [
         "fastly.net",
-        "fastlylb.net"
+        "fastlylb.net",
+        "fastly-edge.com",
+        "fastly.com"
       ]
     }
   ],
