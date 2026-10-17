@@ -181,11 +181,15 @@ func TestSubscriptionMultiFormatAndUserAgentDetection(t *testing.T) {
 
 func TestSubscriptionUserAgentDetection(t *testing.T) {
 	for ua, want := range map[string]string{
-		"clash-verge/v2.2.3":                                         subTargetClash,
-		"ClashMetaForAndroid/2.11.1.Meta":                            subTargetClash,
-		"mihomo.party/v1.7.0 (clash.meta)":                           subTargetClash,
-		"Stash/2.4.6 Clash/1.0":                                      subTargetClash,
-		"SFI/1.12.0 (iOS; sing-box 1.12.0)":                          subTargetSingBox,
+		"clash-verge/v2.2.3":                subTargetClash,
+		"ClashMetaForAndroid/2.11.1.Meta":   subTargetClash,
+		"mihomo.party/v1.7.0 (clash.meta)":  subTargetClash,
+		"Stash/2.4.6 Clash/1.0":             subTargetClash,
+		"SFI/1.12.0 (iOS; sing-box 1.12.0)": subTargetSingBox,
+		// Strings as the clients' own sources build them.
+		"NekoBox/Android/1.3.9 (Prefer ClashMeta Format)":            subTargetClash,
+		"HiddifyNext/2.5.7 (android) like ClashMeta v2ray sing-box":  subTargetClash,
+		"SFA (sing-box 1.13.14; language zh_CN)":                     subTargetSingBox,
 		"v2rayNG/1.9.30":                                             subTargetBase64,
 		"Shadowrocket/2070 CFNetwork/1410.0.3 Darwin/22.6.0":         subTargetBase64,
 		"Mozilla/5.0 (Windows NT 10.0) Chrome/120 SE 2.X MetaSr 1.0": subTargetBase64,

@@ -674,6 +674,10 @@ func (s *Server) inboundByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		input.ID = id
+		if input.Hysteria2 != nil && input.Hysteria2.Obfs == "" {
+			// No obfuscation means no obfuscation secret kept on disk.
+			input.Hysteria2.ObfsPassword = ""
+		}
 		oldType := ""
 		for _, item := range s.Config.Get().Inbounds {
 			if item.ID == id {
