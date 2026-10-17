@@ -181,6 +181,12 @@ function selectQuickToday() {
   else commit(currentYearISO.value)
 }
 
+const navLabels = computed(() =>
+  locale.value === 'zh-CN'
+    ? { prevYear: '上一年', nextYear: '下一年', prevMonth: '上个月', nextMonth: '下个月', prevYears: '前 12 年', nextYears: '后 12 年' }
+    : { prevYear: 'Previous year', nextYear: 'Next year', prevMonth: 'Previous month', nextMonth: 'Next month', prevYears: 'Previous 12 years', nextYears: 'Next 12 years' },
+)
+
 const quickLabel = computed(() => {
   if (locale.value === 'zh-CN') {
     return props.type === 'date' ? '今天' : props.type === 'month' ? '本月' : '今年'
@@ -210,19 +216,19 @@ const quickLabel = computed(() => {
         <template v-if="type === 'date'">
           <div class="sbm-dp-head">
             <div class="sbm-dp-nav-group">
-              <button type="button" class="sbm-dp-nav" @click="stepYear(-1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYear" @click="stepYear(-1)">
                 <ChevronsLeft class="icon" :stroke-width="1.8" />
               </button>
-              <button type="button" class="sbm-dp-nav" @click="stepMonth(-1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevMonth" @click="stepMonth(-1)">
                 <ChevronLeft class="icon" :stroke-width="1.8" />
               </button>
             </div>
             <strong class="sbm-dp-title">{{ viewYear }} / {{ pad2(viewMonth) }}</strong>
             <div class="sbm-dp-nav-group">
-              <button type="button" class="sbm-dp-nav" @click="stepMonth(1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextMonth" @click="stepMonth(1)">
                 <ChevronRight class="icon" :stroke-width="1.8" />
               </button>
-              <button type="button" class="sbm-dp-nav" @click="stepYear(1)">
+              <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYear" @click="stepYear(1)">
                 <ChevronsRight class="icon" :stroke-width="1.8" />
               </button>
             </div>
@@ -251,11 +257,11 @@ const quickLabel = computed(() => {
         <!-- Month (YYYY-MM) Picker -->
         <template v-else-if="type === 'month'">
           <div class="sbm-dp-head">
-            <button type="button" class="sbm-dp-nav" @click="stepYear(-1)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYear" @click="stepYear(-1)">
               <ChevronLeft class="icon" :stroke-width="1.8" />
             </button>
             <strong class="sbm-dp-title">{{ viewYear }}</strong>
-            <button type="button" class="sbm-dp-nav" @click="stepYear(1)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYear" @click="stepYear(1)">
               <ChevronRight class="icon" :stroke-width="1.8" />
             </button>
           </div>
@@ -279,11 +285,11 @@ const quickLabel = computed(() => {
         <!-- Year (YYYY) Picker -->
         <template v-else>
           <div class="sbm-dp-head">
-            <button type="button" class="sbm-dp-nav" @click="stepYear(-12)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.prevYears" @click="stepYear(-12)">
               <ChevronLeft class="icon" :stroke-width="1.8" />
             </button>
             <strong class="sbm-dp-title">{{ yearStart }} – {{ yearStart + 11 }}</strong>
-            <button type="button" class="sbm-dp-nav" @click="stepYear(12)">
+            <button type="button" class="sbm-dp-nav" :aria-label="navLabels.nextYears" @click="stepYear(12)">
               <ChevronRight class="icon" :stroke-width="1.8" />
             </button>
           </div>

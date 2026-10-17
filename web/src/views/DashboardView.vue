@@ -186,8 +186,8 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <span class="eyebrow">ONE SUBSCRIPTION / ALL ENABLED INBOUNDS</span>
         <div class="sub-head-row">
           <h2>{{ t('dashboard.subscription') }}</h2>
-          <div class="sub-format-tabs" role="tablist">
-            <button v-for="fmt in subFormats" :key="fmt.id" type="button" :class="{ active: subFormat === fmt.id }" @click="selectSubFormat(fmt.id)">{{ t(fmt.label) }}</button>
+          <div class="sub-format-tabs" role="group" :aria-label="t('dashboard.subscription')">
+            <button v-for="fmt in subFormats" :key="fmt.id" type="button" :class="{ active: subFormat === fmt.id }" :aria-pressed="subFormat === fmt.id" @click="selectSubFormat(fmt.id)">{{ t(fmt.label) }}</button>
           </div>
         </div>
         <p>{{ t('dashboard.subscriptionHelp') }}</p>

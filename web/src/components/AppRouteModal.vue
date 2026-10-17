@@ -179,12 +179,14 @@ const resetAll = safe(async () => {
     @close="emit('close')"
   >
     <div class="app-route-modal">
+      <p class="app-route-help">{{ t('apps.routeHelp') }}</p>
       <div class="app-route-toolbar">
-        <div class="app-route-cats" role="tablist">
+        <div class="app-route-cats" role="group">
           <button
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === 'all' }"
+            :aria-pressed="selectedCat === 'all'"
             @click="selectedCat = 'all'"
           >
             {{ t('apps.routeFilterAll') }}
@@ -194,6 +196,7 @@ const resetAll = safe(async () => {
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === 'active' }"
+            :aria-pressed="selectedCat === 'active'"
             @click="selectedCat = 'active'"
           >
             {{ t('apps.routeFilterActive', { count: activeCount }) }}
@@ -204,6 +207,7 @@ const resetAll = safe(async () => {
             type="button"
             class="app-route-cat-btn"
             :class="{ active: selectedCat === cat }"
+            :aria-pressed="selectedCat === cat"
             @click="selectedCat = cat"
           >
             {{ categoryLabel(cat) }}
