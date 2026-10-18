@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/netip"
 	"os"
@@ -106,7 +107,7 @@ func TestMultipleEgressRender(t *testing.T) {
 			t.Fatal("wrong rule count")
 		}
 		sniff := rules[0].(map[string]any)
-		if sniff["action"] != "sniff" || sniff["timeout"] != "300ms" {
+		if sniff["action"] != "sniff" || sniff["timeout"] != "300ms" || fmt.Sprint(sniff["ip_cidr"]) != "[0.0.0.0/0 ::/0]" {
 			t.Fatal("sniff rule missing or invalid")
 		}
 		for i, g := range cfg.EgressGateways {

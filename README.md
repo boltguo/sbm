@@ -19,7 +19,7 @@ For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VL
 
 See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
 
-**Traffic → Apps & sites** or **Egress → App routing** pins an application or site to Entry Direct or a specific gateway. The choice applies to every node and takes precedence over the node’s own exit; gateway tunnels carry IPv4 only, so IPv6 connections of an app pinned to a gateway fail instead of leaving through another exit. Applying changes restarts sing-box.
+**Traffic → Apps & sites** or **Egress → App routing** pins an application or site to Entry Direct or a specific gateway. The choice applies to every node and takes precedence over the node’s own exit. A domain sent by the client is matched as is; only IP destinations are sniffed for the TLS SNI or HTTP Host, so sites using ECH still match. gateway tunnels carry IPv4 only, so IPv6 connections of an app pinned to a gateway fail instead of leaving through another exit. Applying changes restarts sing-box.
 
 **Apps & sites** classifies proxy traffic by connection. Bytes of connections that close between two one-second samples cannot be tied to an app and count as Unattributed, so the shares add up to the proxy total.
 

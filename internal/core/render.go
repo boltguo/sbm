@@ -38,7 +38,11 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		inbounds = append(inbounds, built)
 	}
 	direct := map[string]any{"type": "direct", "tag": "direct"}
-	rules := []any{map[string]any{"action": "sniff", "timeout": "300ms"}}
+	// Sniff only IP destinations. Sniffing replaces a client-supplied domain
+	// with the TLS SNI or HTTP Host, so an ECH outer name (cloudflare-ech.com)
+	// or any SNI that differs from the requested host would miss app routes
+	// and leave through the node's exit instead.
+	rules := []any{map[string]any{"ip_cidr": []string{"0.0.0.0/0", "::/0"}, "action": "sniff", "timeout": "300ms"}}
 	route := map[string]any{"rules": rules, "final": "direct"}
 	doc := map[string]any{
 		"log":       map[string]any{"level": "warn", "timestamp": true},
