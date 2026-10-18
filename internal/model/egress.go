@@ -105,6 +105,7 @@ type EgressCredential struct {
 }
 
 func (g EgressGateway) EndpointTag() string   { return "egress-wg-" + g.ID }
+func (g EgressGateway) DNSTag() string        { return "dns-" + g.EndpointTag() }
 func (g EgressGateway) TunnelAddress() string { return fmt.Sprintf("10.66.%d.2/32", g.TunnelSlot) }
 func (g EgressGateway) PeerAddress() string   { return fmt.Sprintf("10.66.%d.1/24", g.TunnelSlot) }
 

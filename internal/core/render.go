@@ -10,6 +10,10 @@ import (
 	"github.com/boltguo/sbm/internal/protocol"
 )
 
+// gatewayDNSServer answers gateway traffic through the tunnel. Its anycast
+// address reaches a resolver near the gateway, wherever that is.
+const gatewayDNSServer = "1.1.1.1"
+
 type Renderer struct {
 	Registry     *protocol.Registry
 	BuildContext protocol.BuildContext
@@ -53,6 +57,8 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			"external_controller": "127.0.0.1:9090", "secret": cfg.ClashAPISecret,
 		}},
 	}
+	localDNS := map[string]any{"type": "local", "tag": "local"}
+	dnsServers := []any{localDNS}
 	endpoints := []any{}
 	gatewayRules := []any{}
 	enabledGateways := make(map[string]model.EgressGateway, len(buildContext.EgressGateways))
@@ -66,6 +72,9 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			"address": []string{g.TunnelAddress()}, "private_key": g.PrivateKey,
 			"peers": []any{map[string]any{"address": g.Server, "port": g.ServerPort, "public_key": g.PeerPublicKey, "allowed_ips": []string{"0.0.0.0/0"}, "persistent_keepalive_interval": 25}},
 		})
+		// Resolve through the tunnel so geo-aware DNS answers for the gateway's
+		// location, not the entry's.
+		dnsServers = append(dnsServers, map[string]any{"type": "udp", "tag": g.DNSTag(), "server": gatewayDNSServer, "detour": g.EndpointTag()})
 		users := []string{}
 		for _, in := range cfg.Inbounds {
 			if in.Enabled {
@@ -73,19 +82,24 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			}
 		}
 		if len(users) > 0 {
-			gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "resolve", "server": "local", "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
+			gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "resolve", "server": g.DNSTag(), "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
 		}
 	}
 	if len(endpoints) > 0 {
 		rules = append(rules, buildAppRouteRules(cfg.AppRoutes, enabledGateways)...)
 		rules = append(rules, gatewayRules...)
 		doc["endpoints"] = endpoints
-		doc["dns"] = map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}}
+		doc["dns"] = map[string]any{"servers": dnsServers}
+		// Outbounds without their own resolver keep using the entry's system
+		// DNS; sing-box requires naming it once there is more than one server.
+		route["default_domain_resolver"] = "local"
 		route["rules"] = rules
 	}
 
 	if cfg.OutboundStrategy != "" && cfg.OutboundStrategy != model.OutboundStrategyAuto {
-		doc["dns"] = map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}}
+		if _, ok := doc["dns"]; !ok {
+			doc["dns"] = map[string]any{"servers": []any{localDNS}}
+		}
 		direct["domain_resolver"] = map[string]any{"server": "local", "strategy": cfg.OutboundStrategy}
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -108,6 +122,7 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 		}
 		return "", false, false
 	}
+	dnsTag := func(target string) string { return enabledGateways[target].DNSTag() }
 
 	type routeGroup struct {
 		target string
@@ -182,7 +197,7 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 		outboundTag, isGateway, _ := resolveTarget(g.target)
 		if isGateway {
 			out = append(out,
-				map[string]any{"domain_suffix": g.items, "action": "resolve", "server": "local", "strategy": "ipv4_only"},
+				map[string]any{"domain_suffix": g.items, "action": "resolve", "server": dnsTag(g.target), "strategy": "ipv4_only"},
 				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
 			)
 		} else {

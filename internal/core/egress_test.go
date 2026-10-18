@@ -112,7 +112,7 @@ func TestMultipleEgressRender(t *testing.T) {
 		}
 		for i, g := range cfg.EgressGateways {
 			resolve, route := rules[1+i*2].(map[string]any), rules[1+i*2+1].(map[string]any)
-			if resolve["strategy"] != "ipv4_only" || route["outbound"] != g.EndpointTag() {
+			if resolve["strategy"] != "ipv4_only" || resolve["server"] != g.DNSTag() || route["outbound"] != g.EndpointTag() {
 				t.Fatal("gateway route or resolution incorrect")
 			}
 			for _, u := range route["auth_user"].([]any) {
@@ -123,6 +123,24 @@ func TestMultipleEgressRender(t *testing.T) {
 		}
 		if strategy != "auto" && doc["outbounds"].([]any)[0].(map[string]any)["domain_resolver"].(map[string]any)["strategy"] != strategy {
 			t.Fatal("direct strategy changed")
+		}
+		// Each gateway resolves through its own tunnel; everything else keeps
+		// the entry's system resolver.
+		if doc["route"].(map[string]any)["default_domain_resolver"] != "local" {
+			t.Fatal("default resolver must stay on the entry")
+		}
+		servers := map[string]map[string]any{}
+		for _, item := range doc["dns"].(map[string]any)["servers"].([]any) {
+			server := item.(map[string]any)
+			servers[server["tag"].(string)] = server
+		}
+		if servers["local"]["type"] != "local" || len(servers) != 1+len(cfg.EgressGateways) {
+			t.Fatalf("dns servers = %v", servers)
+		}
+		for _, g := range cfg.EgressGateways {
+			if server := servers[g.DNSTag()]; server["detour"] != g.EndpointTag() || server["type"] != "udp" {
+				t.Fatalf("gateway DNS does not use its tunnel: %v", server)
+			}
 		}
 	}
 	cfg.EgressGateways[0].Enabled = false

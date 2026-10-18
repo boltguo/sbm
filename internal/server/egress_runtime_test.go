@@ -46,7 +46,7 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 	if binary == "" || os.Geteuid() != 0 {
 		t.Fatal("official sing-box and isolated root required")
 	}
-	for _, args := range [][]string{{"link", "set", "lo", "up"}, {"addr", "add", "203.0.113.1/32", "dev", "lo"}, {"addr", "add", "203.0.113.2/32", "dev", "lo"}, {"addr", "add", "198.18.0.100/32", "dev", "lo"}} {
+	for _, args := range [][]string{{"link", "set", "lo", "up"}, {"addr", "add", "203.0.113.1/32", "dev", "lo"}, {"addr", "add", "203.0.113.2/32", "dev", "lo"}, {"addr", "add", "198.18.0.100/32", "dev", "lo"}, {"addr", "add", "1.1.1.1/32", "dev", "lo"}} {
 		if err := exec.Command("ip", args...).Run(); err != nil {
 			t.Fatal(err)
 		}
@@ -107,6 +107,8 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 	}
 	go func() { _ = target.Serve(listener) }()
 	t.Cleanup(func() { _ = target.Close() })
+	// Stand-in for the anycast resolver each gateway's tunnel DNS uses.
+	dnsSources := runtimeDNS(t, "1.1.1.1:53", "exit.test.", net.IPv4(198, 18, 0, 100))
 	cfg := model.DefaultConfig()
 	cfg.Domain = "node.example.com"
 	cfg.SessionSecret = strings.Repeat("s", 43)
@@ -343,6 +345,81 @@ func TestEgressRuntimeIntegration(t *testing.T) {
 		}
 	}
 	t.Log("stopped gateway 1: both its credentials failed; Direct and gateway 2 stayed available for VLESS/HY2")
+	// A domain sent through gateway 2 must be resolved through its tunnel, so
+	// the resolver sees the gateway's address rather than the entry's.
+	socks := fmt.Sprintf("127.0.0.1:%d", 29004)
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return runtimeSOCKSDial(ctx, socks, address)
+	}}
+	resp, err := (&http.Client{Transport: transport, Timeout: 4 * time.Second}).Get("http://exit.test:28080/")
+	var body []byte
+	if err == nil {
+		body, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
+	transport.CloseIdleConnections()
+	if err != nil || strings.TrimSpace(string(body)) != "203.0.113.2" {
+		t.Fatalf("domain through gateway 2 failed: %q %v", body, err)
+	}
+	if sources := dnsSources(); len(sources) == 0 || sources[0] != "203.0.113.2" {
+		t.Fatalf("gateway DNS did not use its tunnel: queries from %v", sources)
+	}
+	t.Log("gateway 2 resolved exit.test through its own tunnel")
+}
+
+// runtimeDNS answers A queries for name with ip and records each query's
+// source address.
+func runtimeDNS(t *testing.T, address, name string, ip net.IP) func() []string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	var mu sync.Mutex
+	var sources []string
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			query := buf[:n]
+			// Header, then one question: labels, zero byte, type and class.
+			end := 12
+			var labels []string
+			for end < n && query[end] != 0 {
+				size := int(query[end])
+				if end+1+size > n {
+					break
+				}
+				labels = append(labels, string(query[end+1:end+1+size]))
+				end += 1 + size
+			}
+			if n < 12 || end+5 > n {
+				continue
+			}
+			qtype := uint16(query[end+1])<<8 | uint16(query[end+2])
+			question := query[12 : end+5]
+			mu.Lock()
+			sources = append(sources, from.(*net.UDPAddr).IP.String())
+			mu.Unlock()
+			answer := []byte{query[0], query[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}
+			answer = append(answer, question...)
+			if qtype == 1 && strings.Join(labels, ".")+"." == name {
+				answer[7] = 1
+				answer = append(answer, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
+				answer = append(answer, ip.To4()...)
+			}
+			_, _ = conn.WriteTo(answer, from)
+		}
+	}()
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), sources...)
+	}
 }
 func runtimeSOCKSDial(ctx context.Context, socks, address string) (net.Conn, error) {
 	c, err := (&net.Dialer{}).DialContext(ctx, "tcp", socks)
@@ -371,11 +448,13 @@ func runtimeSOCKSDial(ctx context.Context, socks, address string) (net.Conn, err
 	if err != nil {
 		return nil, err
 	}
-	ip := net.ParseIP(host).To4()
-	if ip == nil {
-		return nil, fmt.Errorf("test target needs IPv4")
+	request := []byte{5, 1, 0, 3, byte(len(host))}
+	request = append(request, host...)
+	if ip := net.ParseIP(host).To4(); ip != nil {
+		request = append([]byte{5, 1, 0, 1}, ip...)
+	} else if net.ParseIP(host) != nil || len(host) > 255 {
+		return nil, fmt.Errorf("test target needs IPv4 or a domain")
 	}
-	request := append([]byte{5, 1, 0, 1}, ip...)
 	request = append(request, byte(port>>8), byte(port))
 	if _, err := c.Write(request); err != nil {
 		return nil, err

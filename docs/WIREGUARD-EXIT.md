@@ -181,6 +181,7 @@ ip route show default
 - **无握手**：核对当前 B IPv4、UDP 端口、两端公钥、云和主机防火墙。
 - **有握手无互联网**：核对 B forwarding、FORWARD 规则、NAT 的 X 和实际公网网卡。确认规则没有排在拒绝规则之后。
 - **部分网站失败**：Gateway 支持 IPv4；客户端已解析为 IPv6 的目的地址无法通过这些出口。域名目的地址使用 IPv4 resolve rule，Direct 的 IPv4/IPv6 策略仍独立。
+- **经 Gateway 的域名解析失败**：经 Gateway 出站的域名通过该 Gateway 的隧道向 `1.1.1.1:53`（UDP）解析，CDN 会按出口位置返回节点。B 的防火墙或云安全组需要允许 B 访问外部 UDP/53。
 - **计数中断**：A 需要 root/CAP_NET_ADMIN、iptables 与 iptables-save，并使用当前主机活跃的 iptables backend。不要切换 legacy/nft backend 后混用两套防火墙。
 - **保存时断开**：核心配置改变会重启 sing-box，代理连接会短暂断开；恢复后刷新页面确认结果。
 

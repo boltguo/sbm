@@ -181,6 +181,7 @@ ip route show default
 - **No handshake:** check B's current IPv4, UDP port, both public keys, and cloud/host firewalls.
 - **Handshake but no Internet:** check B forwarding, FORWARD rules, NAT subnet X, and the public interface. Allow rules must precede applicable rejects.
 - **Some sites fail:** gateways are IPv4-only. Client-resolved IPv6 destinations cannot use them. Domain targets receive an IPv4 resolve rule; Direct's address-family strategy remains independent.
+- **Domains fail through a gateway:** domains leaving through a gateway are resolved via that gateway's tunnel at `1.1.1.1:53` (UDP), so CDNs answer for the exit's location. B's firewall and cloud security group must allow outbound UDP/53.
 - **Sampling interruption:** A needs root/CAP_NET_ADMIN, iptables and iptables-save, using the active firewall backend. Do not switch legacy/nft backends and mix two rule sets.
 - **Disconnect while saving:** core changes restart sing-box and briefly disconnect proxy connections. Refresh the page once the connection recovers.
 
