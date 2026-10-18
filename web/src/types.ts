@@ -207,6 +207,7 @@ export interface AppRouteGatewayOption {
   name: string
   location: string
   enabled: boolean
+  paused?: boolean
 }
 export interface AppRouteRuleView {
   id: string

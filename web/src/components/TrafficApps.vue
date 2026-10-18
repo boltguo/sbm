@@ -247,7 +247,7 @@ const routeOptions = computed(() => [
   { value: 'direct', label: t('apps.routeDirect') },
   ...gateways.value.map(gw => ({
     value: gw.id,
-    label: `${gw.name}${gw.enabled ? '' : t('apps.routeDisabledSuffix')}`,
+    label: `${gw.name}${!gw.enabled ? t('apps.routeDisabledSuffix') : gw.paused ? t('apps.routePausedSuffix') : ''}`,
   })),
 ])
 

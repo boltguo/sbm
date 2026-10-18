@@ -101,6 +101,15 @@ const categoryLabel = (category: string) => {
   return localized !== key ? localized : category
 }
 
+// A route to a disabled gateway is skipped (traffic follows the node), and a
+// route to a paused gateway is refused; both deserve a visible note.
+const targetNotice = (id: string) => {
+  const gateway = gateways.value.find(gw => gw.id === targetOf(id))
+  if (!gateway) return ''
+  if (!gateway.enabled) return t('apps.routeTargetDisabled')
+  return gateway.paused ? t('apps.routeTargetPaused') : ''
+}
+
 const safe = guard(message => emit('toast', message))
 
 async function fetchRoutes() {
@@ -167,7 +176,7 @@ const routeOptions = computed(() => [
   { value: 'direct', label: t('apps.routeDirect') },
   ...gateways.value.map(gw => ({
     value: gw.id,
-    label: `${gw.name}${gw.enabled ? '' : t('apps.routeDisabledSuffix')}`,
+    label: `${gw.name}${!gw.enabled ? t('apps.routeDisabledSuffix') : gw.paused ? t('apps.routePausedSuffix') : ''}`,
   })),
 ])
 
@@ -266,6 +275,7 @@ const resetAll = safe(async () => {
                   <small v-if="app.hasCidrs" class="app-cidr-pill">{{ t('apps.routeHasCidrs') }}</small>
                   <small v-if="app.id in pending" class="app-route-pending-pill">{{ t('apps.routePendingTag') }}</small>
                 </div>
+                <small v-if="targetNotice(app.id)" class="traffic-source warning" role="status">{{ targetNotice(app.id) }}</small>
               </div>
               <div class="app-route-control">
                 <SelectControl

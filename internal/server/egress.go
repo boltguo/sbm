@@ -290,6 +290,8 @@ type appRouteGatewayOption struct {
 	Name     string `json:"name"`
 	Location string `json:"location"`
 	Enabled  bool   `json:"enabled"`
+	// Paused gateways reject the apps pinned to them.
+	Paused bool `json:"paused"`
 }
 
 type appRouteRuleView struct {
@@ -307,7 +309,7 @@ type appRoutesView struct {
 	Routes   map[string]string       `json:"routes"`
 }
 
-func buildAppRoutesView(cfg model.Config) appRoutesView {
+func buildAppRoutesView(cfg model.Config, paused map[string]bool) appRoutesView {
 	ordered := model.OrderedGateways(cfg.EgressGateways)
 	gateways := make([]appRouteGatewayOption, 0, len(ordered))
 	validGateways := make(map[string]bool, len(ordered))
@@ -318,6 +320,7 @@ func buildAppRoutesView(cfg model.Config) appRoutesView {
 			Name:     protocol.GatewayName(g),
 			Location: protocol.GatewayLocation(g),
 			Enabled:  g.Enabled,
+			Paused:   paused[g.ID],
 		})
 	}
 	specs := traffic.AppRuleSpecs()
@@ -353,8 +356,13 @@ func buildAppRoutesView(cfg model.Config) appRoutesView {
 	}
 }
 
+func (s *Server) appRoutesView() appRoutesView {
+	cfg := s.Config.Get()
+	return buildAppRoutesView(cfg, s.Traffic.DesiredGatewayPauses(cfg))
+}
+
 func (s *Server) getAppRoutes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, buildAppRoutesView(s.Config.Get()))
+	writeJSON(w, 200, s.appRoutesView())
 }
 
 func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +433,7 @@ func (s *Server) updateAppRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	writeJSON(w, 200, buildAppRoutesView(s.Config.Get()))
+	writeJSON(w, 200, s.appRoutesView())
 }
 
 // applyAppRouteChange sets one app or site route, or clears it when target is

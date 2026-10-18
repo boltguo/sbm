@@ -592,6 +592,9 @@ func TestGatewayHardStopPausesOnlyThatGateway(t *testing.T) {
 	if usage := s.gatewayUsage(s.Config.Get())[0]; !usage.Paused || commander.stops != 0 || s.Traffic.State().QuotaExceeded {
 		t.Fatal("hard stop must pause only its gateway, never sing-box")
 	}
+	if view := s.appRoutesView(); !view.Gateways[0].Paused || view.Gateways[1].Paused {
+		t.Fatalf("app routing view does not flag the paused gateway: %+v", view.Gateways)
+	}
 	restarts := commander.restarts
 	if err := s.ReconcileGatewayPauses(ctx); err != nil || commander.restarts != restarts {
 		t.Fatal("an unchanged pause set restarted the core")
