@@ -510,20 +510,52 @@ func (t *Tracker) persist(_ model.State) (err error) {
 	return nil
 }
 
+// NextMonthlyReset returns the first reset strictly after after.
 func NextMonthlyReset(after time.Time, reset model.ResetConfig) (time.Time, error) {
-	if reset.Day < 1 || reset.Day > 28 {
-		return time.Time{}, errors.New("reset day must be between 1 and 28")
+	location, err := resetLocation(reset)
+	if err != nil {
+		return time.Time{}, err
+	}
+	local := after.In(location)
+	candidate := monthlyResetIn(local.Year(), local.Month(), reset, location)
+	if !candidate.After(local) {
+		candidate = monthlyResetIn(local.Year(), local.Month()+1, reset, location)
+	}
+	return candidate, nil
+}
+
+// PreviousMonthlyReset returns the reset one month before next, a reset
+// time returned by NextMonthlyReset. Subtracting a month from the date would
+// be wrong for clamped days: the reset before February 28 is January 31.
+func PreviousMonthlyReset(next time.Time, reset model.ResetConfig) (time.Time, error) {
+	location, err := resetLocation(reset)
+	if err != nil {
+		return time.Time{}, err
+	}
+	local := next.In(location)
+	return monthlyResetIn(local.Year(), local.Month()-1, reset, location), nil
+}
+
+func resetLocation(reset model.ResetConfig) (*time.Location, error) {
+	if reset.Day < 1 || reset.Day > 31 {
+		return nil, errors.New("reset day must be between 1 and 31")
+	}
+	if reset.Hour < 0 || reset.Hour > 23 {
+		return nil, errors.New("reset hour must be between 0 and 23")
 	}
 	location, err := time.LoadLocation(reset.Timezone)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid timezone: %w", err)
+		return nil, fmt.Errorf("invalid timezone: %w", err)
 	}
-	local := after.In(location)
-	candidate := time.Date(local.Year(), local.Month(), reset.Day, 0, 0, 0, 0, location)
-	if !candidate.After(local) {
-		candidate = candidate.AddDate(0, 1, 0)
-	}
-	return candidate, nil
+	return location, nil
+}
+
+// monthlyResetIn is the reset in the given month (normalized, so month 13 is
+// next January), with the day clamped to the month's length.
+func monthlyResetIn(year int, month time.Month, reset model.ResetConfig, location *time.Location) time.Time {
+	first := time.Date(year, month, 1, 0, 0, 0, 0, location)
+	lastDay := first.AddDate(0, 1, -1).Day()
+	return time.Date(first.Year(), first.Month(), min(reset.Day, lastDay), reset.Hour, 0, 0, 0, location)
 }
 
 type ClashClient struct {

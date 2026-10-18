@@ -204,3 +204,10 @@ func TestVnStatCatchingUpDoesNotCountProxyBytesTwice(t *testing.T) {
 		t.Fatal("bytes vnStat already recorded were counted again")
 	}
 }
+
+func TestVnStatPeriodStartsOnClampedMonthEnd(t *testing.T) {
+	start, next, err := periodStart(time.Date(2027, 3, 10, 0, 0, 0, 0, time.UTC), model.ResetConfig{Mode: "monthly", Day: 31, Timezone: "UTC"})
+	if err != nil || !start.Equal(time.Date(2027, 2, 28, 0, 0, 0, 0, time.UTC)) || !next.Equal(time.Date(2027, 3, 31, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("period = %s .. %s, %v", start, next, err)
+	}
+}

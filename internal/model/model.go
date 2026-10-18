@@ -146,9 +146,12 @@ func trafficBytes(amount float64, unitBytes, numerator, denominator int64) (int6
 	return bytes.Int64(), nil
 }
 
+// ResetConfig is a monthly reset at Day/Hour in Timezone. Days past the end
+// of a month (29-31) reset on that month's last day.
 type ResetConfig struct {
 	Mode     string `json:"mode"`
 	Day      int    `json:"day"`
+	Hour     int    `json:"hour,omitempty"`
 	Timezone string `json:"timezone"`
 }
 

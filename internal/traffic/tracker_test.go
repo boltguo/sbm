@@ -514,3 +514,34 @@ func TestUnreadableCoreStateWithoutQuotaLeavesCoreAlone(t *testing.T) {
 		t.Fatalf("stops = %d starts = %d, want the core untouched", core.stops, core.starts)
 	}
 }
+
+func TestMonthlyResetClampsToMonthEndAndHonoursHour(t *testing.T) {
+	utc := model.ResetConfig{Mode: "monthly", Day: 31, Timezone: "UTC"}
+	for _, tc := range []struct{ after, want string }{
+		{"2027-01-31T00:00:00Z", "2027-02-28T00:00:00Z"},
+		{"2028-01-31T00:00:00Z", "2028-02-29T00:00:00Z"},
+		{"2027-02-28T00:00:00Z", "2027-03-31T00:00:00Z"},
+		{"2027-04-15T00:00:00Z", "2027-04-30T00:00:00Z"},
+		{"2027-12-31T00:00:00Z", "2028-01-31T00:00:00Z"},
+	} {
+		after, _ := time.Parse(time.RFC3339, tc.after)
+		next, err := NextMonthlyReset(after, utc)
+		if err != nil || next.Format(time.RFC3339) != tc.want {
+			t.Fatalf("after %s: next=%s err=%v, want %s", tc.after, next.Format(time.RFC3339), err, tc.want)
+		}
+	}
+	feb, _ := time.Parse(time.RFC3339, "2027-02-28T00:00:00Z")
+	if previous, err := PreviousMonthlyReset(feb, utc); err != nil || previous.Format(time.RFC3339) != "2027-01-31T00:00:00Z" {
+		t.Fatalf("reset before Feb 28 = %s, %v", previous, err)
+	}
+	shanghai := model.ResetConfig{Mode: "monthly", Day: 1, Hour: 8, Timezone: "Asia/Shanghai"}
+	after := time.Date(2026, 9, 30, 23, 30, 0, 0, time.UTC) // 07:30 on Oct 1 in Shanghai
+	if next, err := NextMonthlyReset(after, shanghai); err != nil || !next.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("08:00 Shanghai reset = %s, %v", next.UTC(), err)
+	}
+	for _, bad := range []model.ResetConfig{{Day: 32, Timezone: "UTC"}, {Day: 1, Hour: 24, Timezone: "UTC"}, {Day: 0, Timezone: "UTC"}} {
+		if _, err := NextMonthlyReset(after, bad); err == nil {
+			t.Fatalf("invalid reset accepted: %+v", bad)
+		}
+	}
+}

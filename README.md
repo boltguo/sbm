@@ -124,7 +124,7 @@ Screenshots use sample data.
 - Copy a single-node URL or display its QR code
 - Serve the master subscription as Base64, Clash Meta (mihomo) YAML, or sing-box JSON, detected from the client User-Agent or chosen with `?target=v2ray|clash|singbox`; the sing-box format needs sing-box 1.12 or later
 - Automatic UUID, Reality key pair, short ID, and Hysteria2 password generation
-- Manual traffic reset or monthly reset on days 1–28
+- Manual traffic reset or monthly reset on days 1–31 at a chosen hour (days 29–31 fall on the last day of shorter months)
 - Automatic, prefer IPv4, prefer IPv6, IPv4-only, or IPv6-only proxy egress strategy
 - Automatic sing-box validation and rollback when a protocol change fails
 

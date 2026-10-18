@@ -52,7 +52,11 @@ func periodStart(now time.Time, reset model.ResetConfig) (time.Time, time.Time, 
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	return next.AddDate(0, -1, 0), next, nil
+	previous, err := PreviousMonthlyReset(next, reset)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return previous, next, nil
 }
 func networkOrigin(_ nettraffic.Request, s nettraffic.Snapshot) string { return "local/" + s.Interface }
 func networkGeneration(req nettraffic.Request, s nettraffic.Snapshot) string {

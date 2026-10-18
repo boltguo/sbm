@@ -138,8 +138,11 @@ func ValidateReset(reset model.ResetConfig) error {
 	if reset.Mode != "none" && reset.Mode != "monthly" {
 		return errors.New("重置模式只能是 none 或 monthly")
 	}
-	if reset.Day < 1 || reset.Day > 28 {
-		return errors.New("每月重置日期必须为 1 到 28")
+	if reset.Day < 1 || reset.Day > 31 {
+		return errors.New("每月重置日期必须为 1 到 31")
+	}
+	if reset.Hour < 0 || reset.Hour > 23 {
+		return errors.New("重置时刻必须为 0 到 23 点")
 	}
 	if reset.Timezone == "" {
 		return errors.New("时区不能为空")

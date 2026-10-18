@@ -126,7 +126,7 @@ export interface Inbound {
   egressNodes?: EgressNode[]
 }
 
-export interface ResetConfig { mode: 'none' | 'monthly'; day: number; timezone: string }
+export interface ResetConfig { mode: 'none' | 'monthly'; day: number; hour?: number; timezone: string }
 export type OutboundStrategy = 'auto' | 'prefer_ipv4' | 'prefer_ipv6' | 'ipv4_only' | 'ipv6_only'
 export interface Settings {
  vnstatInterface: string

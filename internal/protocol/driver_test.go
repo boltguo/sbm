@@ -100,3 +100,16 @@ func TestReservedTCPPorts(t *testing.T) {
 		t.Fatalf("UDP/9090 should remain available: %v", err)
 	}
 }
+
+func TestValidateResetAcceptsMonthEndDaysAndHours(t *testing.T) {
+	for _, reset := range []model.ResetConfig{{Mode: "monthly", Day: 31, Hour: 23, Timezone: "UTC"}, {Mode: "monthly", Day: 29, Timezone: "Asia/Shanghai"}} {
+		if err := ValidateReset(reset); err != nil {
+			t.Fatalf("%+v rejected: %v", reset, err)
+		}
+	}
+	for _, reset := range []model.ResetConfig{{Mode: "monthly", Day: 32, Timezone: "UTC"}, {Mode: "monthly", Day: 1, Hour: 24, Timezone: "UTC"}, {Mode: "monthly", Day: 1, Hour: -1, Timezone: "UTC"}} {
+		if err := ValidateReset(reset); err == nil {
+			t.Fatalf("%+v accepted", reset)
+		}
+	}
+}

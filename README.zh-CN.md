@@ -124,7 +124,7 @@ https://node.example.com:2096/
 - 复制单节点链接或显示二维码
 - 总订阅支持 Base64、Clash Meta（mihomo）YAML 和 sing-box JSON：按客户端 User-Agent 自动识别，也可在地址后加 `?target=v2ray|clash|singbox` 指定；sing-box 格式需要 1.12 或更新的客户端
 - 自动生成 UUID、Reality 密钥、short ID 和 Hysteria2 密码
-- 手动重置流量，或设置每月 1～28 日自动重置
+- 手动重置流量，或设置每月 1～31 日的指定整点自动重置（29～31 日在小月按当月最后一天）
 - 可选自动、优先 IPv4、优先 IPv6、仅 IPv4 或仅 IPv6 的代理出口策略
 - 协议变更前自动校验 sing-box，失败时恢复原配置
 
