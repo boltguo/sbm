@@ -457,3 +457,11 @@ func TestSharedLiveKitHostsAreNotOpenAI(t *testing.T) {
 		}
 	}
 }
+
+func TestTelegramRuleCoversCurrentRanges(t *testing.T) {
+	for _, ip := range []string{"91.105.192.10", "149.154.167.51", "2a0a:f280:203::a"} {
+		if got, _ := ClassifyConnection(ClashConnectionMeta{DestinationIP: ip, Network: "tcp"}); got != "telegram" {
+			t.Fatalf("%s classified as %s", ip, got)
+		}
+	}
+}
