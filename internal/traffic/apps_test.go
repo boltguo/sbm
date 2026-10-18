@@ -446,3 +446,14 @@ func TestYouTubeRuleCoversPlayerAPIsWithoutGoogleImages(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedLiveKitHostsAreNotOpenAI(t *testing.T) {
+	if got, _ := ClassifyConnection(ClashConnectionMeta{Host: "chatgpt.livekit.cloud"}); got != "openai" {
+		t.Fatalf("ChatGPT's LiveKit project classified as %s", got)
+	}
+	for _, host := range []string{"other-app.host.livekit.cloud", "sg.turn.livekit.cloud"} {
+		if got, _ := ClassifyConnection(ClashConnectionMeta{Host: host}); got == "openai" {
+			t.Fatalf("%s from another LiveKit customer classified as OpenAI", host)
+		}
+	}
+}
