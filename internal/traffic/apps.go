@@ -20,6 +20,9 @@ import (
 
 const maxDailyAppDomains = 200
 
+// appHistoryRetention bounds how long per-app rows are kept.
+const appHistoryRetention = 400 * 24 * time.Hour
+
 // UnattributedAppID collects proxy bytes the connection list cannot place:
 // the tail of connections that closed between two samples and connections
 // that opened and closed within one sample interval.
@@ -560,8 +563,21 @@ func saveAppUsage(tx *sql.Tx, pending map[appHistoryKey]appHistoryUsage) error {
 			return err
 		}
 	}
+	newest := int64(0)
 	for hour := range hours {
 		if err := pruneHourlyAppDomains(tx, hour); err != nil {
+			return err
+		}
+		newest = max(newest, hour)
+	}
+	if newest > 0 {
+		// Keep about 13 months so month views cover a full year without the
+		// database growing forever. Both tables are indexed by their period.
+		cutoff := time.Unix(newest, 0).UTC().Add(-appHistoryRetention)
+		if _, err := tx.Exec(`DELETE FROM app_hourly WHERE hour < ?`, cutoff.Unix()); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM app_daily WHERE date < ?`, cutoff.AddDate(0, 0, -1).Format(time.DateOnly)); err != nil {
 			return err
 		}
 	}

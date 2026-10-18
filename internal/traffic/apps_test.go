@@ -395,3 +395,36 @@ func TestClosedConnectionBytesGoToUnattributed(t *testing.T) {
 		t.Fatalf("unattributed metadata = %q %q", name, category)
 	}
 }
+
+func TestAppHistoryOlderThanRetentionIsPruned(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tracker, err := OpenWithHistory(dir+"/state.json", dir+"/traffic.db", &configSource{cfg: model.DefaultConfig()}, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracker.Close()
+	old := now.Add(-appHistoryRetention - 3*24*time.Hour)
+	kept := now.Add(-appHistoryRetention + 2*time.Hour)
+	tracker.mu.Lock()
+	tracker.pendingAppHistory = map[appHistoryKey]appHistoryUsage{
+		{Day: old.Format(time.DateOnly), Hour: old.Truncate(time.Hour).Unix(), AppID: "youtube", Domain: "youtube.com"}:   {Download: 1},
+		{Day: kept.Format(time.DateOnly), Hour: kept.Truncate(time.Hour).Unix(), AppID: "youtube", Domain: "youtube.com"}: {Download: 2},
+		{Day: now.Format(time.DateOnly), Hour: now.Truncate(time.Hour).Unix(), AppID: "youtube", Domain: "youtube.com"}:   {Download: 3},
+	}
+	tracker.mu.Unlock()
+	if err := tracker.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	var hourly, sum int64
+	if err := tracker.history.db.QueryRow(`SELECT COUNT(*), SUM(download) FROM app_hourly`).Scan(&hourly, &sum); err != nil {
+		t.Fatal(err)
+	}
+	if hourly != 2 || sum != 5 {
+		t.Fatalf("hourly rows=%d sum=%d, want the expired row removed", hourly, sum)
+	}
+	var daily int64
+	if err := tracker.history.db.QueryRow(`SELECT COUNT(*) FROM app_daily WHERE date < ?`, old.AddDate(0, 0, 1).Format(time.DateOnly)).Scan(&daily); err != nil || daily != 0 {
+		t.Fatalf("expired daily rows=%d err=%v", daily, err)
+	}
+}
