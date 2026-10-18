@@ -207,7 +207,7 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
         <p v-if="data.networkPartial" class="traffic-source warning">{{ t('network.partial') }}</p>
-        <p v-if="data.realtimeEstimateBytes" class="traffic-source warning">{{ t('network.realtimeEstimate', { amount: providerBytes(data.realtimeEstimateBytes) }) }}</p>
+        <p v-if="data.realtimeEstimateBytes && data.sampleHealth.status === 'interrupted'" class="traffic-source warning">{{ t('network.realtimeEstimate', { amount: providerBytes(data.realtimeEstimateBytes) }) }}</p>
         <p v-if="data.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p>
       </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>

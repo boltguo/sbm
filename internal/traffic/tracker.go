@@ -267,6 +267,9 @@ func (t *Tracker) applySampleWithConns(ctx context.Context, currentUpload, curre
 	t.state.UpdatedAt = now
 	t.recordProxyMarkLocked(now)
 	shouldExceed := t.NetworkReader == nil && limit > 0 && t.state.Total() >= limit
+	if t.NetworkReader != nil {
+		shouldExceed = t.networkOverLimitLocked(cfg.TrafficQuota)
+	}
 	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {
 		t.state.QuotaExceeded = true

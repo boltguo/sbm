@@ -16,8 +16,8 @@ import (
 
 const EntryNetworkScope = "entry"
 
-// networkStaleAfter is how old vnStat's last update may be before the proxy
-// counters stand in for the bytes it has not recorded.
+// networkStaleAfter is how old vnStat's last update may be before the
+// source is reported as interrupted.
 const networkStaleAfter = 3 * time.Minute
 
 // proxyMarkWindow bounds the per-second core totals kept to find the proxy
@@ -395,7 +395,7 @@ func (t *Tracker) reconcileNetworkQuota(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	st := t.state.Network[EntryNetworkScope]
-	usage, _ := t.entryUsageLocked(cfg.TrafficQuota, t.now())
+	usage, _ := t.entryUsageLocked(cfg.TrafficQuota)
 	exceeded := limit > 0 && usage >= limit
 	// Missing source data must not clear a persisted safety stop on startup,
 	// but proxy bytes counted since vnStat went quiet can still raise one.
@@ -462,12 +462,13 @@ func (t *Tracker) anchorProxyLocked(st model.NetworkTrafficState) model.NetworkT
 }
 
 // entryUsageLocked returns the billed entry usage SBM enforces and the part of
-// it estimated from sing-box counters because vnStat has not recorded it.
-// Called with t.mu held.
-func (t *Tracker) entryUsageLocked(q model.TrafficQuotaConfig, now time.Time) (usage, estimated int64) {
+// it estimated from sing-box counters because vnStat has not recorded it yet:
+// vnStat saves once a minute and is read every 30 seconds, and a stale or
+// unreadable source would otherwise freeze the usage. Called with t.mu held.
+func (t *Tracker) entryUsageLocked(q model.TrafficQuotaConfig) (usage, estimated int64) {
 	st := t.state.Network[EntryNetworkScope]
 	usage = q.NetworkUsage(st.RX, st.TX)
-	if st.Generation == "" || !st.ProxyAnchorKnown || now.Sub(st.UpdatedAt) <= networkStaleAfter {
+	if st.Generation == "" || !st.ProxyAnchorKnown {
 		return usage, 0
 	}
 	estimated = scaleSaturating(max(0, t.state.Total()-st.ProxyAnchor), q.ProviderUsageFactor())
@@ -479,7 +480,19 @@ func (t *Tracker) entryUsageLocked(q model.TrafficQuotaConfig, now time.Time) (u
 func (t *Tracker) EntryUsage(q model.TrafficQuotaConfig) (usage, estimated int64) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.entryUsageLocked(q, t.now())
+	return t.entryUsageLocked(q)
+}
+
+// networkOverLimitLocked lets every core sample raise the stop as soon as the
+// estimate crosses the threshold. Only vnStat samples clear it. Called with
+// t.mu held.
+func (t *Tracker) networkOverLimitLocked(q model.TrafficQuotaConfig) bool {
+	limit, err := q.NetworkStopBytes()
+	if err != nil || limit <= 0 || t.state.Network[EntryNetworkScope].Generation == "" {
+		return false
+	}
+	usage, _ := t.entryUsageLocked(q)
+	return usage >= limit
 }
 
 func scaleSaturating(value, factor int64) int64 {

@@ -134,9 +134,9 @@ Traffic accounting uses **vnStat 2.10 or newer on the selected public interface*
 
 An installed vnStat meeting the requirements is reused; otherwise the installer installs the system package. It validates the version and interface data, enables the service, and configures UTC records with a one-minute save interval. Source retention is at least 90 days of daily data, 40 days of hourly data and 48 hours of five-minute data. Existing longer or unlimited retention and the source database are preserved. Specify an interface in `Settings → vnStat public interface`; leave it blank to use the Linux default-route interface.
 
-Set the allowance to `0` for unlimited traffic. The safety threshold is the allowance minus the reserve. sing-box stops at the threshold and resumes after a traffic reset or an allowance increase. Collection and saving introduce a delay; set the reserve according to the host’s transfer rate.
+Set the allowance to `0` for unlimited traffic. The safety threshold is the allowance minus the reserve. sing-box stops at the threshold and resumes after a traffic reset or an allowance increase.
 
-When vnStat has not updated for 3 minutes or cannot be read, SBM estimates the traffic since its last update from the sing-box proxy counters. The estimate counts toward the same safety threshold, and the overview shows how much was estimated.
+vnStat saves once a minute. SBM adds the sing-box proxy traffic since vnStat’s last update, scaled by the billing mode, and checks the threshold every second. When vnStat stops updating or cannot be read, the quota keeps being enforced from that estimate, and the overview shows how much was estimated. Non-proxy traffic such as SSH and system updates still comes from vnStat with a 1–2 minute delay; size the reserve for that traffic.
 
 ### Daily and monthly traffic history
 
