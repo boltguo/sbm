@@ -110,6 +110,15 @@ const targetNotice = (id: string) => {
   return gateway.paused ? t('apps.routeTargetPaused') : ''
 }
 
+// YouTube's stream URLs only work from the IP that requested them. When
+// YouTube and Google services leave through different exits, a browser that
+// reuses a Google connection for a YouTube request can stall or get 403s.
+const coupledRoutes: Record<string, string> = { youtube: 'ecosystem:google' }
+const splitNotice = (id: string) => {
+  const other = coupledRoutes[id]
+  return other && targetOf(id) !== targetOf(other) ? t('apps.routeSplitYouTube') : ''
+}
+
 const safe = guard(message => emit('toast', message))
 
 async function fetchRoutes() {
@@ -276,6 +285,7 @@ const resetAll = safe(async () => {
                   <small v-if="app.id in pending" class="app-route-pending-pill">{{ t('apps.routePendingTag') }}</small>
                 </div>
                 <small v-if="targetNotice(app.id)" class="traffic-source warning" role="status">{{ targetNotice(app.id) }}</small>
+                <small v-if="splitNotice(app.id)" class="traffic-source warning">{{ splitNotice(app.id) }}</small>
               </div>
               <div class="app-route-control">
                 <SelectControl
