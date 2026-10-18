@@ -465,3 +465,9 @@ func TestTelegramRuleCoversCurrentRanges(t *testing.T) {
 		}
 	}
 }
+
+func TestECHOuterNameCountsAsCloudflare(t *testing.T) {
+	if got, _ := ClassifyConnection(ClashConnectionMeta{Host: "cloudflare-ech.com"}); got != "cdn:cloudflare" {
+		t.Fatalf("ECH outer name classified as %s", got)
+	}
+}
