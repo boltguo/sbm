@@ -251,7 +251,7 @@ func (t *Tracker) applySampleWithConns(ctx context.Context, currentUpload, curre
 	}
 	now := t.now()
 	t.recordHistory(now, uploadDelta, downloadDelta, cfg.TrafficQuota.ProviderUsageFactor(), restarted)
-	t.recordConnections(now, conns, restarted, hadBaseline)
+	t.recordConnections(now, conns, restarted, hadBaseline, uploadDelta, downloadDelta)
 	if restarted {
 		t.state.Upload += currentUpload
 		t.state.Download += currentDownload

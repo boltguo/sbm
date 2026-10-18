@@ -20,6 +20,11 @@ import (
 
 const maxDailyAppDomains = 200
 
+// UnattributedAppID collects proxy bytes the connection list cannot place:
+// the tail of connections that closed between two samples and connections
+// that opened and closed within one sample interval.
+const UnattributedAppID = "unattributed"
+
 //go:embed app_rules.json
 var defaultAppRulesJSON []byte
 
@@ -327,7 +332,7 @@ func ecosystemDomainKey(host, root string) string {
 // currently active app_rules.json so that adding a domain to the rules file
 // retroactively groups existing SQLite records into the new application bucket.
 func reclassifyStoredDomain(appID, domain string) (string, string) {
-	if appID == "other" || strings.HasPrefix(appID, "ip:") || strings.Contains(domain, " ") {
+	if appID == "other" || appID == UnattributedAppID || strings.HasPrefix(appID, "ip:") || strings.Contains(domain, " ") {
 		return appID, domain
 	}
 	host := normalizeHost(domain)
@@ -443,13 +448,18 @@ func resolveAppMeta(appID string) (name, category string) {
 		return "Direct IP (UDP)", "direct_ip"
 	case "other":
 		return "Other", "other"
+	case UnattributedAppID:
+		return "Unattributed (closed connections)", UnattributedAppID
 	default:
 		return appID, "other"
 	}
 }
 
+// recordConnections attributes the core's upload/download delta to apps.
+// Whatever the open connections do not account for goes to the unattributed
+// bucket, so app totals and shares add up to the proxy total.
 // Called with t.mu held.
-func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, restarted, hadBaseline bool) {
+func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, restarted, hadBaseline bool, uploadDelta, downloadDelta int64) {
 	if t.pendingAppHistory == nil {
 		t.pendingAppHistory = make(map[appHistoryKey]appHistoryUsage)
 	}
@@ -461,17 +471,29 @@ func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, rest
 	seedOnly := !t.connsSeeded && hadBaseline && !restarted
 	t.connsSeeded = true
 
-	if len(conns) == 0 {
-		t.activeConns = nil
-		return
-	}
-
 	loc := time.UTC
 	if t.history != nil && t.history.location != nil {
 		loc = t.history.location
 	}
 	day := now.In(loc).Format(time.DateOnly)
 	hour := now.UTC().Truncate(time.Hour).Unix()
+	var attributedUp, attributedDown int64
+	defer func() {
+		up, down := max(0, uploadDelta-attributedUp), max(0, downloadDelta-attributedDown)
+		if up == 0 && down == 0 {
+			return
+		}
+		key := appHistoryKey{Day: day, Hour: hour, AppID: UnattributedAppID, Domain: UnattributedAppID}
+		usage := t.pendingAppHistory[key]
+		usage.Upload += up
+		usage.Download += down
+		t.pendingAppHistory[key] = usage
+	}()
+
+	if len(conns) == 0 {
+		t.activeConns = nil
+		return
+	}
 
 	nextConns := make(map[string]connCounter, len(conns))
 	for _, c := range conns {
@@ -494,6 +516,8 @@ func (t *Tracker) recordConnections(now time.Time, conns []ClashConnection, rest
 		if upDelta == 0 && downDelta == 0 {
 			continue
 		}
+		attributedUp += upDelta
+		attributedDown += downDelta
 		appID, domainKey := ClassifyConnection(c.Metadata)
 		key := appHistoryKey{Day: day, Hour: hour, AppID: appID, Domain: domainKey}
 		usage := t.pendingAppHistory[key]
@@ -546,7 +570,7 @@ func saveAppUsage(tx *sql.Tx, pending map[appHistoryKey]appHistoryUsage) error {
 
 func pruneDailyAppDomains(tx *sql.Tx, day string) error {
 	var count int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM app_daily WHERE date=? AND NOT (app_id='other' AND domain='other')`, day).Scan(&count); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM app_daily WHERE date=? AND app_id NOT IN ('other', 'unattributed')`, day).Scan(&count); err != nil {
 		return err
 	}
 	if count <= maxDailyAppDomains {
@@ -556,10 +580,10 @@ func pruneDailyAppDomains(tx *sql.Tx, day string) error {
 	if err := tx.QueryRow(`
 		SELECT COALESCE(SUM(upload), 0), COALESCE(SUM(download), 0)
 		FROM app_daily
-		WHERE date=? AND NOT (app_id='other' AND domain='other')
+		WHERE date=? AND app_id NOT IN ('other', 'unattributed')
 		AND rowid NOT IN (
 			SELECT rowid FROM app_daily
-			WHERE date=? AND NOT (app_id='other' AND domain='other')
+			WHERE date=? AND app_id NOT IN ('other', 'unattributed')
 			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
 			LIMIT ?
 		)`, day, day, maxDailyAppDomains).Scan(&tailUpload, &tailDownload); err != nil {
@@ -567,10 +591,10 @@ func pruneDailyAppDomains(tx *sql.Tx, day string) error {
 	}
 	if _, err := tx.Exec(`
 		DELETE FROM app_daily
-		WHERE date=? AND NOT (app_id='other' AND domain='other')
+		WHERE date=? AND app_id NOT IN ('other', 'unattributed')
 		AND rowid NOT IN (
 			SELECT rowid FROM app_daily
-			WHERE date=? AND NOT (app_id='other' AND domain='other')
+			WHERE date=? AND app_id NOT IN ('other', 'unattributed')
 			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
 			LIMIT ?
 		)`, day, day, maxDailyAppDomains); err != nil {
@@ -588,7 +612,7 @@ func pruneDailyAppDomains(tx *sql.Tx, day string) error {
 
 func pruneHourlyAppDomains(tx *sql.Tx, hour int64) error {
 	var count int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM app_hourly WHERE hour=? AND NOT (app_id='other' AND domain='other')`, hour).Scan(&count); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM app_hourly WHERE hour=? AND app_id NOT IN ('other', 'unattributed')`, hour).Scan(&count); err != nil {
 		return err
 	}
 	if count <= maxDailyAppDomains {
@@ -598,10 +622,10 @@ func pruneHourlyAppDomains(tx *sql.Tx, hour int64) error {
 	if err := tx.QueryRow(`
 		SELECT COALESCE(SUM(upload), 0), COALESCE(SUM(download), 0)
 		FROM app_hourly
-		WHERE hour=? AND NOT (app_id='other' AND domain='other')
+		WHERE hour=? AND app_id NOT IN ('other', 'unattributed')
 		AND rowid NOT IN (
 			SELECT rowid FROM app_hourly
-			WHERE hour=? AND NOT (app_id='other' AND domain='other')
+			WHERE hour=? AND app_id NOT IN ('other', 'unattributed')
 			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
 			LIMIT ?
 		)`, hour, hour, maxDailyAppDomains).Scan(&tailUpload, &tailDownload); err != nil {
@@ -609,10 +633,10 @@ func pruneHourlyAppDomains(tx *sql.Tx, hour int64) error {
 	}
 	if _, err := tx.Exec(`
 		DELETE FROM app_hourly
-		WHERE hour=? AND NOT (app_id='other' AND domain='other')
+		WHERE hour=? AND app_id NOT IN ('other', 'unattributed')
 		AND rowid NOT IN (
 			SELECT rowid FROM app_hourly
-			WHERE hour=? AND NOT (app_id='other' AND domain='other')
+			WHERE hour=? AND app_id NOT IN ('other', 'unattributed')
 			ORDER BY (upload + download) DESC, app_id ASC, domain ASC
 			LIMIT ?
 		)`, hour, hour, maxDailyAppDomains); err != nil {

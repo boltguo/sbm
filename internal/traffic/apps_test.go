@@ -364,3 +364,34 @@ func TestBrowserTimezoneViewingWithUTCBillingReset(t *testing.T) {
 		t.Fatalf("unexpected Asia/Shanghai app traffic: %+v", cstApps)
 	}
 }
+
+func TestClosedConnectionBytesGoToUnattributed(t *testing.T) {
+	now := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	tracker := NewForTest(model.DefaultState(now), &configSource{cfg: model.DefaultConfig()}, nil, func() time.Time { return now })
+	ctx := context.Background()
+	video := ClashConnection{ID: "c1", Download: 1_000_000, Metadata: ClashConnectionMeta{Host: "rr1---sn-x.googlevideo.com"}}
+	if _, err := tracker.applySampleWithConns(ctx, 0, 1_000_000, "", []ClashConnection{video}); err != nil {
+		t.Fatal(err)
+	}
+	// 9 MB more arrive on c1 before it closes, and a 5 MB connection opens and
+	// closes within the same second; neither shows in the next snapshot.
+	now = now.Add(time.Second)
+	page := ClashConnection{ID: "c2", Upload: 2_000, Download: 3_000, Metadata: ClashConnectionMeta{Host: "www.example.com"}}
+	if _, err := tracker.applySampleWithConns(ctx, 2_000, 15_003_000, "", []ClashConnection{page}); err != nil {
+		t.Fatal(err)
+	}
+	var up, down int64
+	for key, usage := range tracker.pendingAppHistory {
+		up += usage.Upload
+		down += usage.Download
+		if key.AppID == UnattributedAppID && (usage.Upload != 0 || usage.Download != 14_000_000) {
+			t.Fatalf("unattributed bucket = %+v", usage)
+		}
+	}
+	if up != tracker.State().Upload || down != tracker.State().Download {
+		t.Fatalf("app totals %d/%d differ from proxy totals %d/%d", up, down, tracker.State().Upload, tracker.State().Download)
+	}
+	if name, category := resolveAppMeta(UnattributedAppID); category != UnattributedAppID || name == UnattributedAppID {
+		t.Fatalf("unattributed metadata = %q %q", name, category)
+	}
+}

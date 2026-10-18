@@ -45,7 +45,7 @@ const gateways = computed(() => routesView.value?.gateways ?? [])
 const activeRoutes = computed(() => routesView.value?.routes ?? {})
 const activeRouteCount = computed(() => Object.keys(activeRoutes.value).length)
 
-const isRoutable = (id: string) => !id.startsWith('ip:') && id !== 'other'
+const isRoutable = (id: string) => !id.startsWith('ip:') && id !== 'other' && id !== 'unattributed'
 
 const bytes = (value: number) => {
   const base = props.unit === 'GiB' ? 1024 : 1000
