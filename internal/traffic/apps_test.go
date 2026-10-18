@@ -471,3 +471,39 @@ func TestECHOuterNameCountsAsCloudflare(t *testing.T) {
 		t.Fatalf("ECH outer name classified as %s", got)
 	}
 }
+
+func TestExpandedAppRules(t *testing.T) {
+	for host, want := range map[string]string{
+		"atv-ps.primevideo.com":        "primevideo",
+		"www.amazon.com":               "ecosystem:amazon",
+		"play.max.com":                 "hbomax",
+		"www.crunchyroll.com":          "crunchyroll",
+		"api.abema.io":                 "abema",
+		"ani.gamer.com.tw":             "bahamut",
+		"bahamut.akamaized.net":        "bahamut",
+		"www.bilibili.tv":              "bilibili",
+		"i.pximg.net":                  "pixiv",
+		"api-v2.soundcloud.com":        "soundcloud",
+		"chat.mistral.ai":              "mistral",
+		"www.kimi.com":                 "kimi",
+		"studio-api.suno.ai":           "suno",
+		"my-app.vercel.app":            "vercel",
+		"v0.app":                       "vercel",
+		"stackoverflow.com":            "stackoverflow",
+		"static.crates.io":             "rust",
+		"chat.signal.org":              "signal",
+		"edgeapi.slack.com":            "slack",
+		"www.notion.so":                "notion",
+		"zh.wikipedia.org":             "wikipedia",
+		"www.speedtest.net":            "speedtest",
+		"example-app.firebaseio.com":   "ecosystem:google",
+		"outlook.office.com":           "ecosystem:microsoft",
+		"connect.facebook.net":         "ecosystem:meta",
+		"a.thumbs.redditmedia.com":     "reddit",
+		"plex-server-hash.plex.direct": "plex",
+	} {
+		if got, _ := ClassifyConnection(ClashConnectionMeta{Host: host}); got != want {
+			t.Fatalf("%s classified as %s, want %s", host, got, want)
+		}
+	}
+}

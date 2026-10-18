@@ -268,6 +268,81 @@
       ]
     },
     {
+      "id": "mistral",
+      "name": "Mistral AI",
+      "category": "ai",
+      "domains": [
+        "mistral.ai"
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "category": "ai",
+      "domains": [
+        "groq.com"
+      ]
+    },
+    {
+      "id": "characterai",
+      "name": "Character.AI",
+      "category": "ai",
+      "domains": [
+        "character.ai"
+      ]
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi / Moonshot AI",
+      "category": "ai",
+      "domains": [
+        "kimi.com",
+        "moonshot.ai"
+      ]
+    },
+    {
+      "id": "replicate",
+      "name": "Replicate",
+      "category": "ai",
+      "domains": [
+        "replicate.com",
+        "replicate.delivery"
+      ]
+    },
+    {
+      "id": "civitai",
+      "name": "Civitai",
+      "category": "ai",
+      "domains": [
+        "civitai.com"
+      ]
+    },
+    {
+      "id": "runway",
+      "name": "Runway",
+      "category": "ai",
+      "domains": [
+        "runwayml.com"
+      ]
+    },
+    {
+      "id": "suno",
+      "name": "Suno",
+      "category": "ai",
+      "domains": [
+        "suno.com",
+        "suno.ai"
+      ]
+    },
+    {
+      "id": "udio",
+      "name": "Udio",
+      "category": "ai",
+      "domains": [
+        "udio.com"
+      ]
+    },
+    {
       "id": "youtube",
       "name": "YouTube",
       "category": "streaming",
@@ -339,7 +414,11 @@
         "hdslb.com",
         "biliapi.net",
         "biliapi.com",
-        "b23.tv"
+        "b23.tv",
+        "bilibili.tv",
+        "biliintl.com",
+        "bilibili.cn",
+        "acgvideo.com"
       ]
     },
     {
@@ -377,6 +456,128 @@
         "bamgrid.com",
         "dssott.com",
         "disneystreaming.com"
+      ]
+    },
+    {
+      "id": "primevideo",
+      "name": "Prime Video",
+      "category": "streaming",
+      "domains": [
+        "primevideo.com",
+        "amazonvideo.com",
+        "aiv-cdn.net",
+        "prime-video.com"
+      ]
+    },
+    {
+      "id": "hbomax",
+      "name": "HBO Max",
+      "category": "streaming",
+      "domains": [
+        "max.com",
+        "hbomax.com",
+        "hbomaxcdn.com",
+        "hbo.com"
+      ]
+    },
+    {
+      "id": "hulu",
+      "name": "Hulu",
+      "category": "streaming",
+      "domains": [
+        "hulu.com",
+        "hulu.jp",
+        "huluim.com",
+        "hulustream.com"
+      ]
+    },
+    {
+      "id": "crunchyroll",
+      "name": "Crunchyroll",
+      "category": "streaming",
+      "domains": [
+        "crunchyroll.com"
+      ]
+    },
+    {
+      "id": "abema",
+      "name": "ABEMA",
+      "category": "streaming",
+      "domains": [
+        "abema.tv",
+        "abema.io",
+        "abema-tv.com",
+        "hayabusa.io"
+      ]
+    },
+    {
+      "id": "niconico",
+      "name": "Niconico",
+      "category": "streaming",
+      "domains": [
+        "nicovideo.jp",
+        "nimg.jp",
+        "nico.ms",
+        "niconico.com",
+        "nicochannel.jp"
+      ]
+    },
+    {
+      "id": "bahamut",
+      "name": "巴哈姆特动画疯 / Bahamut",
+      "category": "streaming",
+      "domains": [
+        "gamer.com.tw",
+        "bahamut.com.tw"
+      ],
+      "subdomains": [
+        "bahamut.akamaized.net"
+      ]
+    },
+    {
+      "id": "plex",
+      "name": "Plex",
+      "category": "streaming",
+      "domains": [
+        "plex.tv",
+        "plex.direct",
+        "plexapp.com"
+      ]
+    },
+    {
+      "id": "soundcloud",
+      "name": "SoundCloud",
+      "category": "streaming",
+      "domains": [
+        "soundcloud.com",
+        "sndcdn.com"
+      ]
+    },
+    {
+      "id": "tidal",
+      "name": "TIDAL",
+      "category": "streaming",
+      "domains": [
+        "tidal.com",
+        "tidalhifi.com"
+      ]
+    },
+    {
+      "id": "deezer",
+      "name": "Deezer",
+      "category": "streaming",
+      "domains": [
+        "deezer.com",
+        "dzcdn.net"
+      ]
+    },
+    {
+      "id": "bandcamp",
+      "name": "Bandcamp",
+      "category": "streaming",
+      "domains": [
+        "bandcamp.com",
+        "bcbits.com"
       ]
     },
     {
@@ -432,6 +633,48 @@
         "whatsapp.com",
         "whatsapp.net",
         "wa.me"
+      ]
+    },
+    {
+      "id": "signal",
+      "name": "Signal",
+      "category": "messaging",
+      "domains": [
+        "signal.org",
+        "signal.me",
+        "whispersystems.org"
+      ]
+    },
+    {
+      "id": "line",
+      "name": "LINE",
+      "category": "messaging",
+      "domains": [
+        "line.me",
+        "line-apps.com",
+        "line-scdn.net",
+        "line-cdn.net"
+      ]
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "category": "messaging",
+      "domains": [
+        "slack.com",
+        "slack-edge.com",
+        "slack-msgs.com",
+        "slack-files.com",
+        "slack-imgs.com"
+      ]
+    },
+    {
+      "id": "zoom",
+      "name": "Zoom",
+      "category": "messaging",
+      "domains": [
+        "zoom.us",
+        "zoom.com"
       ]
     },
     {
@@ -514,6 +757,36 @@
       ]
     },
     {
+      "id": "pixiv",
+      "name": "pixiv",
+      "category": "social",
+      "domains": [
+        "pixiv.net",
+        "pximg.net",
+        "fanbox.cc",
+        "booth.pm"
+      ]
+    },
+    {
+      "id": "pinterest",
+      "name": "Pinterest",
+      "category": "social",
+      "domains": [
+        "pinterest.com",
+        "pinimg.com"
+      ]
+    },
+    {
+      "id": "bluesky",
+      "name": "Bluesky",
+      "category": "social",
+      "domains": [
+        "bsky.app",
+        "bsky.social",
+        "bsky.network"
+      ]
+    },
+    {
       "id": "github",
       "name": "GitHub",
       "category": "dev",
@@ -578,6 +851,124 @@
       ]
     },
     {
+      "id": "vercel",
+      "name": "Vercel / v0",
+      "category": "dev",
+      "domains": [
+        "vercel.com",
+        "vercel.app",
+        "vercel-storage.com",
+        "nextjs.org",
+        "v0.dev",
+        "v0.app"
+      ]
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "category": "dev",
+      "domains": [
+        "netlify.com",
+        "netlify.app"
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "category": "dev",
+      "domains": [
+        "gitlab.com",
+        "gitlab.io",
+        "gitlab-static.net"
+      ]
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "category": "dev",
+      "domains": [
+        "figma.com"
+      ]
+    },
+    {
+      "id": "stackoverflow",
+      "name": "Stack Overflow / Stack Exchange",
+      "category": "dev",
+      "domains": [
+        "stackoverflow.com",
+        "stackexchange.com",
+        "sstatic.net",
+        "superuser.com",
+        "serverfault.com",
+        "askubuntu.com"
+      ]
+    },
+    {
+      "id": "jetbrains",
+      "name": "JetBrains",
+      "category": "dev",
+      "domains": [
+        "jetbrains.com",
+        "jb.gg",
+        "intellij.net",
+        "kotlinlang.org"
+      ]
+    },
+    {
+      "id": "rust",
+      "name": "Rust / crates.io",
+      "category": "dev",
+      "domains": [
+        "rust-lang.org",
+        "rustup.rs",
+        "crates.io",
+        "docs.rs"
+      ]
+    },
+    {
+      "id": "golang",
+      "name": "Go",
+      "category": "dev",
+      "domains": [
+        "go.dev",
+        "golang.org"
+      ]
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "category": "dev",
+      "domains": [
+        "sentry.io",
+        "sentry-cdn.com"
+      ]
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "category": "dev",
+      "domains": [
+        "supabase.co",
+        "supabase.com"
+      ]
+    },
+    {
+      "id": "replit",
+      "name": "Replit",
+      "category": "dev",
+      "domains": [
+        "replit.com"
+      ]
+    },
+    {
+      "id": "stackblitz",
+      "name": "StackBlitz",
+      "category": "dev",
+      "domains": [
+        "stackblitz.com"
+      ]
+    },
+    {
       "id": "steam",
       "name": "Steam",
       "category": "gaming",
@@ -588,6 +979,51 @@
         "steamcontent.com",
         "steamserver.net",
         "steamusercontent.com"
+      ]
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "category": "productivity",
+      "domains": [
+        "notion.so",
+        "notion.com",
+        "notion.site",
+        "notion-static.com",
+        "notionusercontent.com"
+      ]
+    },
+    {
+      "id": "dropbox",
+      "name": "Dropbox",
+      "category": "productivity",
+      "domains": [
+        "dropbox.com",
+        "dropboxusercontent.com",
+        "dropboxstatic.com",
+        "dropboxapi.com"
+      ]
+    },
+    {
+      "id": "wikipedia",
+      "name": "Wikipedia / Wikimedia",
+      "category": "productivity",
+      "domains": [
+        "wikipedia.org",
+        "wikimedia.org",
+        "wikidata.org",
+        "wiktionary.org",
+        "mediawiki.org"
+      ]
+    },
+    {
+      "id": "speedtest",
+      "name": "Speedtest by Ookla",
+      "category": "other",
+      "domains": [
+        "speedtest.net",
+        "ookla.com",
+        "ooklaserver.net"
       ]
     },
     {
@@ -620,7 +1056,23 @@
         "google-analytics.com",
         "googleadservices.com",
         "adtrafficquality.google",
-        "app-measurement.com"
+        "app-measurement.com",
+        "firebaseio.com",
+        "firebaseapp.com",
+        "web.app",
+        "appspot.com",
+        "blogger.com",
+        "blogspot.com",
+        "googlesource.com",
+        "googleblog.com",
+        "googledrive.com",
+        "recaptcha.net",
+        "goo.gl",
+        "g.co",
+        "chromium.org",
+        "google.com.sg",
+        "google.com.tw",
+        "google.co.uk"
       ]
     },
     {
@@ -649,7 +1101,8 @@
         "fb.com",
         "fbsbx.com",
         "messenger.com",
-        "meta.com"
+        "meta.com",
+        "facebook.net"
       ]
     },
     {
@@ -680,7 +1133,12 @@
         "trafficmanager.net",
         "azureedge.net",
         "azurefd.net",
-        "msecnd.net"
+        "msecnd.net",
+        "outlook.com",
+        "office.net",
+        "microsoftpersonalcontent.com",
+        "aka.ms",
+        "skype.com"
       ]
     },
     {
@@ -690,9 +1148,6 @@
       "domains": [
         "amazon.com",
         "amazonaws.com",
-        "amazonvideo.com",
-        "primevideo.com",
-        "aiv-cdn.net",
         "media-amazon.com",
         "on.aws",
         "aws.dev",
