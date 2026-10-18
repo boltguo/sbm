@@ -1259,7 +1259,8 @@ select:focus {
   color: var(--ink);
 }
 
-label small {
+label small,
+.field-hint {
   color: var(--muted);
   font: 10px/1.5 var(--mono);
   letter-spacing: 0;

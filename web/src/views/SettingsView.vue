@@ -112,9 +112,10 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
 
           </aside>
           <label>{{ t('settings.autoReset') }}<SelectControl v-model="settings.reset.mode" :options="resetOptions" /></label>
-          <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="31"><small>{{ t('settings.dayHelp') }}</small></label>
+          <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="settings.reset.day" type="number" min="1" max="31"></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.hour') }}<span class="input-suffix"><input v-model.number="settings.reset.hour" type="number" min="0" max="23" step="1"><b>:00</b></span></label>
           <label v-if="settings.reset.mode === 'monthly'">{{ t('settings.timezone') }}<SelectControl v-model="settings.reset.timezone" :options="timezoneOptions" /></label>
+          <small v-if="settings.reset.mode === 'monthly' && settings.reset.day > 28" class="field-hint span-two">{{ t('settings.dayHelp') }}</small>
           <div class="section-save-row"><button class="primary">{{ t('settings.saveTraffic') }}</button></div>
         </div>
       </form>

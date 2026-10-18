@@ -130,9 +130,10 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
         <label>{{ t('settings.billingMode') }}<SelectControl v-model="form.trafficQuota.billingMode" :options="billingOptions" /></label>
         <label>{{ t('settings.headroom') }}<span class="input-suffix"><input v-model.number="form.trafficQuota.headroomPercent" type="number" min="0" max="50" step="1" required><b>%</b></span></label>
         <label>{{ t('settings.autoReset') }}<SelectControl v-model="form.reset.mode" :options="resetOptions" /></label>
-        <label v-if="form.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="form.reset.day" type="number" min="1" max="31" step="1" required><small>{{ t('settings.dayHelp') }}</small></label>
+        <label v-if="form.reset.mode === 'monthly'">{{ t('settings.day') }}<input v-model.number="form.reset.day" type="number" min="1" max="31" step="1" required></label>
         <label v-if="form.reset.mode === 'monthly'">{{ t('settings.hour') }}<span class="input-suffix"><input v-model.number="form.reset.hour" type="number" min="0" max="23" step="1"><b>:00</b></span></label>
         <label v-if="form.reset.mode === 'monthly'" class="span-two">{{ t('settings.timezone') }}<input v-model.trim="form.reset.timezone" placeholder="Asia/Shanghai" required></label>
+        <small v-if="form.reset.mode === 'monthly' && form.reset.day > 28" class="field-hint span-two">{{ t('settings.dayHelp') }}</small>
         <label class="gateway-enabled gateway-hard-stop span-two"><input v-model="form.stopOnQuota" type="checkbox" :disabled="!form.trafficQuota.amount">{{ t('egress.stopOnQuota') }}<small>{{ t('egress.stopOnQuotaHelp') }}</small></label>
         <label class="gateway-enabled span-two"><input v-model="form.enabled" type="checkbox">{{ t('egress.enableForm') }}</label>
         <div class="modal-actions span-two"><button type="button" class="secondary" :disabled="busy" @click="close">{{ t('protocol.cancel') }}</button><button class="primary" :disabled="busy">{{ busy ? t('egress.saving') : t('egress.save') }}</button></div>
