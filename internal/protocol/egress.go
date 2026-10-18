@@ -231,8 +231,9 @@ var (
 // ValidateAppRouteKey checks a key an administrator is about to set: it must
 // name a loaded app rule or a valid site domain.
 func ValidateAppRouteKey(appID string) bool {
-	if strings.HasPrefix(appID, "site:") {
-		return ValidateDomain(strings.TrimPrefix(appID, "site:")) == nil
+	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
+		// A registry suffix such as co.uk would route every site under it.
+		return ValidateDomain(domain) == nil && !model.IsPublicSuffix(strings.ToLower(domain))
 	}
 	if len(model.AppRuleSpecs()) > 0 {
 		return model.IsKnownAppRule(appID)
@@ -247,8 +248,10 @@ func ValidateStoredAppRouteKey(appID string) bool {
 	if ValidateAppRouteKey(appID) {
 		return true
 	}
-	if strings.HasPrefix(appID, "site:") {
-		return false
+	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
+		// A registry-suffix key saved before it was refused stays loadable
+		// and can be cleared; render skips it.
+		return ValidateDomain(domain) == nil
 	}
 	return appID != "" && len(appID) <= 128 && strings.IndexFunc(appID, unicode.IsControl) < 0
 }

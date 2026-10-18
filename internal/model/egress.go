@@ -18,10 +18,31 @@ type AppRuleSpec struct {
 }
 
 var (
-	appRulesMu   sync.RWMutex
-	appRuleSpecs []AppRuleSpec
-	appRuleByID  map[string]AppRuleSpec
+	appRulesMu     sync.RWMutex
+	appRuleSpecs   []AppRuleSpec
+	appRuleByID    map[string]AppRuleSpec
+	publicSuffixes map[string]bool
 )
+
+// SetPublicSuffixes records the multi-label public suffixes (co.uk, com.cn)
+// that the app rules treat as registry suffixes rather than sites.
+func SetPublicSuffixes(suffixes []string) {
+	set := make(map[string]bool, len(suffixes))
+	for _, suffix := range suffixes {
+		set[suffix] = true
+	}
+	appRulesMu.Lock()
+	publicSuffixes = set
+	appRulesMu.Unlock()
+}
+
+// IsPublicSuffix reports whether domain is a registry suffix shared by
+// unrelated sites, so routing it would capture all of them.
+func IsPublicSuffix(domain string) bool {
+	appRulesMu.RLock()
+	defer appRulesMu.RUnlock()
+	return publicSuffixes[domain]
+}
 
 func SetAppRules(specs []AppRuleSpec) {
 	copied := make([]AppRuleSpec, 0, len(specs))

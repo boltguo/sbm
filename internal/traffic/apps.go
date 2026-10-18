@@ -240,8 +240,13 @@ func LoadAppRules(raw []byte) error {
 	if len(suffixes) > 0 {
 		multiLabelSuffix = suffixes
 	}
+	active := make([]string, 0, len(multiLabelSuffix))
+	for suffix := range multiLabelSuffix {
+		active = append(active, suffix)
+	}
 	rulesMu.Unlock()
 	model.SetAppRules(specs)
+	model.SetPublicSuffixes(active)
 	return nil
 }
 

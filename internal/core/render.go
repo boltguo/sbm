@@ -174,7 +174,7 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 	sort.Strings(siteKeys)
 	for _, k := range siteKeys {
 		domain := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(k, "site:")))
-		if domain != "" {
+		if domain != "" && !model.IsPublicSuffix(domain) {
 			domainSteps = append(domainSteps, routeGroup{target: appRoutes[k], items: []string{domain}})
 		}
 	}
