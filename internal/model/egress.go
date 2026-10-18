@@ -87,6 +87,9 @@ type EgressGateway struct {
 	LocationOverride string             `json:"locationOverride"`
 	TrafficQuota     TrafficQuotaConfig `json:"trafficQuota"`
 	Reset            ResetConfig        `json:"reset"`
+	// StopOnQuota cuts off this gateway alone once its estimated provider
+	// usage reaches the stop point; other exits and sing-box keep running.
+	StopOnQuota bool `json:"stopOnQuota,omitempty"`
 }
 
 type GatewayGeo struct {

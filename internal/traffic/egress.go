@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"sort"
 	"time"
 
 	"github.com/boltguo/sbm/internal/model"
@@ -123,6 +125,71 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 	return err
 }
 
+// GatewaysOverHardLimit returns the enabled gateways with a hard stop whose
+// estimated provider usage has reached the stop point.
+func GatewaysOverHardLimit(cfg model.Config, state model.State) map[string]bool {
+	paused := map[string]bool{}
+	for _, g := range cfg.EgressGateways {
+		if !g.Enabled || !g.StopOnQuota {
+			continue
+		}
+		stop, err := g.TrafficQuota.NetworkStopBytes()
+		if err == nil && stop > 0 && state.Egress[g.ID].ProviderUsage(g.TrafficQuota) >= stop {
+			paused[g.ID] = true
+		}
+	}
+	return paused
+}
+
+// DesiredGatewayPauses is the set of gateways cfg should render as paused.
+func (t *Tracker) DesiredGatewayPauses(cfg model.Config) map[string]bool {
+	return GatewaysOverHardLimit(cfg, t.State())
+}
+
+// AppliedGatewayPauses is the set of gateways the running core rejects.
+func (t *Tracker) AppliedGatewayPauses() map[string]bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	applied := make(map[string]bool, len(t.state.AppliedGatewayPauses))
+	for _, id := range t.state.AppliedGatewayPauses {
+		applied[id] = true
+	}
+	return applied
+}
+
+// SetAppliedGatewayPauses records the paused set the core now runs with.
+func (t *Tracker) SetAppliedGatewayPauses(paused map[string]bool) error {
+	ids := make([]string, 0, len(paused))
+	for id, on := range paused {
+		if on {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	t.mu.Lock()
+	t.state.AppliedGatewayPauses = ids
+	t.mu.Unlock()
+	return t.Persist()
+}
+
+// GatewayPauseChanges signals when a gateway crosses its hard limit or comes
+// back under it, so the core can be re-rendered.
+func (t *Tracker) GatewayPauseChanges() <-chan struct{} {
+	t.pauseOnce.Do(func() { t.pauseSignal = make(chan struct{}, 1) })
+	return t.pauseSignal
+}
+
+func (t *Tracker) signalGatewayPauses() {
+	t.pauseOnce.Do(func() { t.pauseSignal = make(chan struct{}, 1) })
+	if maps.Equal(t.DesiredGatewayPauses(t.config.Get()), t.AppliedGatewayPauses()) {
+		return
+	}
+	select {
+	case t.pauseSignal <- struct{}{}:
+	default:
+	}
+}
+
 func hasEnabledGateway(gateways []model.EgressGateway) bool {
 	for _, g := range gateways {
 		if g.Enabled {
@@ -141,7 +208,9 @@ func (t *Tracker) SampleGateways(ctx context.Context) error {
 	}
 	// Commit each read with its baseline. A panel crash can then resume from
 	// the same kernel counters without losing or repeating the delta.
-	return errors.Join(t.sampleGateways(ctx, gateways), t.Persist())
+	err := errors.Join(t.sampleGateways(ctx, gateways), t.Persist())
+	t.signalGatewayPauses()
+	return err
 }
 
 // Hold the accounting lock across the core transaction. A periodic sampler
@@ -226,6 +295,7 @@ func (t *Tracker) ResetGateway(ctx context.Context, id string) error {
 	s.Adjustment = model.UsageAdjustment{}
 	t.state.Egress[id] = s
 	t.mu.Unlock()
+	defer t.signalGatewayPauses()
 	return t.Persist()
 }
 
@@ -263,6 +333,7 @@ func (t *Tracker) CalibrateGateway(ctx context.Context, id string, usedBytes int
 	}
 	t.state.Egress[id] = s
 	t.mu.Unlock()
+	defer t.signalGatewayPauses()
 	return t.Persist()
 }
 

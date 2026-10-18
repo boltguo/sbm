@@ -15,7 +15,7 @@ The panel gives you one subscription URL for all enabled inbounds.
 
 The Egress page manages optional gateways while keeping one master subscription. Independent VLESS UUIDs / HY2 passwords select Direct or a gateway on the same entry domain and protocol ports. Direct nodes are always available.
 
-For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans only warn; entry quota enforcement uses the entry public interface’s vnStat counters. Exit usage is estimated from WireGuard tunnel counters on A.
+For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans warn by default and can pause just that gateway at its threshold; entry quota enforcement uses the entry public interface’s vnStat counters. Exit usage is estimated from WireGuard tunnel counters on A.
 
 See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
 
@@ -148,7 +148,7 @@ The entry collects vnStat data every 30 seconds and saves history in `/var/lib/s
 
 The entry and each gateway have independent plan periods. For example, an entry reset on the 15th and a gateway reset on the 1st each reset their own current-period usage. History uses calendar months independently of billing periods. Manual resets require an available vnStat source and use its latest data. The vnStat database and traffic history are retained.
 
-Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. Gateway thresholds display warnings while the gateway keeps running. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
+Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. By default a gateway threshold only shows a warning while the gateway keeps running. With “Pause this gateway at its safety threshold” enabled, crossing it refuses only that gateway’s nodes and the apps pinned to it, without falling back to another exit; the entry and other gateways keep running, and the gateway resumes after a reset or calibration. Pausing and resuming each restart sing-box once. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
 
 When SBM is installed or a gateway is added mid-period, or the gateway host carries other traffic, the counters fall short of the provider bill. Select “Calibrate” on the overview plan card or a gateway card and enter the current-period usage from the provider dashboard. SBM keeps counting from there; the calibration ends at the next reset or a billing-mode change, and can be cleared manually.
 

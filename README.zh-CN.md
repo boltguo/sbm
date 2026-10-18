@@ -15,7 +15,7 @@ SBM 是管理单台 sing-box 服务器的小面板，适合个人 VPS 使用。
 
 “中继出口”页面可管理多个可选 Gateway。客户端仍使用一个总订阅，通过同域名、同端口的独立 VLESS UUID / HY2 password 选择 Direct 或某个 Gateway。Direct 节点始终可用。
 
-例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-VLESS-AWS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐仅预警，本机全局套餐按入口公网网卡的 vnStat 用量执行停机。出口用量由 A 上的 WireGuard 隧道计数估算。
+例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-VLESS-AWS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐默认仅预警，也可设为达到阈值时只暂停该出口；本机全局套餐按入口公网网卡的 vnStat 用量执行停机。出口用量由 A 上的 WireGuard 隧道计数估算。
 
 参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。Direct 和 Gateway 节点共用总订阅。节点名称冲突时加入端口与短标识，标记放在末尾；调整出口显示顺序可直接生效。
 
@@ -148,7 +148,7 @@ vnStat 每分钟保存一次。SBM 把 vnStat 最近一次更新之后的 sing-b
 
 入口和各 Gateway 分别使用独立的套餐周期。例如入口每月 15 日重置、出口每月 1 日重置，各自只重置本周期用量。历史按自然月汇总，与套餐账期独立。手动重置使用最新 vnStat 数据，需要数据源可用；vnStat 数据库与流量历史会保留。
 
-Gateway 卡片显示当前周期的 WireGuard 隧道估算，后台保存每日 TX/RX。出口套餐达到阈值时提示预警，继续运行；入口全局限额按本机公网网卡流量执行停机。入口总流量包含所有 Direct、Gateway 和系统通信，每个出口有独立的隧道统计。
+Gateway 卡片显示当前周期的 WireGuard 隧道估算，后台保存每日 TX/RX。出口套餐默认只在达到阈值时预警并继续运行；在出口设置中开启“达到安全阈值时暂停此出口”后，超出阈值只拒绝该出口的节点和固定到它的应用，不会改走其他出口，入口和其他出口照常运行，重置或校准后自动恢复，暂停和恢复时各重启一次 sing-box。入口全局限额按本机公网网卡流量执行停机。入口总流量包含所有 Direct、Gateway 和系统通信，每个出口有独立的隧道统计。
 
 中途安装 SBM、中途接入出口，或出口主机上还有其他流量时，统计会低于云厂商账单。在概览页的套餐卡片或 Gateway 卡片上点“校准用量”，填入云厂商后台显示的本周期已用量；SBM 在此基础上继续累计，到下次重置或修改计费方式时自动失效，也可以手动清除。
 

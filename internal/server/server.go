@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -808,12 +809,18 @@ func (s *Server) mutateChange(ctx context.Context, change func(*model.Config) er
 	// its own deadline so a dropped client connection cannot cause a rollback.
 	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	before, _ := s.Core.Renderer.Render(old)
-	after, _ := s.Core.Renderer.Render(next)
+	running, wanted := old, next
+	running.PausedGateways = s.Traffic.AppliedGatewayPauses()
+	wanted.PausedGateways = s.Traffic.DesiredGatewayPauses(next)
+	before, _ := s.Core.Renderer.Render(running)
+	after, _ := s.Core.Renderer.Render(wanted)
 	if !bytes.Equal(before, after) || !equalDirectInbounds(old.Inbounds, next.Inbounds) {
-		if err := s.Core.Apply(applyCtx, next, s.Traffic.State().QuotaExceeded); err != nil {
+		if err := s.Core.Apply(applyCtx, wanted, s.Traffic.State().QuotaExceeded); err != nil {
 			_ = s.Config.Replace(old)
 			return err
+		}
+		if err := s.Traffic.SetAppliedGatewayPauses(wanted.PausedGateways); err != nil {
+			log.Printf("egress: saving the applied gateway pauses failed: %v", err)
 		}
 	}
 	// Accounting failure is a statistics warning, never grounds to undo a
@@ -825,6 +832,53 @@ func (s *Server) mutateChange(ctx context.Context, change func(*model.Config) er
 	s.syncHostFirewall(old, next)
 	s.invalidateHealth()
 	return nil
+}
+
+// ReconcileGatewayPauses re-renders the core when a gateway crossed its hard
+// limit or came back under it. Only that gateway's users and pinned apps are
+// affected; the restart briefly interrupts every connection.
+func (s *Server) ReconcileGatewayPauses(ctx context.Context) error {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	cfg := s.Config.Get()
+	desired := s.Traffic.DesiredGatewayPauses(cfg)
+	applied := s.Traffic.AppliedGatewayPauses()
+	if maps.Equal(desired, applied) {
+		return nil
+	}
+	cfg.PausedGateways = desired
+	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := s.Core.Apply(applyCtx, cfg, s.Traffic.State().QuotaExceeded); err != nil {
+		return err
+	}
+	for id := range desired {
+		if !applied[id] {
+			log.Printf("egress: gateway %s reached its hard limit and is paused", id)
+		}
+	}
+	for id := range applied {
+		if !desired[id] {
+			log.Printf("egress: gateway %s is back under its hard limit and resumed", id)
+		}
+	}
+	s.invalidateHealth()
+	return s.Traffic.SetAppliedGatewayPauses(desired)
+}
+
+// WatchGatewayPauses applies hard-limit transitions until ctx ends.
+func (s *Server) WatchGatewayPauses(ctx context.Context) {
+	changes := s.Traffic.GatewayPauseChanges()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-changes:
+			if err := s.ReconcileGatewayPauses(ctx); err != nil {
+				log.Printf("egress: applying gateway hard limits failed: %v", err)
+			}
+		}
+	}
 }
 
 func equalDirectInbounds(old, next []model.Inbound) bool {

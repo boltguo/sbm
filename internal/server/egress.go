@@ -36,6 +36,7 @@ type gatewayUsageView struct {
 	ProviderRemainingBytes     int64                     `json:"providerRemainingBytes"`
 	ProviderProgress           float64                   `json:"providerProgress"`
 	Warning                    bool                      `json:"warning"`
+	Paused                     bool                      `json:"paused"`
 	UsageCalibrated            bool                      `json:"usageCalibrated"`
 	PeriodStartedAt            time.Time                 `json:"periodStartedAt"`
 	NextResetAt                time.Time                 `json:"nextResetAt"`
@@ -54,6 +55,7 @@ type gatewayView struct {
 
 func (s *Server) gatewayUsage(cfg model.Config) []gatewayUsageView {
 	state := s.Traffic.State()
+	paused := traffic.GatewaysOverHardLimit(cfg, state)
 	views := make([]gatewayUsageView, 0, len(cfg.EgressGateways))
 	for _, g := range model.OrderedGateways(cfg.EgressGateways) {
 		st := state.Egress[g.ID]
@@ -71,7 +73,7 @@ func (s *Server) gatewayUsage(cfg model.Config) []gatewayUsageView {
 		if allowance > 0 {
 			progress = min(100, float64(used)/float64(allowance)*100)
 		}
-		views = append(views, gatewayUsageView{ID: g.ID, Name: protocol.GatewayName(g), Marker: g.Marker, Location: protocol.GatewayLocation(g), Enabled: g.Enabled, TunnelTX: st.TX, TunnelRX: st.RX, TunnelBytes: tunnel, TrafficQuota: g.TrafficQuota, ProviderAllowanceBytes: allowance, EstimatedProviderUsedBytes: used, ProviderRemainingBytes: max(0, allowance-used), ProviderProgress: progress, Warning: stop > 0 && used >= stop, UsageCalibrated: st.Adjustment.Active(g.TrafficQuota.BillingMode), PeriodStartedAt: st.PeriodStartedAt, NextResetAt: st.NextResetAt, SampleHealth: st, PersistenceHealth: s.Traffic.PersistenceHealth()})
+		views = append(views, gatewayUsageView{ID: g.ID, Name: protocol.GatewayName(g), Marker: g.Marker, Location: protocol.GatewayLocation(g), Enabled: g.Enabled, TunnelTX: st.TX, TunnelRX: st.RX, TunnelBytes: tunnel, TrafficQuota: g.TrafficQuota, ProviderAllowanceBytes: allowance, EstimatedProviderUsedBytes: used, ProviderRemainingBytes: max(0, allowance-used), ProviderProgress: progress, Warning: stop > 0 && used >= stop, Paused: paused[g.ID], UsageCalibrated: st.Adjustment.Active(g.TrafficQuota.BillingMode), PeriodStartedAt: st.PeriodStartedAt, NextResetAt: st.NextResetAt, SampleHealth: st, PersistenceHealth: s.Traffic.PersistenceHealth()})
 	}
 	return views
 }

@@ -544,3 +544,58 @@ func TestAppRouteChangesApplyTogether(t *testing.T) {
 		t.Fatalf("rejected batches must not change routes: %+v restarts=%d", got, commands.restarts-restarts)
 	}
 }
+
+func TestGatewayHardStopPausesOnlyThatGateway(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	commander := &gatewayCommander{}
+	s.Core.Commands = commander
+	sampler := &serverGatewaySampler{values: map[string]traffic.GatewayCounters{}}
+	s.Traffic.Gateways = sampler
+	ctx := context.Background()
+	limited := gatewayInput(t, "203.0.113.1")
+	limited.StopOnQuota = true
+	limited.TrafficQuota = model.TrafficQuotaConfig{Amount: 1, Unit: "GB", BillingMode: "single", HeadroomPercent: 10}
+	gatewayRequest(t, s, "POST", "/api/egress", limited, 201)
+	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.2"), 201)
+	cfg := s.Config.Get()
+	stopped := cfg.EgressGateways[0]
+	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"youtube": stopped.ID}}, 200)
+	for _, g := range cfg.EgressGateways {
+		sampler.values[g.ID] = traffic.GatewayCounters{TXGeneration: "one", RXGeneration: "one"}
+	}
+	_ = s.Traffic.SampleGateways(ctx)
+	sampler.values[stopped.ID] = traffic.GatewayCounters{TX: 600_000_000, RX: 300_000_000, TXGeneration: "one", RXGeneration: "one"}
+	_ = s.Traffic.SampleGateways(ctx)
+	select {
+	case <-s.Traffic.GatewayPauseChanges():
+	default:
+		t.Fatal("crossing the hard limit was not signalled")
+	}
+	if err := s.ReconcileGatewayPauses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := os.ReadFile(s.Core.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(rendered)
+	other := cfg.EgressGateways[1]
+	if strings.Contains(text, stopped.EndpointTag()) || !strings.Contains(text, other.EndpointTag()) || !strings.Contains(text, `"action": "reject"`) {
+		t.Fatalf("paused gateway still rendered or other gateway missing:\n%s", text)
+	}
+	if usage := s.gatewayUsage(s.Config.Get())[0]; !usage.Paused || commander.stops != 0 || s.Traffic.State().QuotaExceeded {
+		t.Fatal("hard stop must pause only its gateway, never sing-box")
+	}
+	restarts := commander.restarts
+	if err := s.ReconcileGatewayPauses(ctx); err != nil || commander.restarts != restarts {
+		t.Fatal("an unchanged pause set restarted the core")
+	}
+	gatewayRequest(t, s, "POST", "/api/egress/"+stopped.ID+"/reset", nil, 200)
+	if err := s.ReconcileGatewayPauses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rendered, _ = os.ReadFile(s.Core.ConfigPath); !strings.Contains(string(rendered), stopped.EndpointTag()) || s.gatewayUsage(s.Config.Get())[0].Paused {
+		t.Fatal("reset did not resume the gateway")
+	}
+}

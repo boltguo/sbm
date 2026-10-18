@@ -62,8 +62,24 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 	endpoints := []any{}
 	gatewayRules := []any{}
 	enabledGateways := make(map[string]model.EgressGateway, len(buildContext.EgressGateways))
+	pausedGateways := map[string]bool{}
 	for _, g := range buildContext.EgressGateways {
 		if !g.Enabled {
+			continue
+		}
+		users := []string{}
+		for _, in := range cfg.Inbounds {
+			if in.Enabled {
+				users = append(users, protocol.EgressAuthUser(in, g.ID))
+			}
+		}
+		if cfg.PausedGateways[g.ID] {
+			// A gateway past its hard limit refuses its users instead of letting
+			// them fall back to another exit.
+			pausedGateways[g.ID] = true
+			if len(users) > 0 {
+				gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "reject"})
+			}
 			continue
 		}
 		enabledGateways[g.ID] = g
@@ -75,25 +91,21 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		// Resolve through the tunnel so geo-aware DNS answers for the gateway's
 		// location, not the entry's.
 		dnsServers = append(dnsServers, map[string]any{"type": "udp", "tag": g.DNSTag(), "server": gatewayDNSServer, "detour": g.EndpointTag()})
-		users := []string{}
-		for _, in := range cfg.Inbounds {
-			if in.Enabled {
-				users = append(users, protocol.EgressAuthUser(in, g.ID))
-			}
-		}
 		if len(users) > 0 {
 			gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "resolve", "server": g.DNSTag(), "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
 		}
 	}
-	if len(endpoints) > 0 {
-		rules = append(rules, buildAppRouteRules(cfg.AppRoutes, enabledGateways)...)
+	if len(endpoints) > 0 || len(pausedGateways) > 0 {
+		rules = append(rules, buildAppRouteRules(cfg.AppRoutes, enabledGateways, pausedGateways)...)
 		rules = append(rules, gatewayRules...)
+		route["rules"] = rules
+	}
+	if len(endpoints) > 0 {
 		doc["endpoints"] = endpoints
 		doc["dns"] = map[string]any{"servers": dnsServers}
 		// Outbounds without their own resolver keep using the entry's system
 		// DNS; sing-box requires naming it once there is more than one server.
 		route["default_domain_resolver"] = "local"
-		route["rules"] = rules
 	}
 
 	if cfg.OutboundStrategy != "" && cfg.OutboundStrategy != model.OutboundStrategyAuto {
@@ -109,16 +121,21 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]model.EgressGateway) []any {
+func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]model.EgressGateway, pausedGateways map[string]bool) []any {
 	if len(appRoutes) == 0 {
 		return nil
 	}
+	// An app pinned to a paused gateway is rejected (empty outbound tag), never
+	// sent through the node's own exit.
 	resolveTarget := func(target string) (outboundTag string, isGateway bool, ok bool) {
 		if target == model.AppRouteDirect {
 			return "direct", false, true
 		}
 		if g, exists := enabledGateways[target]; exists {
 			return g.EndpointTag(), true, true
+		}
+		if pausedGateways[target] {
+			return "", true, true
 		}
 		return "", false, false
 	}
@@ -195,7 +212,9 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 	var out []any
 	for _, g := range mergedDomains {
 		outboundTag, isGateway, _ := resolveTarget(g.target)
-		if isGateway {
+		if outboundTag == "" {
+			out = append(out, map[string]any{"domain_suffix": g.items, "action": "reject"})
+		} else if isGateway {
 			out = append(out,
 				map[string]any{"domain_suffix": g.items, "action": "resolve", "server": dnsTag(g.target), "strategy": "ipv4_only"},
 				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
@@ -224,9 +243,12 @@ func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]
 	seenCIDRs := map[string]bool{}
 	for _, spec := range specs {
 		target := appRoutes[spec.ID]
-		_, isGateway, ok := resolveTarget(target)
+		outboundTag, isGateway, ok := resolveTarget(target)
 		if !ok || len(spec.CIDRs) == 0 {
 			continue
+		}
+		if outboundTag == "" {
+			target = ""
 		}
 		var routed, rejected []string
 		for _, p := range spec.CIDRs {

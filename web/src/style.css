@@ -2454,6 +2454,8 @@ label small {
 .gateway-addresses { display:flex; flex-wrap:wrap; gap:16px; padding:14px; background:var(--paper-2); font-size:12px; }
 .gateway-enabled { display:flex; align-items:center; gap:10px; }
 .gateway-enabled input { width:18px; min-height:18px; height:18px; accent-color:var(--ink); }
+.gateway-hard-stop { flex-wrap:wrap; }
+.gateway-hard-stop small { flex-basis:100%; padding-left:28px; color:var(--muted); line-height:1.5; }
 .egress-overview { margin:24px 0; }
 .egress-overview-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:16px; }
 .egress-overview-head h2 { font-size:24px; }

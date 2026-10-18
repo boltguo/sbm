@@ -182,7 +182,13 @@ func runConfig(args []string) {
 	cfgStore, manager := loadCore(p)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := manager.Apply(ctx, cfgStore.Get(), *noStart); err != nil {
+	cfg := cfgStore.Get()
+	// Keep gateways past their hard limit cut off; a running panel corrects
+	// this set from its authoritative state on its next check.
+	if state, err := store.NewJSONFile[model.State](p.state).Load(); err == nil {
+		cfg.PausedGateways = traffic.GatewaysOverHardLimit(cfg, state)
+	}
+	if err := manager.Apply(ctx, cfg, *noStart); err != nil {
 		fatal(err.Error())
 	}
 	fmt.Println("sing-box 配置已生成并通过校验")
@@ -287,6 +293,10 @@ func runServe(args []string) {
 	if err := tracker.ReconcileGateways(ctx); err != nil {
 		log.Print("出口流量计数暂不可用，代理核心不受影响")
 	}
+	if err := app.ReconcileGatewayPauses(ctx); err != nil {
+		log.Printf("启动时应用出口硬限额失败：%v", err)
+	}
+	go app.WatchGatewayPauses(ctx)
 	trackerDone := make(chan struct{})
 	go func() {
 		tracker.Run(ctx, clashClient)

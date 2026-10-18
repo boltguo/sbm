@@ -163,6 +163,45 @@ func TestMultipleEgressRender(t *testing.T) {
 		t.Fatal("disabled inbound rendered")
 	}
 }
+func TestPausedGatewayRejectsItsUsersAndPinnedApps(t *testing.T) {
+	model.SetAppRules([]model.AppRuleSpec{
+		{ID: "youtube", Name: "YouTube", Category: "streaming", Domains: []string{"youtube.com"}},
+		{ID: "telegram", Name: "Telegram", Category: "messaging", Domains: []string{"telegram.org"}, CIDRs: []netip.Prefix{netip.MustParsePrefix("91.108.4.0/22"), netip.MustParsePrefix("2001:b28:f23d::/48")}},
+	})
+	defer model.SetAppRules(nil)
+	cfg := multiEgressConfig(t)
+	paused, running := cfg.EgressGateways[0], cfg.EgressGateways[1]
+	cfg.AppRoutes = map[string]string{"youtube": paused.ID, "telegram": paused.ID}
+	cfg.PausedGateways = map[string]bool{paused.ID: true}
+	data, err := (Renderer{Registry: protocol.DefaultRegistry()}).Render(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(paused.EndpointTag())) || !bytes.Contains(data, []byte(running.EndpointTag())) {
+		t.Fatal("paused gateway endpoint or DNS rendered, or another gateway dropped")
+	}
+	doc := decodeRendered(t, data)
+	var rejectedUsers, rejectedDomains, rejectedCIDRs []any
+	for _, item := range doc["route"].(map[string]any)["rules"].([]any) {
+		rule := item.(map[string]any)
+		if rule["action"] != "reject" {
+			continue
+		}
+		rejectedUsers = append(rejectedUsers, rule["auth_user"])
+		rejectedDomains = append(rejectedDomains, rule["domain_suffix"])
+		rejectedCIDRs = append(rejectedCIDRs, rule["ip_cidr"])
+	}
+	text := fmt.Sprint(rejectedUsers, rejectedDomains, rejectedCIDRs)
+	for _, want := range []string{protocol.EgressAuthUser(cfg.Inbounds[0], paused.ID), "youtube.com", "telegram.org", "91.108.4.0/22", "2001:b28:f23d::/48"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s is not rejected: %s", want, text)
+		}
+	}
+	if strings.Contains(text, protocol.EgressAuthUser(cfg.Inbounds[0], running.ID)) {
+		t.Fatal("running gateway's users rejected")
+	}
+}
+
 func TestNoGatewayRenderUnchanged(t *testing.T) {
 	cfg := multiEgressConfig(t)
 	cfg.EgressGateways = nil
@@ -260,6 +299,22 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 			}
 			if count > 0 && !bytes.Contains(data, []byte(`"action": "reject"`)) {
 				t.Fatal("gateway-routed IPv6 ranges must render a reject rule")
+			}
+			if count > 0 {
+				// A gateway past its hard limit must still produce a valid config.
+				paused := cfg
+				paused.PausedGateways = map[string]bool{cfg.EgressGateways[0].ID: true}
+				pausedData, err := renderer.Render(paused)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pausedPath := filepath.Join(t.TempDir(), "paused.json")
+				if err := os.WriteFile(pausedPath, pausedData, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := exec.Command(binary, "check", "-c", pausedPath).Run(); err != nil {
+					t.Fatalf("sing-box check failed with a paused gateway: gateways=%d strategy=%s", count, strategy)
+				}
 			}
 			path := filepath.Join(t.TempDir(), "config.json")
 			if err := os.WriteFile(path, data, 0600); err != nil {

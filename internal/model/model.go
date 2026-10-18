@@ -45,6 +45,9 @@ type Config struct {
 	Inbounds             []Inbound          `json:"inbounds"`
 	EgressGateways       []EgressGateway    `json:"egressGateways,omitempty"`
 	AppRoutes            map[string]string  `json:"appRoutes,omitempty"`
+	// PausedGateways is runtime state for rendering, never saved: gateways
+	// whose hard limit is reached are rendered as rejected.
+	PausedGateways map[string]bool `json:"-"`
 }
 
 // TrafficQuotaConfig stores the provider's advertised allowance and unit.
@@ -188,6 +191,8 @@ type State struct {
 	Egress                  map[string]GatewayTrafficState `json:"egress,omitempty"`
 	Network                 map[string]NetworkTrafficState `json:"network,omitempty"`
 	EgressAccountingPending bool                           `json:"egressAccountingPending,omitempty"`
+	// AppliedGatewayPauses lists the gateways the running core rejects.
+	AppliedGatewayPauses []string `json:"appliedGatewayPauses,omitempty"`
 }
 
 // NetworkTrafficState is independent of the sing-box reference counters.

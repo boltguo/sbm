@@ -188,7 +188,7 @@ export interface GatewayUsage {
   tunnelTX: number; tunnelRX: number; tunnelBytes: number
   trafficQuota: TrafficQuota
   providerAllowanceBytes: number; estimatedProviderUsedBytes: number; providerRemainingBytes: number; providerProgress: number
-  usageCalibrated?: boolean
+  usageCalibrated?: boolean; paused?: boolean
   warning: boolean; periodStartedAt: string; nextResetAt?: string
   sampleHealth: { status: 'waiting' | 'healthy' | 'interrupted' | 'disabled'; lastSuccessAt?: string; failureSince?: string; partial?: boolean }
   persistenceHealth?: SampleHealth
@@ -196,7 +196,7 @@ export interface GatewayUsage {
 export interface GatewayInput {
   enabled: boolean; marker: string; position: number; server: string; serverPort: number
   privateKey: string; peerPublicKey: string; locationOverride: string
-  trafficQuota: TrafficQuota; reset: ResetConfig
+  trafficQuota: TrafficQuota; reset: ResetConfig; stopOnQuota?: boolean
 }
 export interface EgressGateway extends GatewayInput {
   id: string; tunnelSlot: number; geo: GatewayGeo; publicKey: string; name: string; location: string

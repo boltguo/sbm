@@ -56,6 +56,8 @@ type Tracker struct {
 	pendingAppHistory     map[appHistoryKey]appHistoryUsage
 	persistenceHealth     SampleHealth
 	proxyMarks            []proxyMark
+	pauseOnce             sync.Once
+	pauseSignal           chan struct{}
 }
 
 type SampleHealth struct {
