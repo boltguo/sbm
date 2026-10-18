@@ -22,7 +22,7 @@ export const egressMessages = {
     'egress.quotaWarning': '已达到套餐预警阈值；此出口继续运行',
     'egress.paused': '已达到安全阈值，此出口已暂停，重置或校准后恢复',
     'egress.stopOnQuota': '达到安全阈值时暂停此出口',
-    'egress.stopOnQuotaHelp': '只拒绝此出口的节点和固定到它的应用，不会改走其他出口；入口和其他出口照常运行。暂停和恢复时各重启一次 sing-box。',
+    'egress.stopOnQuotaHelp': '只拒绝此出口的节点，不会改走其他出口；入口和其他出口照常运行。暂停和恢复时各重启一次 sing-box。',
     'egress.sample.waiting': '等待隧道采样', 'egress.sample.healthy': '隧道计数正常', 'egress.sample.interrupted': '隧道计数中断，显示最后结果', 'egress.sample.disabled': '出口已停用',
     'egress.persistenceFailed': '流量数据尚未完整保存，正在重试。',
     'egress.partialUsage': '本周期记录不完整，用量仅供参考。',
@@ -52,7 +52,6 @@ export const egressMessages = {
     'egress.guide.slotHelp': '使用面板隧道地址的第三段数字。例如卡片显示 10.66.2.1/24 与 10.66.2.2/32，则 X=2；不要一律填 1。',
     'egress.guide.aPublicKeyHelp': '打开该 Gateway 的编辑窗口，复制“A 端公钥（复制给 B）”。这里填 A 公钥，B 私钥由本地文件读取。',
     'egress.guide.reference': 'WireGuard 官方入门说明',
-    'egress.appRoutes': '应用分流',
   },
   en: {
     egress: 'Egress', 'egress.delete': 'Delete gateway',
@@ -77,7 +76,7 @@ export const egressMessages = {
     'egress.quotaWarning': 'Plan warning threshold reached; this gateway keeps running',
     'egress.paused': 'Safety threshold reached; this gateway is paused until a reset or calibration',
     'egress.stopOnQuota': 'Pause this gateway at its safety threshold',
-    'egress.stopOnQuotaHelp': 'Only this gateway’s nodes and the apps pinned to it are refused; they never fall back to another exit. The entry and other gateways keep running. Pausing and resuming each restart sing-box once.',
+    'egress.stopOnQuotaHelp': 'Only this gateway’s nodes are refused; they never fall back to another exit. The entry and other gateways keep running. Pausing and resuming each restart sing-box once.',
     'egress.sample.waiting': 'Waiting for a tunnel sample', 'egress.sample.healthy': 'Tunnel counters healthy', 'egress.sample.interrupted': 'Tunnel sampling interrupted; showing the last result', 'egress.sample.disabled': 'Gateway disabled',
     'egress.persistenceFailed': 'Traffic data is not fully saved yet. Retrying.',
     'egress.partialUsage': 'Incomplete period coverage; usage is approximate.',
@@ -107,6 +106,5 @@ export const egressMessages = {
     'egress.guide.slotHelp': 'Use the third segment of the tunnel addresses shown in the panel. For 10.66.2.1/24 and 10.66.2.2/32, X=2; do not always use 1.',
     'egress.guide.aPublicKeyHelp': 'Edit this gateway and copy A public key (copy to B). Enter A’s public key here; B’s private key is read from its local file.',
     'egress.guide.reference': 'WireGuard official quick start',
-    'egress.appRoutes': 'App routing',
   },
 }

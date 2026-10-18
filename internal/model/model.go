@@ -1,6 +1,8 @@
 package model
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"math"
 	"math/big"
@@ -24,8 +26,6 @@ const (
 	TrafficUnitGiB              = "GiB"
 	TrafficGBBytes              = 1_000_000_000
 	TrafficGiBBytes             = 1024 * 1024 * 1024
-
-	AppRouteDirect = "direct"
 )
 
 type Config struct {
@@ -44,10 +44,24 @@ type Config struct {
 	OutboundStrategy     string             `json:"outboundStrategy,omitempty"`
 	Inbounds             []Inbound          `json:"inbounds"`
 	EgressGateways       []EgressGateway    `json:"egressGateways,omitempty"`
-	AppRoutes            map[string]string  `json:"appRoutes,omitempty"`
 	// PausedGateways is runtime state for rendering, never saved: gateways
 	// whose hard limit is reached are rendered as rejected.
 	PausedGateways map[string]bool `json:"-"`
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type configAlias Config
+	var raw struct {
+		configAlias
+		LegacyAppRoutes map[string]string `json:"appRoutes,omitempty"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&raw); err != nil {
+		return err
+	}
+	*c = Config(raw.configAlias)
+	return nil
 }
 
 // TrafficQuotaConfig stores the provider's advertised allowance and unit.

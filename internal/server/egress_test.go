@@ -371,185 +371,6 @@ func TestGatewayDraftValidationAndKeysAPI(t *testing.T) {
 	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.2"), 400)
 }
 
-func TestAppRoutesAPIAndRendering(t *testing.T) {
-	s, _ := testServer(t)
-	s.Geo = &testGeo{}
-	s.Core.Commands = &gatewayCommander{}
-
-	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
-	gwID := s.Config.Get().EgressGateways[0].ID
-
-	// GET initial app-routes
-	resp := gatewayRequest(t, s, "GET", "/api/egress/app-routes", nil, 200)
-	var view appRoutesView
-	if err := json.Unmarshal(resp.Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
-	}
-	if len(view.Gateways) != 1 || view.Gateways[0].ID != gwID || len(view.Apps) == 0 {
-		t.Fatalf("unexpected initial appRoutesView: gateways=%d apps=%d", len(view.Gateways), len(view.Apps))
-	}
-
-	// Set YouTube -> direct (entry machine itself), OpenAI -> gwID, Telegram -> gwID, and custom site:linux.do -> direct
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "direct"}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "openai", "target": gwID}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "telegram", "target": gwID}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:linux.do", "target": "direct"}, 200)
-
-	// Invalid app ID or gateway ID must be rejected
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "nonexistent-app", "target": "direct"}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "missing-gw"}, 400)
-
-	cfg := s.Config.Get()
-	if cfg.AppRoutes["youtube"] != "direct" || cfg.AppRoutes["openai"] != gwID || cfg.AppRoutes["site:linux.do"] != "direct" {
-		t.Fatalf("unexpected saved AppRoutes: %+v", cfg.AppRoutes)
-	}
-
-	// Verify rendered sing-box config places app route rules BEFORE auth_user gateway rules
-	rendered, err := s.Core.Renderer.Render(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	renderedStr := string(rendered)
-	youtubeIdx := strings.Index(renderedStr, "googlevideo.com")
-	openaiIdx := strings.Index(renderedStr, "chatgpt.com")
-	authUserIdx := strings.Index(renderedStr, "auth_user")
-	if youtubeIdx < 0 || openaiIdx < 0 || authUserIdx < 0 {
-		t.Fatalf("expected app domains and auth_user in rendered config:\n%s", renderedStr)
-	}
-	if youtubeIdx > authUserIdx || openaiIdx > authUserIdx {
-		t.Fatalf("app route rules must appear before auth_user fallback rules")
-	}
-	// The tunnel is IPv4 only: Telegram's IPv4 ranges use the gateway and its
-	// IPv6 ranges are rejected rather than leaving through the node's exit.
-	cidrAction := func(data []byte, cidr string) string {
-		t.Helper()
-		var doc struct {
-			Route struct {
-				Rules []map[string]any `json:"rules"`
-			} `json:"route"`
-		}
-		if err := json.Unmarshal(data, &doc); err != nil {
-			t.Fatal(err)
-		}
-		for _, rule := range doc.Route.Rules {
-			items, _ := rule["ip_cidr"].([]any)
-			for _, item := range items {
-				if item == cidr {
-					if rule["action"] == "route" {
-						return rule["outbound"].(string)
-					}
-					return rule["action"].(string)
-				}
-			}
-		}
-		return ""
-	}
-	gatewayTag := cfg.EgressGateways[0].EndpointTag()
-	if got := cidrAction(rendered, "91.108.4.0/22"); got != gatewayTag {
-		t.Fatalf("telegram IPv4 range routed to %q, want %q", got, gatewayTag)
-	}
-	if got := cidrAction(rendered, "2001:b28:f23d::/48"); got != "reject" {
-		t.Fatalf("telegram IPv6 range on a gateway route = %q, want reject", got)
-	}
-	directCfg := cfg
-	directCfg.AppRoutes = map[string]string{"telegram": model.AppRouteDirect}
-	directRendered, err := s.Core.Renderer.Render(directCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cidrAction(directRendered, "2001:b28:f23d::/48"); got != "direct" {
-		t.Fatalf("telegram IPv6 range on a direct route = %q, want direct", got)
-	}
-
-	// Deleting the gateway must automatically clean up AppRoutes referencing gwID while preserving "direct" routes
-	gatewayRequest(t, s, "DELETE", "/api/egress/"+gwID, nil, 200)
-	cfgAfter := s.Config.Get()
-	if _, exists := cfgAfter.AppRoutes["openai"]; exists {
-		t.Fatalf("expected deleted gateway route to be pruned, got %+v", cfgAfter.AppRoutes)
-	}
-	if cfgAfter.AppRoutes["youtube"] != "direct" {
-		t.Fatalf("expected direct route for youtube to be preserved, got %+v", cfgAfter.AppRoutes)
-	}
-}
-
-func TestAppRoutesToleratesUnloadedRulesAndNormalizesSites(t *testing.T) {
-	s, _ := testServer(t)
-	s.Geo = &testGeo{}
-	s.Core.Commands = &gatewayCommander{}
-	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
-	cfg := s.Config.Get()
-	gwID := cfg.EgressGateways[0].ID
-
-	// A route saved under a rule that a later rule file no longer contains,
-	// plus a mixed-case site key written before keys were normalized.
-	cfg.AppRoutes = map[string]string{"openai": gwID, "ghost-app": gwID, "site:Legacy.Example": model.AppRouteDirect}
-	if err := s.Config.Replace(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := protocol.DefaultRegistry().ValidateConfig(cfg); err != nil {
-		t.Fatalf("an unloaded app rule must not block startup: %v", err)
-	}
-	rendered, err := s.Core.Renderer.Render(cfg)
-	if err != nil || strings.Contains(string(rendered), "ghost") {
-		t.Fatalf("render must ignore unloaded app rules: err=%v", err)
-	}
-	var view appRoutesView
-	if err := json.Unmarshal(gatewayRequest(t, s, "GET", "/api/egress/app-routes", nil, 200).Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
-	}
-	if _, shown := view.Routes["ghost-app"]; shown || view.Routes["openai"] != gwID {
-		t.Fatalf("view must hide only unloaded rules: %+v", view.Routes)
-	}
-
-	// Unrelated changes keep working, and stale or mixed-case keys stay removable.
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "youtube", "target": "direct"}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "ghost-app", "target": gwID}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "ghost-app", "target": "default"}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:Legacy.Example", "target": ""}, 200)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"appId": "site:Linux.DO", "target": gwID}, 200)
-	want := map[string]string{"openai": gwID, "youtube": model.AppRouteDirect, "site:linux.do": gwID}
-	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
-		t.Fatalf("routes=%+v want=%+v", got, want)
-	}
-
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"site:A.example": "direct", "site:a.example": gwID}}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"site:A.example": "direct", "openai": gwID}}, 200)
-	want = map[string]string{"openai": gwID, "site:a.example": model.AppRouteDirect}
-	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
-		t.Fatalf("bulk routes=%+v want=%+v", got, want)
-	}
-}
-
-func TestAppRouteChangesApplyTogether(t *testing.T) {
-	s, _ := testServer(t)
-	s.Geo = &testGeo{}
-	commands := &gatewayCommander{}
-	s.Core.Commands = commands
-	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.10"), 201)
-	gwID := s.Config.Get().EgressGateways[0].ID
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": gwID, "youtube": "direct", "site:linux.do": "direct"}}, 200)
-
-	restarts := commands.restarts
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "", "youtube": gwID, "telegram": "direct", "site:Linux.DO": "default", "site:Example.COM": gwID}}, 200)
-	if commands.restarts != restarts+1 {
-		t.Fatalf("a batch must restart sing-box once, got %d restarts", commands.restarts-restarts)
-	}
-	want := map[string]string{"youtube": gwID, "telegram": model.AppRouteDirect, "site:example.com": gwID}
-	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) {
-		t.Fatalf("routes=%+v want=%+v", got, want)
-	}
-
-	// A batch with any invalid entry changes nothing.
-	restarts = commands.restarts
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "nonexistent-app": "direct"}}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"openai": "direct", "youtube": "missing-gw"}}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{"site:A.example": "direct", "site:a.example": ""}}, 400)
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"changes": map[string]string{}}, 400)
-	if got := s.Config.Get().AppRoutes; !reflect.DeepEqual(got, want) || commands.restarts != restarts {
-		t.Fatalf("rejected batches must not change routes: %+v restarts=%d", got, commands.restarts-restarts)
-	}
-}
-
 func TestGatewayHardStopPausesOnlyThatGateway(t *testing.T) {
 	s, _ := testServer(t)
 	s.Geo = &testGeo{}
@@ -565,7 +386,6 @@ func TestGatewayHardStopPausesOnlyThatGateway(t *testing.T) {
 	gatewayRequest(t, s, "POST", "/api/egress", gatewayInput(t, "203.0.113.2"), 201)
 	cfg := s.Config.Get()
 	stopped := cfg.EgressGateways[0]
-	gatewayRequest(t, s, "PUT", "/api/egress/app-routes", map[string]any{"routes": map[string]string{"youtube": stopped.ID}}, 200)
 	for _, g := range cfg.EgressGateways {
 		sampler.values[g.ID] = traffic.GatewayCounters{TXGeneration: "one", RXGeneration: "one"}
 	}
@@ -591,9 +411,6 @@ func TestGatewayHardStopPausesOnlyThatGateway(t *testing.T) {
 	}
 	if usage := s.gatewayUsage(s.Config.Get())[0]; !usage.Paused || commander.stops != 0 || s.Traffic.State().QuotaExceeded {
 		t.Fatal("hard stop must pause only its gateway, never sing-box")
-	}
-	if view := s.appRoutesView(); !view.Gateways[0].Paused || view.Gateways[1].Paused {
-		t.Fatalf("app routing view does not flag the paused gateway: %+v", view.Gateways)
 	}
 	restarts := commander.restarts
 	if err := s.ReconcileGatewayPauses(ctx); err != nil || commander.restarts != restarts {

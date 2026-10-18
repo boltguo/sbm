@@ -28,80 +28,6 @@ function mount(file, mocks, props = {}, emitted = []) {
   return context.exports.default.setup(Vue.reactive(props), { emit: (...args) => emitted.push(args), expose() {} })
 }
 
-// Traffic apps: a routes poll that started before an inline save must not undo it.
-{
-  const polls = []
-  const view = routes => ({ gateways: [{ id: 'gw', name: 'GW', location: '', enabled: true }], apps: [], routes })
-  const api = async url => {
-    if (url === '/api/egress/app-routes') {
-      const poll = deferred()
-      polls.push(poll)
-      return poll.promise
-    }
-    return { apps: [], totalBytes: 0, totalUpload: 0, totalDownload: 0, timezone: 'UTC' }
-  }
-  const put = async () => view({ openai: 'gw' })
-  const apps = mount('components/TrafficApps.vue', { '../api': { api, put, post: async () => ({}), guard: () => action => action }, '../i18n': i18n }, { unit: 'GB' })
-  const loading = apps.load(true)
-  await apps.changeInlineRoute('openai', 'gw')
-  polls[0].resolve(view({}))
-  await loading
-  await tick()
-  assert.deepEqual({ ...apps.routesView.value.routes }, { openai: 'gw' }, 'a stale poll replaced the saved route')
-  const fresh = apps.load(true)
-  polls[1].resolve(view({ youtube: 'direct' }))
-  await fresh
-  await tick()
-  assert.deepEqual({ ...apps.routesView.value.routes }, { youtube: 'direct' }, 'a poll after the save must still apply')
-}
-
-// Routing modal: selections wait until applied, then go out in one request.
-{
-  const view = routes => ({ gateways: [{ id: 'gw', name: 'GW', location: '', enabled: true }], apps: [], routes })
-  const fetches = []
-  const puts = []
-  let failNext = false
-  const api = async () => {
-    const fetch = deferred()
-    fetches.push(fetch)
-    return fetch.promise
-  }
-  const put = async (_url, body) => {
-    puts.push(structuredClone(body))
-    if (failNext) {
-      failNext = false
-      throw new Error('apply failed')
-    }
-    return view({ youtube: 'direct' })
-  }
-  const emitted = []
-  const modal = mount('components/AppRouteModal.vue', { '../api': { api, put, guard: () => action => action }, '../i18n': i18n }, { open: false, initialData: view({ openai: 'gw' }) }, emitted)
-
-  modal.stageRoute('youtube', 'direct')
-  modal.stageRoute('openai', '')
-  modal.stageRoute('telegram', 'gw')
-  modal.stageRoute('telegram', '')
-  assert.equal(puts.length, 0, 'choosing a route must not apply it yet')
-  assert.deepEqual({ ...modal.pending.value }, { youtube: 'direct', openai: '' }, 'reverting a choice must drop it')
-  assert.equal(modal.targetOf('openai'), '')
-  assert.equal(modal.targetOf('youtube'), 'direct')
-
-  failNext = true
-  await assert.rejects(modal.applyChanges())
-  assert.equal(modal.pendingCount.value, 2, 'a failed apply must keep the choices')
-  assert.equal(modal.savingId.value, '')
-
-  const opened = modal.fetchRoutes()
-  await modal.applyChanges()
-  fetches[0].resolve(view({ openai: 'gw' }))
-  await opened
-  assert.deepEqual(puts.at(-1), { changes: { youtube: 'direct', openai: '' } }, 'all choices go out in one request')
-  assert.equal(puts.length, 2)
-  assert.deepEqual({ ...modal.view.value.routes }, { youtube: 'direct' }, 'the fetch started on open replaced the applied routes')
-  assert.equal(modal.pendingCount.value, 0)
-  assert.ok(emitted.some(([name]) => name === 'updated') && emitted.some(([name]) => name === 'close'))
-}
-
 // Dashboard: quick format switches must leave the QR on the selected format.
 {
   const renders = []
@@ -163,4 +89,4 @@ function mount(file, mocks, props = {}, emitted = []) {
   assert.ok(picker.calendarDays.value.filter(cell => cell.iso.startsWith('10000-')).every(cell => cell.disabled))
 }
 
-console.log('UI state regressions (routes, staged routing, subscription QR, date picker): passed')
+console.log('UI state regressions (subscription QR, date picker): passed')

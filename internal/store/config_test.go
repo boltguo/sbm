@@ -66,3 +66,38 @@ func TestConfigStoreClonesEgressAndAcceptsExistingV4(t *testing.T) {
 		t.Fatal("existing v4 no longer loads")
 	}
 }
+
+func TestOpenConfigIgnoresLegacyAppRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+  "version": 4,
+  "domain": "node.example.com",
+  "panelPort": 2096,
+  "adminPasswordHash": "hash",
+  "sessionSecret": "sssssssssssssssssssssssssssssssssssssssssss",
+  "clashApiSecret": "sssssssssssssssssssssssssssssssssssssssssss",
+  "subscriptionToken": "sssssssssssssssssssssssssssssssssssssssssss",
+  "trafficQuota": {"amount": 200, "unit": "GB", "billingMode": "double", "headroomPercent": 5},
+  "reset": {"mode": "monthly", "day": 1, "timezone": "UTC"},
+  "outboundStrategy": "auto",
+  "appRoutes": {"openai": "direct", "site:linux.do": "direct"},
+  "inbounds": []
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenConfig(path)
+	if err != nil {
+		t.Fatalf("OpenConfig rejected legacy appRoutes field: %v", err)
+	}
+	if err := store.Replace(store.Get()); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "appRoutes") {
+		t.Fatalf("saved config still contains appRoutes: %s", string(saved))
+	}
+}

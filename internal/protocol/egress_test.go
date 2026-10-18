@@ -154,19 +154,3 @@ func TestWireGuardKeysStrict(t *testing.T) {
 		}
 	}
 }
-
-func TestSiteRouteKeysRefuseRegistrySuffixes(t *testing.T) {
-	model.SetPublicSuffixes([]string{"co.uk", "com.cn"})
-	defer model.SetPublicSuffixes(nil)
-	for _, key := range []string{"site:co.uk", "site:CO.UK", "site:com.cn"} {
-		if ValidateAppRouteKey(key) {
-			t.Fatalf("%s would route every site under the suffix", key)
-		}
-	}
-	if !ValidateAppRouteKey("site:bbc.co.uk") || !ValidateAppRouteKey("site:linux.do") {
-		t.Fatal("registrable domains refused")
-	}
-	if !ValidateStoredAppRouteKey("site:co.uk") {
-		t.Fatal("an already saved suffix key must stay loadable so it can be cleared")
-	}
-}

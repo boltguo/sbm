@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/traffic"
 )
 
@@ -23,8 +22,8 @@ func TestLoadAppRulesReadsConfigDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	loadAppRules("", configPath)
-	if !model.IsKnownAppRule("myapp") || model.IsKnownAppRule("openai") {
-		t.Fatal("config apply and serve must load app-rules.json beside the config")
+	if appID, _ := traffic.ClassifyConnection(traffic.ClashConnectionMeta{Host: "myapp.example"}); appID != "myapp" {
+		t.Fatalf("got appID=%q, want myapp", appID)
 	}
 
 	// A broken file keeps the rules already active instead of failing.
@@ -32,7 +31,7 @@ func TestLoadAppRulesReadsConfigDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	loadAppRules("", configPath)
-	if !model.IsKnownAppRule("myapp") {
+	if appID, _ := traffic.ClassifyConnection(traffic.ClashConnectionMeta{Host: "myapp.example"}); appID != "myapp" {
 		t.Fatal("a broken rule file must not replace the active rules")
 	}
 }

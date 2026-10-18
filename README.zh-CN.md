@@ -17,22 +17,9 @@ SBM 是管理单台 sing-box 服务器的小面板，适合个人 VPS 使用。
 
 例如 `US-LosAngeles-VLESS` 从入口 A 出网，`US-Boardman-VLESS-AWS` 经 WireGuard 从 AWS B 出网；每个出口独立保存位置、标记、套餐、重置周期和流量基线。Gateway 套餐默认仅预警，也可设为达到阈值时只暂停该出口；本机全局套餐按入口公网网卡的 vnStat 用量执行停机。出口用量由 A 上的 WireGuard 隧道计数估算。
 
-参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。Direct 和 Gateway 节点共用总订阅。节点名称冲突时加入端口与短标识，标记放在末尾；调整出口显示顺序可直接生效。
+参见 [多 Gateway WireGuard 配置与排查](docs/WIREGUARD-EXIT.md)。Direct 和 Gateway 节点共用总订阅。经 Gateway 出站的域名通过该 Gateway 隧道解析，CDN 按出口位置返回节点。节点名称冲突时加入端口与短标识，标记放在末尾；调整出口显示顺序可直接生效。
 
-在“流量 → 应用与站点”或“中继出口 → 应用分流”中，可把指定应用或站点固定到“本机直出”或某个 Gateway。该设置对所有节点生效，优先于节点本身的出口，应用修改时会重启 sing-box。
-
-- 客户端发来域名时直接按该域名匹配，只有发来 IP 时才嗅探 TLS SNI 或 HTTP Host，因此启用 ECH 的站点也能命中规则。
-- 经 Gateway 出站的域名通过该 Gateway 隧道解析，CDN 按出口位置返回节点。
-- Gateway 隧道只承载 IPv4，固定到 Gateway 的应用发起的 IPv6 连接会失败，不会改走其他出口。
-- YouTube 的播放地址绑定请求 IP。单独改 YouTube 出口时，建议把“Google 公共服务”设为同一出口，否则浏览器复用 Google 连接时可能卡顿或 403。
-
-分流要稳定生效，客户端也需要配合：
-
-- 使用 fake-ip 或远程解析，让客户端把域名交给服务器。客户端在本地解析后只发 IP 时，服务器只能靠嗅探识别；QUIC（UDP/443）嗅探失败的连接会按节点默认出口出站。若 YouTube 等站点的分流偶尔不生效，可在客户端对这些站点屏蔽 UDP/443，让浏览器改用 TCP。
-- 本机直出走双栈时，YouTube 等绑定 IP 的服务可能因请求分别走 IPv4 和 IPv6 而失败，可在“设置 → 代理出口网络”中选择“优先 IPv4”。
-- 服务器端分流只作用于进入本节点的流量；客户端规则把某个站点交给其他节点或直连时，服务器端规则不会生效。
-
-“应用与站点”按连接归类代理流量。两次采样（1 秒）之间关闭的连接无法归到具体应用，这部分计入“未归属”，各项占比之和等于代理总量。
+“流量 → 应用与站点”按连接归类代理流量。两次采样（1 秒）之间关闭的连接无法归到具体应用，这部分计入“未归属”，各项占比之和等于代理总量。
 
 ## 安装
 
@@ -68,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 安装器使用经过验证的 SBM 与 sing-box 版本组合。安装指定的已发布 SBM 版本时，设置 `SBM_VERSION`：
 
 ```bash
-SBM_VERSION=2.1.6 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.7 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 当前安装器支持 SBM 2.1 及以上的 2.x 发布，自动选择该 Release 对应的 sing-box 版本。排错或测试时可用 `SING_BOX_VERSION` 指定 core 版本。
@@ -159,7 +146,7 @@ vnStat 每分钟保存一次。SBM 把 vnStat 最近一次更新之后的 sing-b
 
 入口和各 Gateway 分别使用独立的套餐周期。例如入口每月 15 日重置、出口每月 1 日重置，各自只重置本周期用量。历史按自然月汇总，与套餐账期独立。手动重置使用最新 vnStat 数据，需要数据源可用；vnStat 数据库与流量历史会保留。
 
-Gateway 卡片显示当前周期的 WireGuard 隧道估算，后台保存每日 TX/RX。出口套餐默认只在达到阈值时预警并继续运行；在出口设置中开启“达到安全阈值时暂停此出口”后，超出阈值只拒绝该出口的节点和固定到它的应用，不会改走其他出口，入口和其他出口照常运行，重置或校准后自动恢复，暂停和恢复时各重启一次 sing-box。入口全局限额按本机公网网卡流量执行停机。入口总流量包含所有 Direct、Gateway 和系统通信，每个出口有独立的隧道统计。
+Gateway 卡片显示当前周期的 WireGuard 隧道估算，后台保存每日 TX/RX。出口套餐默认只在达到阈值时预警并继续运行；在出口设置中开启“达到安全阈值时暂停此出口”后，超出阈值只拒绝该出口的节点，不会改走其他出口，入口和其他出口照常运行，重置或校准后自动恢复，暂停和恢复时各重启一次 sing-box。入口全局限额按本机公网网卡流量执行停机。入口总流量包含所有 Direct、Gateway 和系统通信，每个出口有独立的隧道统计。
 
 中途安装 SBM、中途接入出口，或出口主机上还有其他流量时，统计会低于云厂商账单。在概览页的套餐卡片或 Gateway 卡片上点“校准用量”，填入云厂商后台显示的本周期已用量；SBM 在此基础上继续累计，到下次重置或修改计费方式时自动失效，也可以手动清除。
 

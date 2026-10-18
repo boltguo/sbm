@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/boltguo/sbm/internal/model"
 )
 
 const maxDailyAppDomains = 200
@@ -123,8 +121,6 @@ type appRule struct {
 	ipLabel    string
 }
 
-type AppRuleSpec = model.AppRuleSpec
-
 var (
 	rulesMu          sync.RWMutex
 	builtInAppRules  []appRule
@@ -133,14 +129,6 @@ var (
 	appMetaByID      map[string]appRule
 	multiLabelSuffix map[string]struct{}
 )
-
-func AppRuleSpecs() []AppRuleSpec {
-	return model.AppRuleSpecs()
-}
-
-func IsKnownAppRule(id string) bool {
-	return model.IsKnownAppRule(id)
-}
 
 func init() {
 	if err := LoadAppRules(defaultAppRulesJSON); err != nil {
@@ -165,7 +153,6 @@ func LoadAppRules(raw []byte) error {
 		return fmt.Errorf("parse app rules JSON: %w", err)
 	}
 	rules := make([]appRule, 0, len(parsed.Rules))
-	specs := make([]model.AppRuleSpec, 0, len(parsed.Rules))
 	domMap := make(map[string]int, len(parsed.Rules)*4)
 	subMap := make(map[string]int, 16)
 	metaMap := make(map[string]appRule, len(parsed.Rules)+4)
@@ -213,14 +200,6 @@ func LoadAppRules(raw []byte) error {
 			}
 		}
 		rules = append(rules, rule)
-		specs = append(specs, model.AppRuleSpec{
-			ID:         rule.id,
-			Name:       rule.name,
-			Category:   rule.category,
-			Domains:    append([]string(nil), rule.domains...),
-			Subdomains: append([]string(nil), rule.subdomains...),
-			CIDRs:      append([]netip.Prefix(nil), rule.cidrs...),
-		})
 		metaMap[id] = rule
 	}
 
@@ -240,13 +219,7 @@ func LoadAppRules(raw []byte) error {
 	if len(suffixes) > 0 {
 		multiLabelSuffix = suffixes
 	}
-	active := make([]string, 0, len(multiLabelSuffix))
-	for suffix := range multiLabelSuffix {
-		active = append(active, suffix)
-	}
 	rulesMu.Unlock()
-	model.SetAppRules(specs)
-	model.SetPublicSuffixes(active)
 	return nil
 }
 

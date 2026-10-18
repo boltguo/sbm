@@ -17,22 +17,9 @@ The Egress page manages optional gateways while keeping one master subscription.
 
 For example, `US-LosAngeles-VLESS` leaves through entry A, while `US-Boardman-VLESS-AWS` leaves through AWS B over WireGuard. Each gateway keeps its own location, marker, plan, reset schedule, and traffic baselines. Gateway plans warn by default and can pause just that gateway at its threshold; entry quota enforcement uses the entry public interface’s vnStat counters. Exit usage is estimated from WireGuard tunnel counters on A.
 
-See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
+See [multi-gateway WireGuard setup and troubleshooting](docs/WIREGUARD-EXIT.en.md). Direct and gateway nodes share the master subscription. Domains leaving through a gateway are resolved through that gateway's tunnel, so CDNs answer for the exit's location. Conflicting node names receive a port and short identifier before the final marker. Display-order changes take effect immediately.
 
-**Traffic → Apps & sites** or **Egress → App routing** pins an application or site to Entry Direct or a specific gateway. The choice applies to every node and takes precedence over the node’s own exit. Applying changes restarts sing-box.
-
-- A domain sent by the client is matched as is; only IP destinations are sniffed for the TLS SNI or HTTP Host, so sites using ECH still match.
-- Domains leaving through a gateway are resolved through that gateway's tunnel, so CDNs answer for the exit's location.
-- Gateway tunnels carry IPv4 only, so IPv6 connections of an app pinned to a gateway fail instead of leaving through another exit.
-- YouTube stream URLs are tied to the requesting IP. When you move YouTube to another exit, give Google Services the same exit, or a browser reusing a Google connection may stall or get 403 errors.
-
-For routing to apply reliably, the client has to cooperate:
-
-- Use fake-ip or remote DNS so the client hands domains to the server. When the client resolves locally and sends only an IP, the server can only sniff, and QUIC (UDP/443) connections it cannot sniff use the node's default exit. If a YouTube route occasionally misses, block UDP/443 for those sites in the client so the browser falls back to TCP.
-- When Entry Direct is dual-stack, IP-bound services such as YouTube can fail if requests alternate between IPv4 and IPv6. Choose “Prefer IPv4” in **Settings → Proxy egress network**.
-- Server-side routing only sees traffic that reaches this node. A client rule that sends a site to another node or direct bypasses it.
-
-**Apps & sites** classifies proxy traffic by connection. Bytes of connections that close between two one-second samples cannot be tied to an app and count as Unattributed, so the shares add up to the proxy total.
+**Traffic → Apps & sites** classifies proxy traffic by connection. Bytes of connections that close between two one-second samples cannot be tied to an app and count as Unattributed, so the shares add up to the proxy total.
 
 ## Install
 
@@ -68,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 The installer uses a tested SBM and sing-box release pair. To install a specific published SBM version, set `SBM_VERSION`:
 
 ```bash
-SBM_VERSION=2.1.6 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
+SBM_VERSION=2.1.7 bash <(curl -fsSL https://raw.githubusercontent.com/boltguo/sbm/main/install.sh)
 ```
 
 The installer supports SBM 2.1 and later 2.x releases and selects the sing-box version tested with that release. Use `SING_BOX_VERSION` to specify a core version for troubleshooting or testing.
@@ -159,7 +146,7 @@ The entry collects vnStat data every 30 seconds and saves history in `/var/lib/s
 
 The entry and each gateway have independent plan periods. For example, an entry reset on the 15th and a gateway reset on the 1st each reset their own current-period usage. History uses calendar months independently of billing periods. Manual resets require an available vnStat source and use its latest data. The vnStat database and traffic history are retained.
 
-Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. By default a gateway threshold only shows a warning while the gateway keeps running. With “Pause this gateway at its safety threshold” enabled, crossing it refuses only that gateway’s nodes and the apps pinned to it, without falling back to another exit; the entry and other gateways keep running, and the gateway resumes after a reset or calibration. Pausing and resuming each restart sing-box once. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
+Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. By default a gateway threshold only shows a warning while the gateway keeps running. With “Pause this gateway at its safety threshold” enabled, crossing it refuses only that gateway’s nodes, without falling back to another exit; the entry and other gateways keep running, and the gateway resumes after a reset or calibration. Pausing and resuming each restart sing-box once. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
 
 When SBM is installed or a gateway is added mid-period, or the gateway host carries other traffic, the counters fall short of the provider bill. Select “Calibrate” on the overview plan card or a gateway card and enter the current-period usage from the provider dashboard. SBM keeps counting from there; the calibration ends at the next reset or a billing-mode change, and can be cleared manually.
 

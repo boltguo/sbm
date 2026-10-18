@@ -192,24 +192,6 @@ func SyncEgressCredentials(cfg *model.Config) error {
 		}
 		in.EgressCredentials = result
 	}
-	if len(cfg.AppRoutes) > 0 {
-		cleaned := make(map[string]string, len(cfg.AppRoutes))
-		for appID, target := range cfg.AppRoutes {
-			appID = strings.TrimSpace(appID)
-			target = strings.TrimSpace(target)
-			if appID == "" || target == "" {
-				continue
-			}
-			if target == model.AppRouteDirect || gateways[target] {
-				cleaned[appID] = target
-			}
-		}
-		if len(cleaned) > 0 {
-			cfg.AppRoutes = cleaned
-		} else {
-			cfg.AppRoutes = nil
-		}
-	}
 	return nil
 }
 func generateUUID() (string, error) {
@@ -223,48 +205,7 @@ func generateUUID() (string, error) {
 	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:], nil
 }
 
-var (
-	gatewayIDRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,47}$`)
-	appRuleIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9:_-]{0,63}$`)
-)
-
-// ValidateAppRouteKey checks a key an administrator is about to set: it must
-// name a loaded app rule or a valid site domain.
-func ValidateAppRouteKey(appID string) bool {
-	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
-		// A registry suffix such as co.uk would route every site under it.
-		return ValidateDomain(domain) == nil && !model.IsPublicSuffix(strings.ToLower(domain))
-	}
-	if len(model.AppRuleSpecs()) > 0 {
-		return model.IsKnownAppRule(appID)
-	}
-	return appRuleIDRE.MatchString(appID)
-}
-
-// ValidateStoredAppRouteKey also accepts a saved key whose app rule is no
-// longer loaded (an edited custom rule file or a renamed built-in rule), so it
-// cannot block startup or later changes. Render ignores such keys.
-func ValidateStoredAppRouteKey(appID string) bool {
-	if ValidateAppRouteKey(appID) {
-		return true
-	}
-	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
-		// A registry-suffix key saved before it was refused stays loadable
-		// and can be cleared; render skips it.
-		return ValidateDomain(domain) == nil
-	}
-	return appID != "" && len(appID) <= 128 && strings.IndexFunc(appID, unicode.IsControl) < 0
-}
-
-// NormalizeAppRouteKey lowercases a site key's domain; sing-box matches
-// domains case-insensitively, so mixed-case keys would only duplicate routes.
-func NormalizeAppRouteKey(appID string) string {
-	appID = strings.TrimSpace(appID)
-	if domain, ok := strings.CutPrefix(appID, "site:"); ok {
-		return "site:" + strings.ToLower(domain)
-	}
-	return appID
-}
+var gatewayIDRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,47}$`)
 
 func ValidateGatewayServer(server string) error {
 	addr, err := netip.ParseAddr(server)
@@ -380,14 +321,6 @@ func ValidateEgress(cfg model.Config) error {
 		}
 		if len(seen) != len(ids) {
 			return errors.New("缺少中继出口凭据")
-		}
-	}
-	for appID, target := range cfg.AppRoutes {
-		if !ValidateStoredAppRouteKey(appID) {
-			return errors.New("应用分流规则标识无效")
-		}
-		if target != model.AppRouteDirect && !ids[target] {
-			return errors.New("应用分流目标出口不存在")
 		}
 	}
 	return nil

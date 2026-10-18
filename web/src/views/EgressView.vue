@@ -9,7 +9,6 @@ import PasswordInput from '../components/PasswordInput.vue'
 import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import EgressGuide from '../components/EgressGuide.vue'
-import AppRouteModal from '../components/AppRouteModal.vue'
 import CalibrateUsageModal from '../components/CalibrateUsageModal.vue'
 import { dateLocale, t } from '../i18n'
 import { usePollStatus } from '../poll-status'
@@ -21,7 +20,6 @@ const busy = ref(false)
 const form = ref<GatewayInput | null>(null)
 const editing = ref<EgressGateway | null>(null)
 const publicKey = ref('')
-const routeModalOpen = ref(false)
 const calibrating = ref<EgressGateway | null>(null)
 let timer = 0
 let keyRevision = 0
@@ -96,7 +94,7 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
 
 <template>
   <div class="page egress-page">
-    <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><div class="head-actions"><button class="secondary" type="button" :disabled="busy" @click="routeModalOpen = true"><Icon name="sliders"/>{{ t('egress.appRoutes') }}</button><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></div></header>
+    <header class="page-head"><div><span class="eyebrow">WIREGUARD / IPv4</span><h1>{{ t('egress.title') }}</h1><p>{{ t('egress.help') }}</p></div><button class="primary" :disabled="busy" @click="create"><Icon name="plus"/>{{ t('egress.add') }}</button></header>
     <div v-if="stale" class="alert" role="status">{{ t('api.stale') }}</div>
     <div class="egress-flow"><span>{{ t('egress.client') }}</span><b>→</b><span>{{ t('egress.entry') }}</span><b>→</b><strong>{{ t('egress.gateway') }}</strong><b>→</b><span>Internet</span></div>
     <p class="egress-source">{{ t('egress.estimate') }} · {{ t('egress.warningOnly') }}</p>
@@ -139,7 +137,6 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
         <div class="modal-actions span-two"><button type="button" class="secondary" :disabled="busy" @click="close">{{ t('protocol.cancel') }}</button><button class="primary" :disabled="busy">{{ busy ? t('egress.saving') : t('egress.save') }}</button></div>
       </form>
     </Modal>
-    <AppRouteModal :open="routeModalOpen" @close="routeModalOpen = false" @toast="emit('toast', $event)" />
     <CalibrateUsageModal v-if="calibrating" :name="calibrating.name" :endpoint="`/api/egress/${calibrating.id}/calibrate`" :unit="calibrating.trafficQuota.unit" :used-bytes="calibrating.usage.estimatedProviderUsedBytes" :calibrated="!!calibrating.usage.usageCalibrated" @close="calibrating = null" @done="calibrated" />
   </div>
 </template>

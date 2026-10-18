@@ -13,7 +13,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,15 +162,9 @@ func TestMultipleEgressRender(t *testing.T) {
 		t.Fatal("disabled inbound rendered")
 	}
 }
-func TestPausedGatewayRejectsItsUsersAndPinnedApps(t *testing.T) {
-	model.SetAppRules([]model.AppRuleSpec{
-		{ID: "youtube", Name: "YouTube", Category: "streaming", Domains: []string{"youtube.com"}},
-		{ID: "telegram", Name: "Telegram", Category: "messaging", Domains: []string{"telegram.org"}, CIDRs: []netip.Prefix{netip.MustParsePrefix("91.108.4.0/22"), netip.MustParsePrefix("2001:b28:f23d::/48")}},
-	})
-	defer model.SetAppRules(nil)
+func TestPausedGatewayRejectsItsUsers(t *testing.T) {
 	cfg := multiEgressConfig(t)
 	paused, running := cfg.EgressGateways[0], cfg.EgressGateways[1]
-	cfg.AppRoutes = map[string]string{"youtube": paused.ID, "telegram": paused.ID}
 	cfg.PausedGateways = map[string]bool{paused.ID: true}
 	data, err := (Renderer{Registry: protocol.DefaultRegistry()}).Render(cfg)
 	if err != nil {
@@ -181,21 +174,18 @@ func TestPausedGatewayRejectsItsUsersAndPinnedApps(t *testing.T) {
 		t.Fatal("paused gateway endpoint or DNS rendered, or another gateway dropped")
 	}
 	doc := decodeRendered(t, data)
-	var rejectedUsers, rejectedDomains, rejectedCIDRs []any
+	var rejectedUsers []any
 	for _, item := range doc["route"].(map[string]any)["rules"].([]any) {
 		rule := item.(map[string]any)
 		if rule["action"] != "reject" {
 			continue
 		}
 		rejectedUsers = append(rejectedUsers, rule["auth_user"])
-		rejectedDomains = append(rejectedDomains, rule["domain_suffix"])
-		rejectedCIDRs = append(rejectedCIDRs, rule["ip_cidr"])
 	}
-	text := fmt.Sprint(rejectedUsers, rejectedDomains, rejectedCIDRs)
-	for _, want := range []string{protocol.EgressAuthUser(cfg.Inbounds[0], paused.ID), "youtube.com", "telegram.org", "91.108.4.0/22", "2001:b28:f23d::/48"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("%s is not rejected: %s", want, text)
-		}
+	text := fmt.Sprint(rejectedUsers)
+	want := protocol.EgressAuthUser(cfg.Inbounds[0], paused.ID)
+	if !strings.Contains(text, want) {
+		t.Fatalf("%s is not rejected: %s", want, text)
 	}
 	if strings.Contains(text, protocol.EgressAuthUser(cfg.Inbounds[0], running.ID)) {
 		t.Fatal("running gateway's users rejected")
@@ -268,37 +258,18 @@ func TestSingBoxEgressIntegration(t *testing.T) {
 		t.Fatal("integration needs sing-box 1.13.14")
 	}
 	cert, key := testCertificate(t)
-	if len(model.AppRuleSpecs()) == 0 {
-		model.SetAppRules([]model.AppRuleSpec{
-			{ID: "openai", Name: "OpenAI", Category: "ai", Domains: []string{"openai.com", "chatgpt.com"}, Subdomains: []string{"api.openai.com"}},
-			{ID: "youtube", Name: "YouTube", Category: "streaming", Domains: []string{"youtube.com", "googlevideo.com"}},
-			{ID: "telegram", Name: "Telegram", Category: "social", Domains: []string{"telegram.org"}, CIDRs: []netip.Prefix{netip.MustParsePrefix("91.108.4.0/22"), netip.MustParsePrefix("2001:b28:f23d::/48")}},
-		})
-		defer model.SetAppRules(nil)
-	}
 	renderer := Renderer{Registry: protocol.DefaultRegistry(), BuildContext: protocol.BuildContext{CertificatePath: cert, KeyPath: key}}
 	for _, count := range []int{0, 1, 2, 3} {
 		for _, strategy := range []string{"auto", "prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only"} {
 			cfg := multiEgressConfig(t)
 			cfg.EgressGateways = cfg.EgressGateways[:count]
 			cfg.OutboundStrategy = strategy
-			if count > 0 {
-				cfg.AppRoutes = map[string]string{
-					"youtube":       model.AppRouteDirect,
-					"openai":        cfg.EgressGateways[0].ID,
-					"telegram":      cfg.EgressGateways[0].ID,
-					"site:linux.do": model.AppRouteDirect,
-				}
-			}
 			if err := protocol.SyncEgressCredentials(&cfg); err != nil {
 				t.Fatal(err)
 			}
 			data, err := renderer.Render(cfg)
 			if err != nil {
 				t.Fatal(err)
-			}
-			if count > 0 && !bytes.Contains(data, []byte(`"action": "reject"`)) {
-				t.Fatal("gateway-routed IPv6 ranges must render a reject rule")
 			}
 			if count > 0 {
 				// A gateway past its hard limit must still produce a valid config.

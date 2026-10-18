@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/boltguo/sbm/internal/model"
 	"github.com/boltguo/sbm/internal/protocol"
@@ -44,8 +43,7 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 	direct := map[string]any{"type": "direct", "tag": "direct"}
 	// Sniff only IP destinations. Sniffing replaces a client-supplied domain
 	// with the TLS SNI or HTTP Host, so an ECH outer name (cloudflare-ech.com)
-	// or any SNI that differs from the requested host would miss app routes
-	// and leave through the node's exit instead.
+	// would otherwise hide the requested host from traffic attribution.
 	rules := []any{map[string]any{"ip_cidr": []string{"0.0.0.0/0", "::/0"}, "action": "sniff", "timeout": "300ms"}}
 	route := map[string]any{"rules": rules, "final": "direct"}
 	doc := map[string]any{
@@ -61,8 +59,6 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 	dnsServers := []any{localDNS}
 	endpoints := []any{}
 	gatewayRules := []any{}
-	enabledGateways := make(map[string]model.EgressGateway, len(buildContext.EgressGateways))
-	pausedGateways := map[string]bool{}
 	for _, g := range buildContext.EgressGateways {
 		if !g.Enabled {
 			continue
@@ -76,13 +72,11 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		if cfg.PausedGateways[g.ID] {
 			// A gateway past its hard limit refuses its users instead of letting
 			// them fall back to another exit.
-			pausedGateways[g.ID] = true
 			if len(users) > 0 {
 				gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "reject"})
 			}
 			continue
 		}
-		enabledGateways[g.ID] = g
 		endpoints = append(endpoints, map[string]any{
 			"type": "wireguard", "tag": g.EndpointTag(), "system": false, "mtu": 1408,
 			"address": []string{g.TunnelAddress()}, "private_key": g.PrivateKey,
@@ -95,8 +89,7 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 			gatewayRules = append(gatewayRules, map[string]any{"auth_user": users, "action": "resolve", "server": g.DNSTag(), "strategy": "ipv4_only"}, map[string]any{"auth_user": users, "action": "route", "outbound": g.EndpointTag()})
 		}
 	}
-	if len(endpoints) > 0 || len(pausedGateways) > 0 {
-		rules = append(rules, buildAppRouteRules(cfg.AppRoutes, enabledGateways, pausedGateways)...)
+	if len(gatewayRules) > 0 {
 		rules = append(rules, gatewayRules...)
 		route["rules"] = rules
 	}
@@ -119,164 +112,4 @@ func (r Renderer) Render(cfg model.Config) ([]byte, error) {
 		return nil, err
 	}
 	return append(data, '\n'), nil
-}
-
-func buildAppRouteRules(appRoutes map[string]string, enabledGateways map[string]model.EgressGateway, pausedGateways map[string]bool) []any {
-	if len(appRoutes) == 0 {
-		return nil
-	}
-	// An app pinned to a paused gateway is rejected (empty outbound tag), never
-	// sent through the node's own exit.
-	resolveTarget := func(target string) (outboundTag string, isGateway bool, ok bool) {
-		if target == model.AppRouteDirect {
-			return "direct", false, true
-		}
-		if g, exists := enabledGateways[target]; exists {
-			return g.EndpointTag(), true, true
-		}
-		if pausedGateways[target] {
-			return "", true, true
-		}
-		return "", false, false
-	}
-	dnsTag := func(target string) string { return enabledGateways[target].DNSTag() }
-
-	type routeGroup struct {
-		target string
-		items  []string
-	}
-
-	specs := model.AppRuleSpecs()
-	var domainSteps []routeGroup
-	for _, spec := range specs {
-		target := appRoutes[spec.ID]
-		if _, _, ok := resolveTarget(target); ok && len(spec.Subdomains) > 0 {
-			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Subdomains})
-		}
-	}
-	for _, spec := range specs {
-		if spec.Category == "ecosystem" || spec.Category == "cdn" {
-			continue
-		}
-		target := appRoutes[spec.ID]
-		if _, _, ok := resolveTarget(target); ok && len(spec.Domains) > 0 {
-			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Domains})
-		}
-	}
-	var siteKeys []string
-	for k, target := range appRoutes {
-		if strings.HasPrefix(k, "site:") {
-			if _, _, ok := resolveTarget(target); ok {
-				siteKeys = append(siteKeys, k)
-			}
-		}
-	}
-	sort.Strings(siteKeys)
-	for _, k := range siteKeys {
-		domain := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(k, "site:")))
-		if domain != "" && !model.IsPublicSuffix(domain) {
-			domainSteps = append(domainSteps, routeGroup{target: appRoutes[k], items: []string{domain}})
-		}
-	}
-	for _, spec := range specs {
-		if spec.Category != "ecosystem" && spec.Category != "cdn" {
-			continue
-		}
-		target := appRoutes[spec.ID]
-		if _, _, ok := resolveTarget(target); ok && len(spec.Domains) > 0 {
-			domainSteps = append(domainSteps, routeGroup{target: target, items: spec.Domains})
-		}
-	}
-
-	var mergedDomains []routeGroup
-	seenDomains := map[string]bool{}
-	for _, step := range domainSteps {
-		var unique []string
-		for _, d := range step.items {
-			d = strings.ToLower(strings.TrimSpace(d))
-			if d != "" && !seenDomains[d] {
-				seenDomains[d] = true
-				unique = append(unique, d)
-			}
-		}
-		if len(unique) == 0 {
-			continue
-		}
-		if n := len(mergedDomains); n > 0 && mergedDomains[n-1].target == step.target {
-			mergedDomains[n-1].items = append(mergedDomains[n-1].items, unique...)
-		} else {
-			mergedDomains = append(mergedDomains, routeGroup{target: step.target, items: unique})
-		}
-	}
-
-	var out []any
-	for _, g := range mergedDomains {
-		outboundTag, isGateway, _ := resolveTarget(g.target)
-		if outboundTag == "" {
-			out = append(out, map[string]any{"domain_suffix": g.items, "action": "reject"})
-		} else if isGateway {
-			out = append(out,
-				map[string]any{"domain_suffix": g.items, "action": "resolve", "server": dnsTag(g.target), "strategy": "ipv4_only"},
-				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
-			)
-		} else {
-			out = append(out,
-				map[string]any{"domain_suffix": g.items, "action": "route", "outbound": outboundTag},
-			)
-		}
-	}
-
-	// Gateway tunnels carry IPv4 only, so a gateway-routed app's IPv6 ranges
-	// are rejected (target "") instead of falling through to the node's own
-	// exit: the app never leaves through an egress other than the chosen one.
-	var mergedCIDRs []routeGroup
-	addCIDRs := func(target string, items []string) {
-		if len(items) == 0 {
-			return
-		}
-		if n := len(mergedCIDRs); n > 0 && mergedCIDRs[n-1].target == target {
-			mergedCIDRs[n-1].items = append(mergedCIDRs[n-1].items, items...)
-		} else {
-			mergedCIDRs = append(mergedCIDRs, routeGroup{target: target, items: items})
-		}
-	}
-	seenCIDRs := map[string]bool{}
-	for _, spec := range specs {
-		target := appRoutes[spec.ID]
-		outboundTag, isGateway, ok := resolveTarget(target)
-		if !ok || len(spec.CIDRs) == 0 {
-			continue
-		}
-		if outboundTag == "" {
-			target = ""
-		}
-		var routed, rejected []string
-		for _, p := range spec.CIDRs {
-			cidr := p.String()
-			if seenCIDRs[cidr] {
-				continue
-			}
-			seenCIDRs[cidr] = true
-			if isGateway && !p.Addr().Is4() {
-				rejected = append(rejected, cidr)
-			} else {
-				routed = append(routed, cidr)
-			}
-		}
-		addCIDRs(target, routed)
-		addCIDRs("", rejected)
-	}
-	for _, g := range mergedCIDRs {
-		if g.target == "" {
-			out = append(out, map[string]any{"ip_cidr": g.items, "action": "reject"})
-			continue
-		}
-		outboundTag, _, _ := resolveTarget(g.target)
-		out = append(out, map[string]any{
-			"ip_cidr":  g.items,
-			"action":   "route",
-			"outbound": outboundTag,
-		})
-	}
-	return out
 }

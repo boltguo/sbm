@@ -228,10 +228,6 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.generateWireGuardKeypair(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/egress/public-key":
 		s.wireGuardPublicKey(w, r)
-	case r.Method == "GET" && r.URL.Path == "/api/egress/app-routes":
-		s.getAppRoutes(w, r)
-	case r.Method == "PUT" && r.URL.Path == "/api/egress/app-routes":
-		s.updateAppRoutes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/egress/"):
 		s.gatewayByID(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/settings":

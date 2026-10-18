@@ -2,95 +2,9 @@ package model
 
 import (
 	"fmt"
-	"net/netip"
 	"sort"
-	"sync"
 	"time"
 )
-
-type AppRuleSpec struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Category   string         `json:"category"`
-	Domains    []string       `json:"domains,omitempty"`
-	Subdomains []string       `json:"subdomains,omitempty"`
-	CIDRs      []netip.Prefix `json:"-"`
-}
-
-var (
-	appRulesMu     sync.RWMutex
-	appRuleSpecs   []AppRuleSpec
-	appRuleByID    map[string]AppRuleSpec
-	publicSuffixes map[string]bool
-)
-
-// SetPublicSuffixes records the multi-label public suffixes (co.uk, com.cn)
-// that the app rules treat as registry suffixes rather than sites.
-func SetPublicSuffixes(suffixes []string) {
-	set := make(map[string]bool, len(suffixes))
-	for _, suffix := range suffixes {
-		set[suffix] = true
-	}
-	appRulesMu.Lock()
-	publicSuffixes = set
-	appRulesMu.Unlock()
-}
-
-// IsPublicSuffix reports whether domain is a registry suffix shared by
-// unrelated sites, so routing it would capture all of them.
-func IsPublicSuffix(domain string) bool {
-	appRulesMu.RLock()
-	defer appRulesMu.RUnlock()
-	return publicSuffixes[domain]
-}
-
-func SetAppRules(specs []AppRuleSpec) {
-	copied := make([]AppRuleSpec, 0, len(specs))
-	byID := make(map[string]AppRuleSpec, len(specs))
-	for _, s := range specs {
-		item := AppRuleSpec{
-			ID:         s.ID,
-			Name:       s.Name,
-			Category:   s.Category,
-			Domains:    append([]string(nil), s.Domains...),
-			Subdomains: append([]string(nil), s.Subdomains...),
-			CIDRs:      append([]netip.Prefix(nil), s.CIDRs...),
-		}
-		copied = append(copied, item)
-		byID[s.ID] = item
-	}
-	appRulesMu.Lock()
-	appRuleSpecs = copied
-	appRuleByID = byID
-	appRulesMu.Unlock()
-}
-
-func AppRuleSpecs() []AppRuleSpec {
-	appRulesMu.RLock()
-	defer appRulesMu.RUnlock()
-	out := make([]AppRuleSpec, 0, len(appRuleSpecs))
-	for _, s := range appRuleSpecs {
-		out = append(out, AppRuleSpec{
-			ID:         s.ID,
-			Name:       s.Name,
-			Category:   s.Category,
-			Domains:    append([]string(nil), s.Domains...),
-			Subdomains: append([]string(nil), s.Subdomains...),
-			CIDRs:      append([]netip.Prefix(nil), s.CIDRs...),
-		})
-	}
-	return out
-}
-
-func IsKnownAppRule(id string) bool {
-	appRulesMu.RLock()
-	defer appRulesMu.RUnlock()
-	if len(appRuleByID) == 0 {
-		return false
-	}
-	_, ok := appRuleByID[id]
-	return ok
-}
 
 // TunnelSlot is persisted, so removing or reordering another gateway never
 // changes the address the operator has configured on this gateway's B server.

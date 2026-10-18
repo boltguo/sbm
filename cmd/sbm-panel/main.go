@@ -176,9 +176,7 @@ func runConfig(args []string) {
 	set := flag.NewFlagSet("config apply", flag.ExitOnError)
 	p := pathFlags(set)
 	noStart := set.Bool("no-start", false, "仅生成和校验，不启动服务")
-	appRulesPath := set.String("app-rules", "", "自定义应用归类规则 JSON 路径（默认读取配置目录下的 app-rules.json，不存在则使用内置规则）")
 	_ = set.Parse(args[1:])
-	loadAppRules(*appRulesPath, p.config)
 	cfgStore, manager := loadCore(p)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -332,9 +330,7 @@ func runServe(args []string) {
 	}
 }
 
-// loadAppRules activates the rule set the panel uses. App routes render from
-// it, so config apply must load the same file as serve or a core update would
-// drop routes to custom rules.
+// loadAppRules activates the application traffic classification rule set.
 func loadAppRules(explicit, configPath string) {
 	if explicit != "" {
 		if err := traffic.LoadAppRulesFile(explicit); err != nil {

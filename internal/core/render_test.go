@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -92,14 +91,4 @@ func validRenderConfig() model.Config {
 	cfg.ClashAPISecret = secret
 	cfg.SubscriptionToken = secret
 	return cfg
-}
-
-func TestRenderSkipsRegistrySuffixSiteRoutes(t *testing.T) {
-	model.SetPublicSuffixes([]string{"co.uk"})
-	defer model.SetPublicSuffixes(nil)
-	rules := buildAppRouteRules(map[string]string{"site:co.uk": model.AppRouteDirect, "site:bbc.co.uk": model.AppRouteDirect}, nil, nil)
-	text := fmt.Sprint(rules)
-	if !strings.Contains(text, "bbc.co.uk") || strings.Contains(text, "[co.uk]") {
-		t.Fatalf("suffix route rendered: %s", text)
-	}
 }
