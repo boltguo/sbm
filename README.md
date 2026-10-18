@@ -148,6 +148,8 @@ The entry and each gateway have independent plan periods. For example, an entry 
 
 Gateway cards show current-period WireGuard tunnel estimates, with daily TX/RX saved in the background. Gateway thresholds display warnings while the gateway keeps running. The entry’s global quota stops sing-box based on its public-interface traffic. Entry totals cover all Direct, gateway and system traffic; each gateway has its own tunnel counters.
 
+When SBM is installed or a gateway is added mid-period, or the gateway host carries other traffic, the counters fall short of the provider bill. Select “Calibrate” on the overview plan card or a gateway card and enter the current-period usage from the provider dashboard. SBM keeps counting from there; the calibration ends at the next reset or a billing-mode change, and can be cleared manually.
+
 The administrator-only `GET /api/traffic/history` endpoint accepts `granularity=day|month`, `from` and `to`. Dates use `YYYY-MM-DD` or `YYYY-MM`, with an inclusive end date. Responses include interface usage, proxy references and record completeness.
 
 The `sudo sbm` backup command briefly pauses the panel for a consistent database archive while sing-box continues forwarding. For manual backups, stop the panel or use SQLite’s online backup facility.

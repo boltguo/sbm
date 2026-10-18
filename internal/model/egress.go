@@ -132,4 +132,25 @@ type GatewayTrafficState struct {
 	LastSuccessAt   time.Time   `json:"lastSuccessAt,omitempty"`
 	FailureSince    time.Time   `json:"failureSince,omitempty"`
 	Partial         bool        `json:"partial,omitempty"`
+	// Adjustment calibrates the estimate to the provider dashboard, which
+	// also counts the gateway host's own traffic.
+	Adjustment UsageAdjustment `json:"adjustment,omitzero"`
+}
+
+// ProviderUsage estimates the gateway provider's billed bytes for the period.
+func (s GatewayTrafficState) ProviderUsage(q TrafficQuotaConfig) int64 {
+	tunnel := s.TX
+	if s.RX > (1<<63-1)-tunnel {
+		tunnel = 1<<63 - 1
+	} else {
+		tunnel += s.RX
+	}
+	factor := q.ProviderUsageFactor()
+	used := tunnel
+	if tunnel > (1<<63-1)/factor {
+		used = 1<<63 - 1
+	} else {
+		used = tunnel * factor
+	}
+	return s.Adjustment.Apply(used, q.BillingMode)
 }

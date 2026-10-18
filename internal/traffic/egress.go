@@ -77,6 +77,7 @@ func (t *Tracker) sampleGateways(ctx context.Context, gateways []model.EgressGat
 			s.PeriodStartedAt = now
 			s.NextResetAt = nextGatewayReset(now, g)
 			s.Partial = false
+			s.Adjustment = model.UsageAdjustment{}
 		}
 		if !g.Enabled {
 			s.Status = "disabled"
@@ -222,6 +223,44 @@ func (t *Tracker) ResetGateway(ctx context.Context, id string) error {
 	s.PeriodStartedAt = now
 	s.NextResetAt = nextGatewayReset(now, *gateway)
 	s.Partial = false
+	s.Adjustment = model.UsageAdjustment{}
+	t.state.Egress[id] = s
+	t.mu.Unlock()
+	return t.Persist()
+}
+
+// CalibrateGateway makes the gateway's estimated provider usage equal
+// usedBytes until its next reset. The tunnel counters cannot see traffic the
+// gateway host sends on its own, or usage from before the gateway was added.
+// clear removes the calibration instead.
+func (t *Tracker) CalibrateGateway(ctx context.Context, id string, usedBytes int64, clear bool) error {
+	if usedBytes < 0 {
+		return errors.New("used traffic cannot be negative")
+	}
+	t.gatewayMu.Lock()
+	defer t.gatewayMu.Unlock()
+	gateways := t.config.Get().EgressGateways
+	var gateway *model.EgressGateway
+	for i := range gateways {
+		if gateways[i].ID == id {
+			gateway = &gateways[i]
+			break
+		}
+	}
+	if gateway == nil {
+		return errors.New("中继出口不存在")
+	}
+	_ = t.sampleGateways(ctx, gateways)
+	t.mu.Lock()
+	if t.state.Egress == nil {
+		t.state.Egress = map[string]model.GatewayTrafficState{}
+	}
+	s := t.state.Egress[id]
+	s.Adjustment = model.UsageAdjustment{}
+	if !clear {
+		measured := s.ProviderUsage(gateway.TrafficQuota)
+		s.Adjustment = model.UsageAdjustment{Bytes: usedBytes - measured, BillingMode: gateway.TrafficQuota.BillingMode}
+	}
 	t.state.Egress[id] = s
 	t.mu.Unlock()
 	return t.Persist()

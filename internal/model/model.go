@@ -222,6 +222,32 @@ type NetworkTrafficState struct {
 	ProxyAnchor      int64     `json:"proxyAnchor,omitempty"`
 	ProxyAnchorAt    time.Time `json:"proxyAnchorAt,omitempty"`
 	ProxyAnchorKnown bool      `json:"proxyAnchorKnown,omitempty"`
+	// Usage calibrated against the provider dashboard for this period.
+	Adjustment UsageAdjustment `json:"adjustment,omitzero"`
+}
+
+// UsageAdjustment shifts measured usage to the provider-reported total until
+// the next reset. It is stored in provider-billed bytes and only applies under
+// the billing mode it was measured with.
+type UsageAdjustment struct {
+	Bytes       int64  `json:"bytes,omitempty"`
+	BillingMode string `json:"billingMode,omitempty"`
+}
+
+// Apply returns usage with the adjustment for billing mode applied.
+func (a UsageAdjustment) Apply(usage int64, billingMode string) int64 {
+	if a.BillingMode == "" || a.BillingMode != billingMode || a.Bytes == 0 {
+		return usage
+	}
+	if a.Bytes > 0 && usage > (1<<63-1)-a.Bytes {
+		return 1<<63 - 1
+	}
+	return max(0, usage+a.Bytes)
+}
+
+// Active reports whether the adjustment applies under billing mode.
+func (a UsageAdjustment) Active(billingMode string) bool {
+	return a.BillingMode != "" && a.BillingMode == billingMode
 }
 
 // NetworkStopBytes applies reserve once to actual NIC bytes.

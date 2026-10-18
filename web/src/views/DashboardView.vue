@@ -5,6 +5,7 @@ import type { Dashboard, GatewayUsage, ServerStatus } from '../types'
 import Icon from '../components/Icon.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import PanelUpdate from '../components/PanelUpdate.vue'
+import CalibrateUsageModal from '../components/CalibrateUsageModal.vue'
 import { dateLocale, t } from '../i18n'
 import { createQrCard, downloadQrCard } from '../qr'
 import { usePollStatus } from '../poll-status'
@@ -14,6 +15,7 @@ const data = ref<Dashboard | null>(null)
 const server = ref<ServerStatus | null>(null)
 const activeGateways = computed(() => data.value?.egressGateways?.filter(g => g.enabled) ?? [])
 const refreshingTraffic = ref(false)
+const calibrating = ref(false)
 const qr = ref('')
 let timer = 0
 let revision = 0
@@ -150,6 +152,7 @@ const refreshTraffic = safe(async () => {
     refreshingTraffic.value = false
   }
 })
+const calibrated = (message: string) => { calibrating.value = false; emit('toast', message); load().catch(() => {}) }
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('dashboard.copyDone')) })
 const saveQR = () => { if (!data.value || !qr.value) return; downloadQrCard(qr.value, data.value.subscriptionName); emit('toast', t('dashboard.qrSaved')) }
 const mutate = safe(async (url: string, message: string) => {
@@ -201,25 +204,28 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <div class="traffic-kicker">
           <span class="eyebrow">VNSTAT / PLAN USAGE</span>
           <button class="traffic-refresh" :class="{ refreshing: refreshingTraffic }" :disabled="refreshingTraffic" :title="t('dashboard.refreshHelp')" @click="refreshTraffic"><Icon name="refresh"/>{{ t('dashboard.refresh') }}</button>
+          <button v-if="data.trafficSource === 'vnstat'" class="traffic-refresh" type="button" :title="t('network.calibrateHelp')" @click="calibrating = true"><Icon name="sliders"/>{{ t('network.calibrate') }}</button>
         </div>
         <h2>{{ data.networkAvailable ? providerBytes(data.estimatedProviderUsedBytes) : '—' }}</h2>
         <p v-if="data.providerAllowanceBytes">{{ t('dashboard.providerSummary', { total: providerBytes(data.providerAllowanceBytes), remaining: providerBytes(data.providerRemainingBytes), reserve: data.trafficQuota.headroomPercent }) }}</p>
         <p v-else>{{ t('dashboard.unlimitedHelp') }}</p>
         <small class="traffic-source" :class="{ warning: data.sampleHealth.status === 'interrupted', pending: data.sampleHealth.status === 'waiting' || data.sampleHealth.status === 'paused' }" :title="sampleDetail()"><i></i>{{ sampleLabel() }}</small>
         <p v-if="data.networkPartial" class="traffic-source warning">{{ t('network.partial') }}</p>
+        <p v-if="data.usageCalibrated" class="traffic-source">{{ t('network.calibrated') }}</p>
         <p v-if="data.realtimeEstimateBytes && data.sampleHealth.status === 'interrupted'" class="traffic-source warning">{{ t('network.realtimeEstimate', { amount: providerBytes(data.realtimeEstimateBytes) }) }}</p>
         <p v-if="data.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p>
       </div>
       <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('network.tx') }}</p><strong>{{ data.networkAvailable ? bytes(data.upload) : '—' }}</strong></div><div><span>↓</span><p>{{ t('network.rx') }}</p><strong>{{ data.networkAvailable ? bytes(data.download) : '—' }}</strong></div></div>
       <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
+      <CalibrateUsageModal v-if="calibrating" :name="data.subscriptionName" endpoint="/api/traffic/calibrate" :unit="data.trafficQuota.unit" :used-bytes="data.estimatedProviderUsedBytes" :calibrated="!!data.usageCalibrated" @close="calibrating = false" @done="calibrated" />
     </section>
     <section v-if="activeGateways.length" class="egress-overview">
       <div class="egress-overview-head"><h2>{{ t('egress.title') }}</h2><small>{{ t('egress.estimate') }}</small></div>
       <div class="egress-summary-grid"><article v-for="g in activeGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning }">
         <h3>{{ g.name }}</h3><strong>{{ gatewayBytes(g.estimatedProviderUsedBytes, g) }} <small v-if="g.providerAllowanceBytes">/ {{ gatewayBytes(g.providerAllowanceBytes, g) }}</small></strong>
         <div class="progress-track"><i :style="{ width: `${g.providerProgress}%` }"></i></div>
-        <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
+        <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.usageCalibrated" class="traffic-source">{{ t('network.calibrated') }}</p><p v-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
       </article></div>
     </section>
     <section v-if="server" class="resource-grid dashboard-resources">

@@ -36,6 +36,7 @@ type gatewayUsageView struct {
 	ProviderRemainingBytes     int64                     `json:"providerRemainingBytes"`
 	ProviderProgress           float64                   `json:"providerProgress"`
 	Warning                    bool                      `json:"warning"`
+	UsageCalibrated            bool                      `json:"usageCalibrated"`
 	PeriodStartedAt            time.Time                 `json:"periodStartedAt"`
 	NextResetAt                time.Time                 `json:"nextResetAt"`
 	SampleHealth               model.GatewayTrafficState `json:"sampleHealth"`
@@ -63,19 +64,14 @@ func (s *Server) gatewayUsage(cfg model.Config) []gatewayUsageView {
 			st.Status = "disabled"
 		}
 		allowance, _ := g.TrafficQuota.AllowanceBytes()
-		limit, _ := g.TrafficQuota.EffectiveBytes()
-		tunnel := st.TX
-		if st.RX > (1<<63-1)-tunnel {
-			tunnel = 1<<63 - 1
-		} else {
-			tunnel += st.RX
-		}
-		used := multiplySaturating(tunnel, g.TrafficQuota.ProviderUsageFactor())
+		stop, _ := g.TrafficQuota.NetworkStopBytes()
+		tunnel := addSaturating(st.TX, st.RX)
+		used := st.ProviderUsage(g.TrafficQuota)
 		progress := float64(0)
 		if allowance > 0 {
 			progress = min(100, float64(used)/float64(allowance)*100)
 		}
-		views = append(views, gatewayUsageView{ID: g.ID, Name: protocol.GatewayName(g), Marker: g.Marker, Location: protocol.GatewayLocation(g), Enabled: g.Enabled, TunnelTX: st.TX, TunnelRX: st.RX, TunnelBytes: tunnel, TrafficQuota: g.TrafficQuota, ProviderAllowanceBytes: allowance, EstimatedProviderUsedBytes: used, ProviderRemainingBytes: max(0, allowance-used), ProviderProgress: progress, Warning: limit > 0 && tunnel >= limit, PeriodStartedAt: st.PeriodStartedAt, NextResetAt: st.NextResetAt, SampleHealth: st, PersistenceHealth: s.Traffic.PersistenceHealth()})
+		views = append(views, gatewayUsageView{ID: g.ID, Name: protocol.GatewayName(g), Marker: g.Marker, Location: protocol.GatewayLocation(g), Enabled: g.Enabled, TunnelTX: st.TX, TunnelRX: st.RX, TunnelBytes: tunnel, TrafficQuota: g.TrafficQuota, ProviderAllowanceBytes: allowance, EstimatedProviderUsedBytes: used, ProviderRemainingBytes: max(0, allowance-used), ProviderProgress: progress, Warning: stop > 0 && used >= stop, UsageCalibrated: st.Adjustment.Active(g.TrafficQuota.BillingMode), PeriodStartedAt: st.PeriodStartedAt, NextResetAt: st.NextResetAt, SampleHealth: st, PersistenceHealth: s.Traffic.PersistenceHealth()})
 	}
 	return views
 }
@@ -182,6 +178,22 @@ func (s *Server) gatewayByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parts[0]
+	if len(parts) == 2 && parts[1] == "calibrate" && r.Method == http.MethodPost {
+		var input usageCalibration
+		if decodeJSON(r, &input) != nil || (!input.Clear && input.UsedBytes < 0) {
+			writeError(w, 400, "请求格式无效")
+			return
+		}
+		s.mutationMu.Lock()
+		err := s.Traffic.CalibrateGateway(r.Context(), id, input.UsedBytes, input.Clear)
+		s.mutationMu.Unlock()
+		if err != nil {
+			writeError(w, 400, "校准出口用量失败")
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
 	if len(parts) == 2 && parts[1] == "reset" && r.Method == http.MethodPost {
 		s.mutationMu.Lock()
 		err := s.Traffic.ResetGateway(r.Context(), id)

@@ -319,6 +319,29 @@ func TestGatewayWarningNeverStopsCoreAndAccountingFailureSaves(t *testing.T) {
 		t.Fatal("gateway reset affected core")
 	}
 }
+func TestGatewayCalibrationAPI(t *testing.T) {
+	s, _ := testServer(t)
+	s.Geo = &testGeo{}
+	s.Core.Commands = &gatewayCommander{}
+	sampler := &serverGatewaySampler{values: map[string]traffic.GatewayCounters{}}
+	s.Traffic.Gateways = sampler
+	input := gatewayInput(t, "203.0.113.1")
+	input.TrafficQuota = model.TrafficQuotaConfig{Amount: 1, Unit: "GB", BillingMode: "single", HeadroomPercent: 10}
+	gatewayRequest(t, s, "POST", "/api/egress", input, 201)
+	g := s.Config.Get().EgressGateways[0]
+	sampler.values[g.ID] = traffic.GatewayCounters{TX: 100, RX: 100, TXGeneration: "one", RXGeneration: "one"}
+	_ = s.Traffic.SampleGateways(context.Background())
+	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"usedBytes": 950_000_000}, 200)
+	usage := s.gatewayUsage(s.Config.Get())[0]
+	if usage.EstimatedProviderUsedBytes != 950_000_000 || !usage.UsageCalibrated || !usage.Warning {
+		t.Fatalf("calibrated usage not reported: %+v", usage)
+	}
+	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"usedBytes": -1}, 400)
+	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"clear": true}, 200)
+	if usage := s.gatewayUsage(s.Config.Get())[0]; usage.EstimatedProviderUsedBytes != 0 || usage.UsageCalibrated {
+		t.Fatalf("calibration not cleared: %+v", usage)
+	}
+}
 func TestGatewayDraftValidationAndKeysAPI(t *testing.T) {
 	s, _ := testServer(t)
 	s.Geo = &testGeo{fail: true}

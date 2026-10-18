@@ -1,5 +1,9 @@
 export const networkMessages = {
   'zh-CN': {
+    'network.calibrate': '校准用量', 'network.calibrateTitle': '校准本周期已用量', 'network.calibrateUsed': '云厂商后台显示的已用量',
+    'network.calibrateHelp': '填入云厂商后台显示的本周期已用量，SBM 在此基础上继续累计，直到下次重置或修改计费方式。适用于中途安装 SBM、中途接入出口，或主机上还有其他流量的情况。',
+    'network.calibrateMeasured': '{name} · SBM 当前统计 {amount}', 'network.calibrateSave': '保存校准', 'network.calibrateClear': '清除校准',
+    'network.calibrateDone': '已用量已校准', 'network.calibrateCleared': '已清除校准', 'network.calibrated': '已按云厂商后台校准本周期用量',
     'network.source': '来源：vnStat · {interface}', 'network.waiting': 'vnStat 尚无可用数据',
     'network.interrupted': 'vnStat 读取中断，显示最后结果', 'network.partial': '当前周期记录不完整',
     'network.realtimeEstimate': 'vnStat 暂未更新，已按 sing-box 代理计数补算 {amount}',
@@ -9,6 +13,10 @@ export const networkMessages = {
     'network.guideDelay': '统计所选公网网卡的整机通信，包含代理、WireGuard、SSH 和系统更新。采集间隔 30 秒，vnStat 每分钟保存。',
   },
   en: {
+    'network.calibrate': 'Calibrate', 'network.calibrateTitle': 'Calibrate current-period usage', 'network.calibrateUsed': 'Usage shown by the provider',
+    'network.calibrateHelp': 'Enter the current-period usage shown in the provider dashboard. SBM keeps counting from there until the next reset or a billing-mode change. Use it when SBM or the gateway was added mid-period, or when the host carries other traffic.',
+    'network.calibrateMeasured': '{name} · SBM currently counts {amount}', 'network.calibrateSave': 'Save calibration', 'network.calibrateClear': 'Clear calibration',
+    'network.calibrateDone': 'Usage calibrated', 'network.calibrateCleared': 'Calibration cleared', 'network.calibrated': 'Current-period usage calibrated to the provider dashboard',
     'network.source': 'Source: vnStat · {interface}', 'network.waiting': 'No vnStat data available yet',
     'network.interrupted': 'vnStat unavailable; showing the last saved result', 'network.partial': 'Incomplete period coverage',
     'network.realtimeEstimate': 'vnStat has not updated; {amount} counted from sing-box proxy totals',

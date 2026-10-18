@@ -10,6 +10,7 @@ import SelectControl from '../components/SelectControl.vue'
 import ConfirmAction from '../components/ConfirmAction.vue'
 import EgressGuide from '../components/EgressGuide.vue'
 import AppRouteModal from '../components/AppRouteModal.vue'
+import CalibrateUsageModal from '../components/CalibrateUsageModal.vue'
 import { dateLocale, t } from '../i18n'
 import { usePollStatus } from '../poll-status'
 
@@ -21,6 +22,7 @@ const form = ref<GatewayInput | null>(null)
 const editing = ref<EgressGateway | null>(null)
 const publicKey = ref('')
 const routeModalOpen = ref(false)
+const calibrating = ref<EgressGateway | null>(null)
 let timer = 0
 let keyRevision = 0
 let listRevision = 0
@@ -86,8 +88,9 @@ const toggle = (g: EgressGateway) => run(async () => { await put(`/api/egress/${
 const remove = (g: EgressGateway) => run(async () => { await del(`/api/egress/${g.id}`); emit('toast', t('egress.deleted')) })
 const detect = (g: EgressGateway) => run(async () => { const result = await post<{ geoDetected: boolean }>(`/api/egress/${g.id}/geo`); emit('toast', result.geoDetected ? t('egress.geoDone') : t('egress.geoFailed')) })
 const reset = (g: EgressGateway) => run(async () => { await post(`/api/egress/${g.id}/reset`); emit('toast', t('egress.resetDone')) })
+const calibrated = (message: string) => { calibrating.value = null; emit('toast', message); load().catch(() => {}) }
 const copy = safe(async (value: string) => { await navigator.clipboard.writeText(value); emit('toast', t('copied')) })
-onMounted(() => { refresh(); timer = window.setInterval(() => { tick(); if (!pending && !busy.value && !form.value) load().catch(() => {}) }, 5000) })
+onMounted(() => { refresh(); timer = window.setInterval(() => { tick(); if (!pending && !busy.value && !form.value && !calibrating.value) load().catch(() => {}) }, 5000) })
 onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInterval(timer) })
 </script>
 
@@ -105,8 +108,8 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
         <div class="protocol-top"><div class="protocol-glyph">WG</div><div><span class="pill">{{ g.enabled ? t('egress.enabled') : t('egress.disabled') }}</span><h2>{{ g.name }}</h2></div><SwitchRoot :model-value="g.enabled" :disabled="busy" class="relative h-6 w-11 shrink-0 rounded-full border border-[var(--ink)] bg-transparent p-[3px] data-[state=checked]:bg-[var(--signal)]" :aria-label="`${t(g.enabled ? 'protocol.disable' : 'protocol.enable')} ${g.name}`" @update:model-value="toggle(g)"><SwitchThumb class="block size-4 rounded-full bg-[var(--muted)] transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-[var(--ink)]" /></SwitchRoot></div>
         <div class="endpoint"><span>{{ t('egress.exitIP') }}</span><code>{{ g.server || '—' }}</code><b>UDP/{{ g.serverPort }}</b></div>
         <dl><div><dt>{{ t('egress.detected') }}</dt><dd>{{ [g.geo.countryCode, g.geo.region, g.geo.city].filter(Boolean).join(' / ') || t('egress.unknown') }}</dd></div><div v-if="g.locationOverride"><dt>{{ t('egress.override') }}</dt><dd>{{ g.locationOverride }}</dd></div><div><dt>{{ t('egress.aAddress') }}</dt><dd>{{ g.tunnelAddress }}</dd></div><div><dt>{{ t('egress.bAddress') }}</dt><dd>{{ g.peerAddress }}</dd></div><div><dt>{{ t('settings.planAllowance') }}</dt><dd>{{ g.trafficQuota.amount ? `${g.trafficQuota.amount} ${g.trafficQuota.unit}` : t('settings.unlimited') }} · {{ t(g.trafficQuota.billingMode === 'bidirectional' ? 'settings.billingBidirectional' : 'settings.billingSingle') }}</dd></div><div><dt>{{ t('settings.autoReset') }}</dt><dd>{{ g.reset.mode === 'monthly' ? `${t('egress.resetDay', { day: g.reset.day })} · ${g.reset.timezone}` : t('settings.noReset') }}</dd></div></dl>
-        <div class="gateway-usage" :class="{ warning: g.usage.warning }"><strong>{{ amount(g.usage.estimatedProviderUsedBytes, g.trafficQuota.unit) }}</strong><span v-if="g.usage.providerAllowanceBytes"> / {{ amount(g.usage.providerAllowanceBytes, g.trafficQuota.unit) }}</span><small>{{ t(`egress.sample.${g.usage.sampleHealth.status}`) }}</small><p v-if="g.usage.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p><p v-if="g.usage.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><div class="progress-track"><i :style="{ width: `${g.usage.providerProgress}%` }"></i></div><p v-if="g.usage.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.usage.providerAllowanceBytes">{{ t('egress.remaining', { amount: amount(g.usage.providerRemainingBytes, g.trafficQuota.unit) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.usage.nextResetAt) }) }}</small></div>
-        <div class="card-actions gateway-actions"><button :disabled="busy" @click="edit(g)"><Icon name="edit"/>{{ t('egress.edit') }}</button><button :disabled="busy || !g.server" :title="t('egress.redetect')" @click="detect(g)"><Icon name="locate"/>{{ t('egress.redetect') }}</button><ConfirmAction :title="t('egress.resetTraffic')" :message="t('egress.resetConfirm')" @confirm="reset(g)"><button :disabled="busy" :aria-label="t('egress.resetTraffic')"><Icon name="refresh"/></button></ConfirmAction><ConfirmAction :title="g.name" :message="t('egress.deleteConfirm')" destructive @confirm="remove(g)"><button :disabled="busy" class="destructive" :aria-label="`${t('egress.delete')} ${g.name}`"><Icon name="trash"/></button></ConfirmAction></div>
+        <div class="gateway-usage" :class="{ warning: g.usage.warning }"><strong>{{ amount(g.usage.estimatedProviderUsedBytes, g.trafficQuota.unit) }}</strong><span v-if="g.usage.providerAllowanceBytes"> / {{ amount(g.usage.providerAllowanceBytes, g.trafficQuota.unit) }}</span><small>{{ t(`egress.sample.${g.usage.sampleHealth.status}`) }}</small><p v-if="g.usage.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p><p v-if="g.usage.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.usage.usageCalibrated" class="traffic-source">{{ t('network.calibrated') }}</p><div class="progress-track"><i :style="{ width: `${g.usage.providerProgress}%` }"></i></div><p v-if="g.usage.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.usage.providerAllowanceBytes">{{ t('egress.remaining', { amount: amount(g.usage.providerRemainingBytes, g.trafficQuota.unit) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.usage.nextResetAt) }) }}</small></div>
+        <div class="card-actions gateway-actions"><button :disabled="busy" @click="edit(g)"><Icon name="edit"/>{{ t('egress.edit') }}</button><button :disabled="busy || !g.server" :title="t('egress.redetect')" @click="detect(g)"><Icon name="locate"/>{{ t('egress.redetect') }}</button><button :disabled="busy" :title="t('network.calibrate')" :aria-label="`${t('network.calibrate')} ${g.name}`" @click="calibrating = g"><Icon name="sliders"/></button><ConfirmAction :title="t('egress.resetTraffic')" :message="t('egress.resetConfirm')" @confirm="reset(g)"><button :disabled="busy" :aria-label="t('egress.resetTraffic')"><Icon name="refresh"/></button></ConfirmAction><ConfirmAction :title="g.name" :message="t('egress.deleteConfirm')" destructive @confirm="remove(g)"><button :disabled="busy" class="destructive" :aria-label="`${t('egress.delete')} ${g.name}`"><Icon name="trash"/></button></ConfirmAction></div>
       </article>
     </div>
     <Modal v-if="form" :title="editing ? t('egress.edit') : t('egress.add')" :description="t('egress.setupHelp')" wide @close="close">
@@ -134,5 +137,6 @@ onBeforeUnmount(() => { disposed = true; ++listRevision; ++keyRevision; clearInt
       </form>
     </Modal>
     <AppRouteModal :open="routeModalOpen" @close="routeModalOpen = false" @toast="emit('toast', $event)" />
+    <CalibrateUsageModal v-if="calibrating" :name="calibrating.name" :endpoint="`/api/egress/${calibrating.id}/calibrate`" :unit="calibrating.trafficQuota.unit" :used-bytes="calibrating.usage.estimatedProviderUsedBytes" :calibrated="!!calibrating.usage.usageCalibrated" @close="calibrating = null" @done="calibrated" />
   </div>
 </template>

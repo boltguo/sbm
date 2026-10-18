@@ -115,6 +115,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 	resetChanged := st.Reset != reset
 	periodChanged := st.Generation != "" && reset.Mode == "monthly" && (!now.Before(st.NextResetAt) && !st.NextResetAt.IsZero())
 	if st.Generation == "" || resetChanged || periodChanged {
+		st.Adjustment = model.UsageAdjustment{}
 		st.Manual = false
 		st.CarryRX = 0
 		st.CarryTX = 0
@@ -355,6 +356,7 @@ func (t *Tracker) resetNetwork(ctx context.Context, id string) error {
 	st.RX = 0
 	st.TX = 0
 	st.Partial = false
+	st.Adjustment = model.UsageAdjustment{}
 	st.PeriodStartedAt = st.UpdatedAt
 	t.state.Network[id] = st
 	if id == EntryNetworkScope {
@@ -468,11 +470,49 @@ func (t *Tracker) anchorProxyLocked(st model.NetworkTrafficState) model.NetworkT
 func (t *Tracker) entryUsageLocked(q model.TrafficQuotaConfig) (usage, estimated int64) {
 	st := t.state.Network[EntryNetworkScope]
 	usage = q.NetworkUsage(st.RX, st.TX)
-	if st.Generation == "" || !st.ProxyAnchorKnown {
-		return usage, 0
+	if st.Generation != "" && st.ProxyAnchorKnown {
+		estimated = scaleSaturating(max(0, t.state.Total()-st.ProxyAnchor), q.ProviderUsageFactor())
 	}
-	estimated = scaleSaturating(max(0, t.state.Total()-st.ProxyAnchor), q.ProviderUsageFactor())
-	return addSaturating(usage, estimated), estimated
+	return st.Adjustment.Apply(addSaturating(usage, estimated), q.BillingMode), estimated
+}
+
+// CalibrateEntryUsage makes the enforced entry usage equal usedBytes, the
+// provider-reported usage for the current period, until the next reset. It
+// covers usage from before SBM was installed or from other interfaces. clear
+// removes the calibration instead.
+func (t *Tracker) CalibrateEntryUsage(ctx context.Context, usedBytes int64, clear bool) error {
+	if !t.UsesVnStat() {
+		return errors.New("vnStat is required to calibrate usage")
+	}
+	if usedBytes < 0 {
+		return errors.New("used traffic cannot be negative")
+	}
+	if err := t.SampleNetwork(ctx, EntryNetworkScope); err != nil {
+		return err
+	}
+	lock := t.networkLock(EntryNetworkScope)
+	lock.Lock()
+	defer lock.Unlock()
+	q := t.config.Get().TrafficQuota
+	t.mu.Lock()
+	st := t.state.Network[EntryNetworkScope]
+	if st.Status != SampleStatusHealthy {
+		t.mu.Unlock()
+		return errors.New("vnStat must be available before calibrating usage")
+	}
+	st.Adjustment = model.UsageAdjustment{}
+	if !clear {
+		t.state.Network[EntryNetworkScope] = st
+		measured, _ := t.entryUsageLocked(q)
+		st.Adjustment = model.UsageAdjustment{Bytes: usedBytes - measured, BillingMode: q.BillingMode}
+	}
+	t.state.Network[EntryNetworkScope] = st
+	t.state.UpdatedAt = t.now()
+	t.mu.Unlock()
+	if err := t.Persist(); err != nil {
+		return err
+	}
+	return t.ReconcileQuota(ctx)
 }
 
 // EntryUsage is the billed entry usage used for the quota stop, including the

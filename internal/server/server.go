@@ -205,6 +205,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.restart(w, r)
 	case r.Method == "POST" && r.URL.Path == "/api/traffic/reset":
 		s.resetTraffic(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/traffic/calibrate":
+		s.calibrateTraffic(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/traffic/history":
 		s.trafficHistory(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/traffic/apps":
@@ -463,6 +465,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	upload, download := state.Upload, state.Download
 	realtimeEstimate := int64(0)
+	usageCalibrated := false
 	source, networkInterface, networkReason := "sing-box", "", ""
 	networkAvailable, networkPartial := false, false
 	periodStarted, nextReset := state.PeriodStartedAt, state.NextResetAt
@@ -475,6 +478,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		limit, _ = cfg.TrafficQuota.NetworkStopBytes()
 		providerStop = limit
 		estimatedProviderUsed, realtimeEstimate = s.Traffic.EntryUsage(cfg.TrafficQuota)
+		usageCalibrated = st.Adjustment.Active(cfg.TrafficQuota.BillingMode)
 		providerRemaining = max(0, allowance-estimatedProviderUsed)
 		progress = 0
 		if allowance > 0 {
@@ -497,7 +501,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"trafficQuota": cfg.TrafficQuota, "effectiveLimitBytes": limit,
 		"providerAllowanceBytes": allowance, "estimatedProviderUsedBytes": estimatedProviderUsed,
 		"providerStopBytes": providerStop, "providerRemainingBytes": providerRemaining, "providerProgress": progress,
-		"periodStartedAt": periodStarted, "nextResetAt": nextReset, "realtimeEstimateBytes": realtimeEstimate,
+		"periodStartedAt": periodStarted, "nextResetAt": nextReset, "realtimeEstimateBytes": realtimeEstimate, "usageCalibrated": usageCalibrated,
 		"quotaExceeded": state.QuotaExceeded, "sampleHealth": sampleHealth,
 		"persistenceHealth": s.Traffic.PersistenceHealth(),
 		"subscriptionURL":   subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
@@ -613,6 +617,31 @@ func (s *Server) resetTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Traffic.Reset(r.Context()); err != nil {
 		writeError(w, 500, "重置流量失败")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// usageCalibration carries the provider-reported usage for the current period.
+type usageCalibration struct {
+	UsedBytes int64 `json:"usedBytes"`
+	Clear     bool  `json:"clear"`
+}
+
+func (s *Server) calibrateTraffic(w http.ResponseWriter, r *http.Request) {
+	var input usageCalibration
+	if decodeJSON(r, &input) != nil || (!input.Clear && input.UsedBytes < 0) {
+		writeError(w, 400, "请求格式无效")
+		return
+	}
+	if !s.Traffic.State().QuotaExceeded {
+		if err := s.captureTraffic(r.Context()); err != nil {
+			writeError(w, 503, err.Error())
+			return
+		}
+	}
+	if err := s.Traffic.CalibrateEntryUsage(r.Context(), input.UsedBytes, input.Clear); err != nil {
+		writeError(w, 400, "校准已用量失败，请确认 vnStat 正常")
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -994,11 +1023,13 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	upload, download := state.Upload, state.Download
 	if s.Traffic.UsesVnStat() {
 		st := state.Network[traffic.EntryNetworkScope]
-		// Bytes vnStat has not recorded yet count toward the same stop point.
-		_, realtimeEstimate := s.Traffic.EntryUsage(cfg.TrafficQuota)
-		upload, download = addSaturating(st.TX, realtimeEstimate), st.RX
-		if cfg.TrafficQuota.BillingMode == model.TrafficBillingSingle {
-			download = 0
+		// The header reports the enforced usage: vnStat, the proxy bytes it has
+		// not recorded yet and any calibration, against the same stop point.
+		used, _ := s.Traffic.EntryUsage(cfg.TrafficQuota)
+		upload, download = used, 0
+		if cfg.TrafficQuota.BillingMode != model.TrafficBillingSingle {
+			download = min(st.RX, used)
+			upload = used - download
 		}
 		effectiveLimit, _ = cfg.TrafficQuota.NetworkStopBytes()
 	}

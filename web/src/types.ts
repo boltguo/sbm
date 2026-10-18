@@ -19,6 +19,7 @@ export interface Dashboard {
   providerRemainingBytes: number
   providerProgress: number
   realtimeEstimateBytes?: number
+  usageCalibrated?: boolean
   periodStartedAt: string
   nextResetAt?: string
   quotaExceeded: boolean
@@ -187,6 +188,7 @@ export interface GatewayUsage {
   tunnelTX: number; tunnelRX: number; tunnelBytes: number
   trafficQuota: TrafficQuota
   providerAllowanceBytes: number; estimatedProviderUsedBytes: number; providerRemainingBytes: number; providerProgress: number
+  usageCalibrated?: boolean
   warning: boolean; periodStartedAt: string; nextResetAt?: string
   sampleHealth: { status: 'waiting' | 'healthy' | 'interrupted' | 'disabled'; lastSuccessAt?: string; failureSince?: string; partial?: boolean }
   persistenceHealth?: SampleHealth
