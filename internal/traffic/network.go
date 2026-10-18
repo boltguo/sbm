@@ -16,6 +16,19 @@ import (
 
 const EntryNetworkScope = "entry"
 
+// networkStaleAfter is how old vnStat's last update may be before the proxy
+// counters stand in for the bytes it has not recorded.
+const networkStaleAfter = 3 * time.Minute
+
+// proxyMarkWindow bounds the per-second core totals kept to find the proxy
+// total at the moment of vnStat's last update.
+const proxyMarkWindow = 15 * time.Minute
+
+type proxyMark struct {
+	at    time.Time
+	total int64
+}
+
 type networkRecord struct {
 	Snapshot      nettraffic.Snapshot
 	Generation    string
@@ -88,7 +101,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		t.networkFailure(id, err)
 		return err
 	}
-	if generation != previous.Generation && t.now().Sub(snapshot.UpdatedAt) > 3*time.Minute {
+	if generation != previous.Generation && t.now().Sub(snapshot.UpdatedAt) > networkStaleAfter {
 		err := errors.New("vnStat database is stale; waiting for a fresh source baseline")
 		t.networkFailure(id, err)
 		return err
@@ -253,7 +266,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 		st.Status = SampleStatusInterrupted
 		st.Reason = "no vnStat records cover the current billing period"
 	}
-	if now.Sub(snapshot.UpdatedAt) > 3*time.Minute {
+	if now.Sub(snapshot.UpdatedAt) > networkStaleAfter {
 		st.Status = SampleStatusInterrupted
 		st.Reason = "vnStat database is stale; showing the last saved counters"
 	}
@@ -266,7 +279,7 @@ func (t *Tracker) SampleNetwork(ctx context.Context, id string) error {
 	}
 	t.networkRevision++
 	record.Revision = t.networkRevision
-	t.state.Network[id] = st
+	t.state.Network[id] = t.anchorProxyLocked(st)
 	t.pendingNetwork[id] = record
 	t.state.UpdatedAt = now
 	t.mu.Unlock()
@@ -382,12 +395,13 @@ func (t *Tracker) reconcileNetworkQuota(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	st := t.state.Network[EntryNetworkScope]
-	// Missing source data must not clear a persisted safety stop on startup.
+	usage, _ := t.entryUsageLocked(cfg.TrafficQuota, t.now())
+	exceeded := limit > 0 && usage >= limit
+	// Missing source data must not clear a persisted safety stop on startup,
+	// but proxy bytes counted since vnStat went quiet can still raise one.
 	if limit > 0 && (st.Generation == "" || (!st.Available) || st.UpdatedAt.Before(st.PeriodStartedAt)) {
-		t.mu.Unlock()
-		return t.reconcileCore(ctx)
+		exceeded = exceeded || t.state.QuotaExceeded
 	}
-	exceeded := limit > 0 && cfg.TrafficQuota.NetworkUsage(st.RX, st.TX) >= limit
 	changed := t.state.QuotaExceeded != exceeded
 	t.state.QuotaExceeded = exceeded
 	t.mu.Unlock()
@@ -396,4 +410,84 @@ func (t *Tracker) reconcileNetworkQuota(ctx context.Context) error {
 		persistErr = t.Persist()
 	}
 	return errors.Join(persistErr, t.reconcileCore(ctx))
+}
+
+// Called with t.mu held.
+func (t *Tracker) recordProxyMarkLocked(now time.Time) {
+	total := t.state.Total()
+	t.proxyMarks = append(t.proxyMarks, proxyMark{at: now, total: total})
+	cut := 0
+	for cut < len(t.proxyMarks)-1 && now.Sub(t.proxyMarks[cut].at) > proxyMarkWindow {
+		cut++
+	}
+	if cut > 0 {
+		t.proxyMarks = append(t.proxyMarks[:0], t.proxyMarks[cut:]...)
+	}
+	if st, ok := t.state.Network[EntryNetworkScope]; ok && st.Generation != "" && !st.ProxyAnchorKnown {
+		// The anchor was taken before any core sample (panel start). Bytes the
+		// first sample adds for the downtime may already be in vnStat, so the
+		// estimate starts here instead.
+		st.ProxyAnchor = total
+		st.ProxyAnchorKnown = true
+		t.state.Network[EntryNetworkScope] = st
+	}
+}
+
+// anchorProxyLocked aligns the proxy counters with vnStat: the anchor is the
+// proxy total when vnStat last updated, or when the period began if that is
+// later. Called with t.mu held.
+func (t *Tracker) anchorProxyLocked(st model.NetworkTrafficState) model.NetworkTrafficState {
+	at := st.UpdatedAt
+	if st.PeriodStartedAt.After(at) {
+		at = st.PeriodStartedAt
+	}
+	// A core sample may have resolved the anchor while vnStat was being read.
+	if current := t.state.Network[EntryNetworkScope]; current.ProxyAnchorKnown && current.ProxyAnchorAt.Equal(at) {
+		st.ProxyAnchor, st.ProxyAnchorAt, st.ProxyAnchorKnown = current.ProxyAnchor, current.ProxyAnchorAt, true
+		return st
+	}
+	st.ProxyAnchorAt, st.ProxyAnchor, st.ProxyAnchorKnown = at, 0, false
+	for i := len(t.proxyMarks) - 1; i >= 0; i-- {
+		if !t.proxyMarks[i].at.After(at) {
+			st.ProxyAnchor, st.ProxyAnchorKnown = t.proxyMarks[i].total, true
+			return st
+		}
+	}
+	if len(t.proxyMarks) > 0 {
+		// Counters only cover a later moment; skip the gap rather than count
+		// bytes vnStat may already include.
+		st.ProxyAnchor, st.ProxyAnchorKnown = t.proxyMarks[0].total, true
+	}
+	return st
+}
+
+// entryUsageLocked returns the billed entry usage SBM enforces and the part of
+// it estimated from sing-box counters because vnStat has not recorded it.
+// Called with t.mu held.
+func (t *Tracker) entryUsageLocked(q model.TrafficQuotaConfig, now time.Time) (usage, estimated int64) {
+	st := t.state.Network[EntryNetworkScope]
+	usage = q.NetworkUsage(st.RX, st.TX)
+	if st.Generation == "" || !st.ProxyAnchorKnown || now.Sub(st.UpdatedAt) <= networkStaleAfter {
+		return usage, 0
+	}
+	estimated = scaleSaturating(max(0, t.state.Total()-st.ProxyAnchor), q.ProviderUsageFactor())
+	return addSaturating(usage, estimated), estimated
+}
+
+// EntryUsage is the billed entry usage used for the quota stop, including the
+// proxy bytes vnStat has not recorded yet.
+func (t *Tracker) EntryUsage(q model.TrafficQuotaConfig) (usage, estimated int64) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.entryUsageLocked(q, t.now())
+}
+
+func scaleSaturating(value, factor int64) int64 {
+	if value <= 0 || factor <= 0 {
+		return 0
+	}
+	if value > (1<<63-1)/factor {
+		return 1<<63 - 1
+	}
+	return value * factor
 }

@@ -462,6 +462,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
 	}
 	upload, download := state.Upload, state.Download
+	realtimeEstimate := int64(0)
 	source, networkInterface, networkReason := "sing-box", "", ""
 	networkAvailable, networkPartial := false, false
 	periodStarted, nextReset := state.PeriodStartedAt, state.NextResetAt
@@ -473,7 +474,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		upload, download = st.TX, st.RX
 		limit, _ = cfg.TrafficQuota.NetworkStopBytes()
 		providerStop = limit
-		estimatedProviderUsed = cfg.TrafficQuota.NetworkUsage(st.RX, st.TX)
+		estimatedProviderUsed, realtimeEstimate = s.Traffic.EntryUsage(cfg.TrafficQuota)
 		providerRemaining = max(0, allowance-estimatedProviderUsed)
 		progress = 0
 		if allowance > 0 {
@@ -496,11 +497,18 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"trafficQuota": cfg.TrafficQuota, "effectiveLimitBytes": limit,
 		"providerAllowanceBytes": allowance, "estimatedProviderUsedBytes": estimatedProviderUsed,
 		"providerStopBytes": providerStop, "providerRemainingBytes": providerRemaining, "providerProgress": progress,
-		"periodStartedAt": periodStarted, "nextResetAt": nextReset,
+		"periodStartedAt": periodStarted, "nextResetAt": nextReset, "realtimeEstimateBytes": realtimeEstimate,
 		"quotaExceeded": state.QuotaExceeded, "sampleHealth": sampleHealth,
 		"persistenceHealth": s.Traffic.PersistenceHealth(),
 		"subscriptionURL":   subscriptionURL(cfg), "subscriptionName": subscriptionName(cfg),
 	})
+}
+
+func addSaturating(a, b int64) int64 {
+	if b > 0 && a > (1<<63-1)-b {
+		return 1<<63 - 1
+	}
+	return a + b
 }
 
 func multiplySaturating(value, factor int64) int64 {
@@ -986,7 +994,9 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	upload, download := state.Upload, state.Download
 	if s.Traffic.UsesVnStat() {
 		st := state.Network[traffic.EntryNetworkScope]
-		upload, download = st.TX, st.RX
+		// Bytes vnStat has not recorded yet count toward the same stop point.
+		_, realtimeEstimate := s.Traffic.EntryUsage(cfg.TrafficQuota)
+		upload, download = addSaturating(st.TX, realtimeEstimate), st.RX
 		if cfg.TrafficQuota.BillingMode == model.TrafficBillingSingle {
 			download = 0
 		}

@@ -55,6 +55,7 @@ type Tracker struct {
 	connsSeeded           bool
 	pendingAppHistory     map[appHistoryKey]appHistoryUsage
 	persistenceHealth     SampleHealth
+	proxyMarks            []proxyMark
 }
 
 type SampleHealth struct {
@@ -264,6 +265,7 @@ func (t *Tracker) applySampleWithConns(ctx context.Context, currentUpload, curre
 		t.state.CoreGeneration = generation
 	}
 	t.state.UpdatedAt = now
+	t.recordProxyMarkLocked(now)
 	shouldExceed := t.NetworkReader == nil && limit > 0 && t.state.Total() >= limit
 	newlyExceeded := !t.state.QuotaExceeded && shouldExceed
 	if newlyExceeded {

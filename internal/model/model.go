@@ -216,6 +216,12 @@ type NetworkTrafficState struct {
 	CarryRX         int64       `json:"carryRX"`
 	CarryTX         int64       `json:"carryTX"`
 	Reset           ResetConfig `json:"reset"`
+	// ProxyAnchor is the sing-box proxy total at ProxyAnchorAt, the later of
+	// vnStat's last update and the period start. Proxy bytes after it are not
+	// in vnStat yet and are estimated from the core counters.
+	ProxyAnchor      int64     `json:"proxyAnchor,omitempty"`
+	ProxyAnchorAt    time.Time `json:"proxyAnchorAt,omitempty"`
+	ProxyAnchorKnown bool      `json:"proxyAnchorKnown,omitempty"`
 }
 
 // NetworkStopBytes applies reserve once to actual NIC bytes.

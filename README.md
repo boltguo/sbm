@@ -136,6 +136,8 @@ An installed vnStat meeting the requirements is reused; otherwise the installer 
 
 Set the allowance to `0` for unlimited traffic. The safety threshold is the allowance minus the reserve. sing-box stops at the threshold and resumes after a traffic reset or an allowance increase. Collection and saving introduce a delay; set the reserve according to the host’s transfer rate.
 
+When vnStat has not updated for 3 minutes or cannot be read, SBM estimates the traffic since its last update from the sing-box proxy counters. The estimate counts toward the same safety threshold, and the overview shows how much was estimated.
+
 ### Daily and monthly traffic history
 
 Traffic history on the Overview page shows daily RX, TX and total public-interface traffic, with calendar-month summaries. sing-box proxy traffic appears in small text as a reference. Recording starts at activation; dates or months with incomplete coverage are marked as partial records.

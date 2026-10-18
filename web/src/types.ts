@@ -18,6 +18,7 @@ export interface Dashboard {
   providerStopBytes: number
   providerRemainingBytes: number
   providerProgress: number
+  realtimeEstimateBytes?: number
   periodStartedAt: string
   nextResetAt?: string
   quotaExceeded: boolean
