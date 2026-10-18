@@ -462,7 +462,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	progress := float64(0)
 	if allowance > 0 {
 		providerRemaining = max(0, allowance-estimatedProviderUsed)
-		progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
+		progress = float64(estimatedProviderUsed) / float64(allowance) * 100
 	}
 	upload, download := state.Upload, state.Download
 	realtimeEstimate := int64(0)
@@ -483,7 +483,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		providerRemaining = max(0, allowance-estimatedProviderUsed)
 		progress = 0
 		if allowance > 0 {
-			progress = min(100, float64(estimatedProviderUsed)/float64(allowance)*100)
+			progress = float64(estimatedProviderUsed) / float64(allowance) * 100
 		}
 		periodStarted, nextReset = st.PeriodStartedAt, st.NextResetAt
 		sampleHealth = traffic.SampleHealth{Status: st.Status, LastSuccessAt: st.UpdatedAt}

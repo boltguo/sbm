@@ -336,6 +336,11 @@ func TestGatewayCalibrationAPI(t *testing.T) {
 	if usage.EstimatedProviderUsedBytes != 950_000_000 || !usage.UsageCalibrated || !usage.Warning {
 		t.Fatalf("calibrated usage not reported: %+v", usage)
 	}
+	// Overuse stays visible instead of being capped at 100%.
+	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"usedBytes": 1_200_000_000}, 200)
+	if usage := s.gatewayUsage(s.Config.Get())[0]; usage.ProviderProgress != 120 || usage.ProviderRemainingBytes != 0 {
+		t.Fatalf("overused gateway progress = %v", usage.ProviderProgress)
+	}
 	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"usedBytes": -1}, 400)
 	gatewayRequest(t, s, "POST", "/api/egress/"+g.ID+"/calibrate", map[string]any{"clear": true}, 200)
 	if usage := s.gatewayUsage(s.Config.Get())[0]; usage.EstimatedProviderUsedBytes != 0 || usage.UsageCalibrated {

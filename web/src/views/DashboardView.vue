@@ -52,6 +52,10 @@ const providerBytes = (value: number) => {
   const amount = value / (unit === 'GiB' ? 1024 ** 3 : 1000 ** 3)
   return `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: amount < 10 ? 2 : 1 }).format(amount)} ${unit}`
 }
+// Usage can pass the allowance; bars stop at full while the figure keeps the
+// real value, rounded down so 99.6% never reads as a full plan.
+const bar = (progress: number) => `${Math.min(100, Math.max(0, progress || 0))}%`
+const percent = (progress: number) => Math.floor(progress || 0)
 const gatewayBytes = (value: number, g: GatewayUsage) => `${new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(value / (g.trafficQuota.unit === 'GiB' ? 1024 ** 3 : 1000 ** 3))} ${g.trafficQuota.unit}`
 const date = (value?: string) => !value || value.startsWith('0001') ? t('dashboard.noReset') : new Intl.DateTimeFormat(dateLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const panelVersion = (value: string) => !value ? 'unknown' : value === 'dev' || value.startsWith('v') ? value : `v${value}`
@@ -215,16 +219,16 @@ onBeforeUnmount(() => { disposed = true; ++revision; clearInterval(timer) })
         <p v-if="data.realtimeEstimateBytes && data.sampleHealth.status === 'interrupted'" class="traffic-source warning">{{ t('network.realtimeEstimate', { amount: providerBytes(data.realtimeEstimateBytes) }) }}</p>
         <p v-if="data.persistenceHealth?.status === 'interrupted'" class="traffic-source warning" role="status">{{ t('egress.persistenceFailed') }}</p>
       </div>
-      <div class="traffic-ring" :style="{ '--progress': `${data.providerAllowanceBytes ? data.providerProgress : 0}%` }"><div><b>{{ data.providerAllowanceBytes ? Math.round(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
+      <div class="traffic-ring" :style="{ '--progress': data.providerAllowanceBytes ? bar(data.providerProgress) : '0%' }"><div><b>{{ data.providerAllowanceBytes ? percent(data.providerProgress) : '∞' }}</b><small>{{ data.providerAllowanceBytes ? '%' : t('dashboard.unlimited') }}</small></div></div>
       <div class="traffic-split"><div><span>↑</span><p>{{ t('network.tx') }}</p><strong>{{ data.networkAvailable ? bytes(data.upload) : '—' }}</strong></div><div><span>↓</span><p>{{ t('network.rx') }}</p><strong>{{ data.networkAvailable ? bytes(data.download) : '—' }}</strong></div></div>
-      <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? `${data.providerProgress}%` : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
+      <div class="progress-track"><i :style="{ width: data.providerAllowanceBytes ? bar(data.providerProgress) : '0%' }"></i><b v-if="data.providerAllowanceBytes" :style="{ left: `${100 - data.trafficQuota.headroomPercent}%` }" :title="t('dashboard.safetyThreshold', { amount: providerBytes(data.providerStopBytes) })"></b></div>
       <CalibrateUsageModal v-if="calibrating" :name="data.subscriptionName" endpoint="/api/traffic/calibrate" :unit="data.trafficQuota.unit" :used-bytes="data.estimatedProviderUsedBytes" :calibrated="!!data.usageCalibrated" @close="calibrating = false" @done="calibrated" />
     </section>
     <section v-if="activeGateways.length" class="egress-overview">
       <div class="egress-overview-head"><h2>{{ t('egress.title') }}</h2><small>{{ t('egress.estimate') }}</small></div>
       <div class="egress-summary-grid"><article v-for="g in activeGateways" :key="g.id" class="egress-summary" :class="{ warning: g.warning }">
         <h3>{{ g.name }}</h3><strong>{{ gatewayBytes(g.estimatedProviderUsedBytes, g) }} <small v-if="g.providerAllowanceBytes">/ {{ gatewayBytes(g.providerAllowanceBytes, g) }}</small></strong>
-        <div class="progress-track"><i :style="{ width: `${g.providerProgress}%` }"></i></div>
+        <div class="progress-track"><i :style="{ width: bar(g.providerProgress) }"></i></div>
         <p>{{ t(`egress.sample.${g.sampleHealth.status}`) }}</p><p v-if="g.sampleHealth.partial" class="traffic-source warning">{{ t('egress.partialUsage') }}</p><p v-if="g.usageCalibrated" class="traffic-source">{{ t('network.calibrated') }}</p><p v-if="g.paused" class="traffic-source warning">{{ t('egress.paused') }}</p><p v-else-if="g.warning">{{ t('egress.quotaWarning') }}</p><p v-else-if="g.providerAllowanceBytes">{{ t('egress.remaining', { amount: gatewayBytes(g.providerRemainingBytes, g) }) }}</p><small>{{ t('egress.nextReset', { date: date(g.nextResetAt) }) }}</small>
       </article></div>
     </section>
