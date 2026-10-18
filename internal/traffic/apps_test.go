@@ -428,3 +428,21 @@ func TestAppHistoryOlderThanRetentionIsPruned(t *testing.T) {
 		t.Fatalf("expired daily rows=%d err=%v", daily, err)
 	}
 }
+
+func TestYouTubeRuleCoversPlayerAPIsWithoutGoogleImages(t *testing.T) {
+	for host, want := range map[string]string{
+		"youtubei.googleapis.com":              "youtube",
+		"youtubeembeddedplayer.googleapis.com": "youtube",
+		"jnn-pa.googleapis.com":                "youtube",
+		"yt3.googleusercontent.com":            "youtube",
+		"yt3.ggpht.com":                        "youtube",
+		"rr2---sn-x.googlevideo.com":           "youtube",
+		"yt.be":                                "youtube",
+		"lh3.ggpht.com":                        "ecosystem:google",
+		"lh3.googleusercontent.com":            "ecosystem:google",
+	} {
+		if got, _ := ClassifyConnection(ClashConnectionMeta{Host: host}); got != want {
+			t.Fatalf("%s classified as %s, want %s", host, got, want)
+		}
+	}
+}

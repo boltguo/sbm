@@ -281,11 +281,18 @@
         "youtube-nocookie.com",
         "youtubekids.com",
         "withyoutube.com",
-        "ggpht.com"
+        "yt.be",
+        "youtubegaming.com",
+        "youtubeeducation.com"
       ],
       "subdomains": [
         "youtubei.googleapis.com",
-        "yt3.ggpht.com"
+        "yt3.ggpht.com",
+        "yt4.ggpht.com",
+        "yt3.googleusercontent.com",
+        "youtube.googleapis.com",
+        "youtubeembeddedplayer.googleapis.com",
+        "jnn-pa.googleapis.com"
       ]
     },
     {
@@ -592,6 +599,7 @@
         "googleapis.com",
         "gstatic.com",
         "googleusercontent.com",
+        "ggpht.com",
         "1e100.net",
         "gvt1.com",
         "gvt2.com",
